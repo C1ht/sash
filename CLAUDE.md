@@ -199,6 +199,14 @@ change this file without the owner's approval.
     rest of the output.
   - mod+Tab previews do not end fullscreen; only the committed choice of
     a different window does.
+  - Edge snapping to another window's edge only when the two windows
+    overlap on the other axis; output edges always count.
+  - Dialogs snap like any floating window; fixed-size windows never
+    snap (no preview, snap keys and maximize do nothing), but are
+    granted fullscreen.
+  - The snap preview is drawn above all windows except the dragged one.
+  - Dragging a snapped window restores its pre-snap size on the first
+    pointer motion, not on press.
 
 ## Keybinds
 
