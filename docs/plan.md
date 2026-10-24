@@ -75,14 +75,26 @@ sash/
   - An automated test with a small wayland-client test client that connects, maps an xdg_toplevel, and checks for keyboard and pointer focus events. Running foot by hand is extra.
   - An automated hidden-window test: hide the host window, check that a `wl_display.sync` roundtrip is still served, unhide, and check that exactly one frame follows.
   - Frame-callback policy (CLAUDE.md): no frame callbacks to clients while the output is not presenting; requests are still served.
-- **M3 BSP tiling.** One `Layout` trait. The BSP tree is a plain data structure that is independent of window mode, so M4 reuses it unchanged:
+- **M3 BSP tiling.** Design rules are in CLAUDE.md ("BSP tiling (M3)", "Keybinds"). Summary: one `Layout` trait. The BSP tree is a plain data structure that is independent of window mode, so M4 reuses it unchanged:
   - The tree holds every window on the monitor. Each window has a mode flag (tiled or floating).
   - Geometry is computed only over tiled leaves.
   - Focus moves and swaps use a minimal hardcoded keybind set.
 
+  - New window splits the focused leaf along its longer side, ratio 0.5, new window second and focused; integer geometry (first child floor, second the remainder).
+  - Close: sibling takes the parent's place; focus to the most recently focused window in that subtree.
+  - Focus move and swap by direction (nearest overlapping neighbour, ties by most recently focused, no wrap). Swap keeps the tree structure.
+  - Min/max size hints ignored while tiled (known limit). No gaps, borders, resize keybinds or workspaces.
+  - Resize sync: one batch of configures; until a client commits at the new size, its last buffer is drawn at the new origin, clipped to the new rectangle.
+  - Layout keeps updating while the output is hidden.
+  - Minimal keybinds (mod = Alt nested, Super on DRM): mod+Return foot (debug builds only), mod+Q close, mod+H/J/K/L focus, mod+Shift+H/J/K/L swap, mod+Shift+E quit.
+  - Owner decisions: square leaf splits side by side; focus follows a swapped window; focus ties without history go by position; tiled states in configures; unmap leaves the tree and re-inserts on remap; dialogs tile until M4.
+
   Proof:
-  - Unit tests on the tree and geometry, including placeholder leaves: they take no space, and removing a placeholder lets its sibling take the parent's place.
-  - A 3-client run.
+  - Unit tests on the tree: open, close, swap, focus movement; rectangles cover the output exactly with no overlap; every window in exactly one leaf. Placeholder leaves (M4) take no space, and removing a placeholder lets its sibling take the parent's place.
+  - Property tests (proptest) over random open/close/swap/focus sequences on random output sizes, same invariants.
+  - Headless integration tests: three clients get the right configure sizes; closing the middle one refills the output; swap changes positions; focus follows the keybinds; the layout updates while the output is hidden.
+  - Edge cases: one pixel of remainder, a very small output, closing the last window, closing a window with an unacked configure.
+  - Screenshots of three tiled foot windows, before and after a swap. Startup, frame time with 3 clients, layout time after a keybind, idle RAM and CPU.
 - **M4 Floating.**
   - **Modes and placement:**
     - Per-window tiled/floating state, behind the same `Layout` trait.
@@ -121,7 +133,15 @@ sash/
 - **M6 Input.** Full built-in default keybind table, merging the M3/M4 minimal set and the M5 snap-zone keybinds. Click and keyboard focus, xkb keymap, pointer and keyboard grabs. Every mouse action has a keybind. Proof: tests plus a written checklist run.
 - **M7 DRM/KMS (later).** udev + libinput + libseat + GBM/EGL on a TTY. Starts with its own investigate-then-STOP pass.
 
-Roadmap (no work now): layer-shell, XWayland.
+Roadmap (no work now), in the proposed order:
+1. **xdg popups.** Needed before any sash-ui app (menus, dropdowns) and by most existing apps.
+2. **linux-dmabuf.** Before the DRM backend: GPU clients need it (kitty falls back to software GL today), and it is the buffer path the DRM backend scans out.
+3. **cursor-shape.** Before the DRM backend: on DRM, sash-wm draws the cursor itself (nested, the host draws it).
+4. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
+5. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
+6. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
+7. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
+8. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
 Out of scope until asked: native settings protocol, decorations/effects, sash-ui.
 
 ### Verification

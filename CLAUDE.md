@@ -46,6 +46,74 @@ change this file without the owner's approval.
 - Closing a floating window removes its placeholder; its sibling takes
   the parent's place.
 
+## BSP tiling (M3)
+
+- The BSP tree is plain data in its own module, with no Smithay types,
+  and independent of window mode. Each leaf holds a window id and a
+  tiled/floating flag; only "tiled" is used until M4.
+- The `Layout` trait is the interface M4's floating layout also
+  implements.
+- New window: splits the focused leaf along the longer side of its
+  rectangle, ratio 0.5; the new window becomes the second child and
+  gets focus. With no windows, it fills the output.
+- Integer geometry only: the first child gets the floor, the second the
+  remainder, so rectangles cover the output exactly.
+- Close: the sibling takes the parent's place. Focus goes to the most
+  recently focused window in that sibling subtree.
+- Focus move (left/right/up/down): the neighbouring leaf whose edge
+  overlaps the focused leaf's span, nearest first, ties broken by most
+  recently focused. No wrap-around.
+- Swap exchanges the windows in two leaves; the tree structure stays.
+- Client min/max size hints are ignored while tiled (known limit);
+  M4's forced-floating rule covers fixed-size windows.
+- No gaps, borders, resize-by-keybind or workspaces. Fixed constants
+  only, no new settings.
+- Resize synchronisation: configure every affected window in one batch.
+  Until a client commits a buffer at the new size, draw its last buffer
+  at the new rectangle's origin, clipped to the rectangle.
+- Layout updates keep running while the output is hidden (requests are
+  served; only frame callbacks stop).
+- Owner decisions (M3):
+  - A square leaf splits side by side (width >= height -> left | right).
+  - Swap: focus follows the moved window.
+  - Focus-move ties with no focus history: position decides (topmost
+    for left/right, leftmost for up/down).
+  - Tiled windows get the xdg_toplevel tiled states in configures.
+  - A client that unmaps (null buffer) leaves the tree like a close and
+    is inserted as a new window when it maps again.
+  - Dialogs and transients tile like any window until M4.
+
+## Keybinds
+
+- Until M6 there is one minimal hardcoded keybind table; M6 replaces it
+  with the full default table.
+- The modifier is one constant: Alt when nested (the host captures
+  Super), Super on DRM.
+- Keys that trigger a keybind are not forwarded to clients.
+- mod+Return (spawn foot) exists in debug builds only.
+
+## Protocol support and known limits
+
+- `wl_data_device_manager` is a stub: advertised because some clients
+  (foot) refuse to start without it. No clipboard or drag-and-drop
+  logic yet.
+- xdg-shell protocol errors are limited by Smithay 0.7, which does not
+  expose a toplevel's `xdg_surface`:
+  - a buffer before the first `ack_configure` gets
+    `xdg_surface.not_constructed`, not `unconfigured_buffer`;
+  - an invalid window geometry (width or height <= 0) is ignored and
+    logged, not answered with `xdg_surface.invalid_size`.
+  Do not claim full xdg-shell spec conformance.
+- Negative `xdg_toplevel` min/max sizes are rejected by sash-wm before
+  Smithay sees them (Smithay 0.7 panics on them in debug builds).
+
+## Backends and frame pacing
+
+- Nested (winit) backend only: the EGL swap interval is set to 0 and
+  frames are paced by the host's frame callbacks via winit. Smithay
+  leaves it at 1, which blocks every swap for about one frame.
+- The DRM backend paces by vblank / page flip, not by swap interval.
+
 ## Settings and configuration
 
 - The compositor owns all settings.
