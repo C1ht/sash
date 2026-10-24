@@ -8,9 +8,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend"] }
+smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "desktop", "wayland_frontend"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }

@@ -1,14 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod backend;
+mod clients;
+mod data_device;
+mod output;
+mod seat;
+mod server;
+mod shell;
 mod state;
+mod surface;
+#[cfg(test)]
+mod tests;
 
 use std::time::Instant;
 
-use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
+use smithay::reexports::calloop::{EventLoop, ping};
 use tracing_subscriber::EnvFilter;
 
-use crate::state::Sash;
+use crate::server::Server;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
@@ -20,16 +29,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("no WAYLAND_DISPLAY or DISPLAY set; only nested mode exists so far".into());
     }
 
-    let mut event_loop: EventLoop<Sash> = EventLoop::try_new()?;
-    let display: Display<Sash> = Display::new()?;
-    let mut state = Sash::new(&event_loop, display, start_time)?;
-    tracing::info!(socket = ?state.socket_name, "listening on wayland socket");
+    let mut event_loop: EventLoop<Server> = EventLoop::try_new()?;
+    let (redraw, redraw_requests) = ping::make_ping()?;
+    let mut server = Server::new(&event_loop, redraw, start_time)?;
+    tracing::info!(socket = ?server.socket_name, "listening on wayland socket");
 
-    backend::winit::init(&event_loop, &mut state)?;
+    backend::winit::start(&event_loop, &mut server.state, redraw_requests)?;
 
-    event_loop.run(None, &mut state, |state| {
-        let _ = state.display_handle.flush_clients();
-    })?;
-
+    event_loop.run(None, &mut server, Server::flush)?;
     Ok(())
 }

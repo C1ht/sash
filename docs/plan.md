@@ -63,8 +63,14 @@ sash/
 
 ### Milestones (compositor only, no visual effects)
 - **M0 Skeleton.** Done.
-- **M1 Nested window.** Done, pending approval.
-- **M2 One client window.** compositor, xdg-shell, shm, seat, output. A client maps and gets keyboard and pointer focus.
+- **M1 Nested window.** Done (tag `m1`).
+- **M2 One client window.** Done, pending approval. compositor, xdg-shell, shm, seat, output. A client maps and gets keyboard and pointer focus.
+  Deviations and findings:
+  - `wl_data_device_manager` is advertised (no clipboard logic), because foot refuses to start without it.
+  - The EGL swap interval is set to 0 in the nested backend. Smithay leaves it at 1, which gave 30 fps and blocked the event loop for about 17 ms per frame.
+  - Negative xdg_toplevel min/max sizes are rejected before Smithay sees them. Smithay 0.7 panics on them in debug builds.
+  - Smithay 0.7 does not expose a toplevel's xdg_surface. So a buffer before ack_configure gets `not_constructed` (not `unconfigured_buffer`), and an invalid window geometry is ignored and logged instead of answered with `xdg_surface.invalid_size`.
+  - Popups are not handled yet; `new_popup` is a no-op.
   Proof:
   - An automated test with a small wayland-client test client that connects, maps an xdg_toplevel, and checks for keyboard and pointer focus events. Running foot by hand is extra.
   - An automated hidden-window test: hide the host window, check that a `wl_display.sync` roundtrip is still served, unhide, and check that exactly one frame follows.

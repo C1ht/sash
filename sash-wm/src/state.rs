@@ -1,111 +1,109 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{ffi::OsString, sync::Arc, time::Instant};
+use std::time::Instant;
 
 use smithay::{
+    desktop::{Space, Window},
+    input::{Seat, SeatState, keyboard::XkbConfig},
+    output::Output,
     reexports::{
-        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
-        wayland_server::{
-            Display, DisplayHandle,
-            backend::{ClientData, ClientId, DisconnectReason},
-        },
+        calloop::{LoopSignal, ping::Ping},
+        wayland_server::DisplayHandle,
     },
-    wayland::socket::ListeningSocketSource,
+    wayland::{
+        compositor::CompositorState, selection::data_device::DataDeviceState,
+        shell::xdg::XdgShellState, shm::ShmState,
+    },
 };
 
+const KEY_REPEAT_DELAY_MS: i32 = 600;
+const KEY_REPEAT_RATE: i32 = 25;
+
+/// Smithay's bookkeeping for each global sash-wm advertises.
+pub struct Protocols {
+    pub compositor: CompositorState,
+    pub shm: ShmState,
+    pub xdg_shell: XdgShellState,
+    pub data_device: DataDeviceState,
+    pub seat: SeatState<Sash>,
+}
+
+impl Protocols {
+    /// Creates the globals. The output global is created by the backend with the output.
+    fn advertise(display: &DisplayHandle) -> Self {
+        Self {
+            compositor: CompositorState::new::<Sash>(display),
+            shm: ShmState::new::<Sash>(display, Vec::new()),
+            xdg_shell: XdgShellState::new::<Sash>(display),
+            data_device: DataDeviceState::new::<Sash>(display),
+            seat: SeatState::new(),
+        }
+    }
+}
+
+/// The compositor state every protocol handler works on.
 pub struct Sash {
-    pub start_time: Instant,
-    pub socket_name: OsString,
     pub display_handle: DisplayHandle,
+    pub protocols: Protocols,
+    /// The only seat, with one keyboard and one pointer.
+    pub seat: Seat<Sash>,
+
+    /// Mapped windows and the output they are shown on.
+    pub space: Space<Window>,
+    /// Toplevels that exist but have no buffer yet (or unmapped themselves).
+    pub unmapped: Vec<Window>,
+    pub output: Option<Output>,
+
+    /// Process start; the clock for frame callback timestamps and startup time.
+    pub started: Instant,
     pub loop_signal: LoopSignal,
+    redraw: Ping,
 }
 
 impl Sash {
     pub fn new(
-        event_loop: &EventLoop<'static, Sash>,
-        display: Display<Sash>,
-        start_time: Instant,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let display_handle = display.handle();
-        let loop_handle = event_loop.handle();
-
-        let socket = ListeningSocketSource::new_auto()?;
-        let socket_name = socket.socket_name().to_os_string();
-        loop_handle
-            .insert_source(socket, |stream, _, state| {
-                if let Err(err) = state
-                    .display_handle
-                    .insert_client(stream, Arc::new(ClientState))
-                {
-                    tracing::warn!(%err, "failed to add client");
-                }
-            })
-            .map_err(|err| err.error)?;
-
-        loop_handle
-            .insert_source(
-                Generic::new(display, Interest::READ, Mode::Level),
-                |_, display, state| {
-                    // Safety: the display is never dropped while the event loop runs.
-                    unsafe {
-                        display.get_mut().dispatch_clients(state)?;
-                    }
-                    Ok(PostAction::Continue)
-                },
-            )
-            .map_err(|err| err.error)?;
-
-        Ok(Self {
-            start_time,
-            socket_name,
-            display_handle,
-            loop_signal: event_loop.get_signal(),
-        })
-    }
-}
-
-struct ClientState;
-
-impl ClientData for ClientState {
-    fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        os::unix::net::UnixStream,
-        path::PathBuf,
-        time::{Duration, Instant},
-    };
-
-    use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
-
-    use super::Sash;
-
-    #[test]
-    fn client_connects_and_roundtrips() {
-        let mut event_loop: EventLoop<Sash> = EventLoop::try_new().unwrap();
-        let display: Display<Sash> = Display::new().unwrap();
-        let mut state = Sash::new(&event_loop, display, Instant::now()).unwrap();
-
-        let runtime_dir = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
-        let socket_path = runtime_dir.join(&state.socket_name);
-
-        let client = std::thread::spawn(move || {
-            let stream = UnixStream::connect(socket_path).unwrap();
-            let connection = wayland_client::Connection::from_socket(stream).unwrap();
-            connection.roundtrip().unwrap();
-        });
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !client.is_finished() {
-            assert!(Instant::now() < deadline, "client roundtrip timed out");
-            event_loop
-                .dispatch(Some(Duration::from_millis(10)), &mut state)
-                .unwrap();
-            state.display_handle.flush_clients().unwrap();
+        display_handle: DisplayHandle,
+        loop_signal: LoopSignal,
+        redraw: Ping,
+        started: Instant,
+    ) -> Self {
+        let mut protocols = Protocols::advertise(&display_handle);
+        let mut seat = protocols.seat.new_wl_seat(&display_handle, "seat0");
+        if let Err(err) =
+            seat.add_keyboard(XkbConfig::default(), KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE)
+        {
+            tracing::error!(%err, "no keyboard: the default xkb keymap failed to load");
         }
-        client.join().unwrap();
+        seat.add_pointer();
+
+        Self {
+            display_handle,
+            protocols,
+            seat,
+            space: Space::default(),
+            unmapped: Vec::new(),
+            output: None,
+            started,
+            loop_signal,
+            redraw,
+        }
+    }
+
+    /// Asks the backend for a new frame. Requests made before the frame is drawn
+    /// are merged into one.
+    pub fn request_redraw(&self) {
+        self.redraw.ping();
+    }
+
+    /// Called by the backend after a frame for `output` reached the screen.
+    ///
+    /// This is the only place clients get frame callbacks, so while the output is not
+    /// presenting (for example a hidden nested window) they get none.
+    pub fn frame_presented(&mut self, output: &Output) {
+        let time = self.started.elapsed();
+        for window in self.space.elements() {
+            window.send_frame(output, time, None, |_, _| Some(output.clone()));
+        }
+        self.space.refresh();
     }
 }
