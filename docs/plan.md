@@ -140,7 +140,7 @@ sash/
 - **M5 Snapping and fullscreen.** Rules are in CLAUDE.md ("Snapping and fullscreen (M5)"). Step 0, a separate commit first: debug-only offscreen capture (below), used for all screenshots from now on.
   - Constants (owner tunes after trying): corner trigger 64 px from two edges; edge trigger 8 px; edge-snap threshold 12 px; preview fill #0A84FF at 30% alpha, 2 px border at 80% alpha.
   - Maximize vs fullscreen: until layer-shell exists both fill the whole output. Once an exclusive zone exists (panel), maximize will fill the output minus exclusive zones, fullscreen still the whole output.
-  - Proposed keybind state table (mod+arrow), awaiting owner approval:
+  - Keybind state table (mod+arrow), approved by the owner:
 
     | From \ key   | Left        | Right       | Up          | Down        |
     |--------------|-------------|-------------|-------------|-------------|
@@ -170,15 +170,15 @@ Proposals (no work until approved):
 - **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
 
 Roadmap (no work now), in the proposed order:
-0. **presentation-time (wp_presentation).** On the DRM backend, so on-screen frame timing can be measured (the nested backend cannot see the host's presentation; owner decision after M4: no pacing work nested).
 1. **xdg popups.** Needed before any sash-ui app (menus, dropdowns) and by most existing apps.
 2. **linux-dmabuf.** Before the DRM backend: GPU clients need it (kitty falls back to software GL today), and it is the buffer path the DRM backend scans out. Once it exists, remeasure stale content during resizes with a heavier client (browser/Electron) before deciding on resize transactions.
 3. **cursor-shape.** Before the DRM backend: on DRM, sash-wm draws the cursor itself (nested, the host draws it).
-4. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
-5. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
-6. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
-7. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
-8. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
+4. **presentation-time (wp_presentation).** With the DRM backend, so on-screen frame timing can be measured (the nested backend cannot see the host's presentation; owner decision after M4: no pacing work nested).
+5. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
+6. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
+7. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
+8. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
+9. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
 Out of scope until asked: native settings protocol, decorations/effects, sash-ui.
 
 ### Verification

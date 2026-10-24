@@ -178,7 +178,27 @@ change this file without the owner's approval.
   restores it. Focusing another window (key or click) ends the old
   window's fullscreen. Closing a fullscreen window restores the layout.
 - Snap keybinds: mod+Left/Right/Up/Down, by the state table in
-  docs/plan.md (owner-approved before coding).
+  docs/plan.md (owner-approved).
+- Owner decisions (M5):
+  - The top zone is a maximized snap: a whole-output rectangle with the
+    xdg maximized state, normal stacking, not ended by focus changes.
+    Client set_maximized is the same. Only set_fullscreen gives the
+    fullscreen state.
+  - Maximize (client or mod+Up) on a tiled window keeps its leaf and
+    tile; unmaximize returns it there. It never floats by maximizing.
+  - mod+Left/Right on a tiled window floats it, then snaps. From a
+    maximized tiled window, mod+Left/Right floats it (pre-snap rect =
+    its tile) and snaps to the half.
+  - Keyboard move/resize or mod+right-drag resize of a snapped window
+    unsnaps it and continues from its snapped rectangle; the pre-snap
+    rectangle and zone are forgotten.
+  - Snapped halves and quarters get the xdg tiled states for each edge
+    on an output edge; the maximized snap gets the maximized state.
+  - A fixed-size window that asks for fullscreen gets it: above all,
+    centered at its own size, with an opaque black backdrop over the
+    rest of the output.
+  - mod+Tab previews do not end fullscreen; only the committed choice of
+    a different window does.
 
 ## Keybinds
 
