@@ -6,3 +6,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "wayland_frontend"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+wayland-client = "0.31"

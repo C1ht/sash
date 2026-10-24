@@ -27,6 +27,11 @@ RUST_LOG=sash_wm=debug cargo run -p sash-wm
 sash-wm logs the name of its own Wayland socket. Start clients against it
 with `WAYLAND_DISPLAY=<socket> <client>`.
 
+## Debian 13 (trixie) packages
+
+- Build: `build-essential pkg-config libxkbcommon-dev`
+- Runtime and tests (loaded with dlopen): `libwayland-client0`, plus `libegl1` for the nested window
+
 ## Updating the toolchain
 
 The Rust version is pinned exactly in `rust-toolchain.toml`. To update:
