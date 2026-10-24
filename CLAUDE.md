@@ -35,7 +35,16 @@ change this file without the owner's approval.
   each window remembers its last floating rectangle. Float-all starts
   from the current tiled rectangles; tile-all restores the tree.
 - Dialogs, transients (xdg parent), splash and fixed-size windows float
-  and center over their parent regardless of the default mode.
+  and center over their parent regardless of the default mode. They
+  carry a separate "forced floating" flag; tile-all never touches them.
+- When a window floats, its sibling takes the freed space and the
+  window keeps its leaf as a placeholder. Placeholders take no space.
+  Geometry is computed over tiled leaves only. Re-tiling returns the
+  window to its leaf.
+- A new window opened while the default mode is floating gets a
+  placeholder leaf next to the focused leaf, so nothing else moves.
+- Closing a floating window removes its placeholder; its sibling takes
+  the parent's place.
 
 ## Settings and configuration
 
@@ -83,6 +92,24 @@ change this file without the owner's approval.
 - Every source file starts with an SPDX header, e.g. for Rust:
   `// SPDX-License-Identifier: Apache-2.0`
 - The repo root has `LICENSE` (full Apache-2.0 text) and `NOTICE`.
+
+## Originality (Smithay examples)
+
+- Smithay's example compositors (smallvil, anvil) and the Smithay
+  documentation may be read and cloned as learning material, to
+  understand how a feature works.
+- Do not copy code from them: no pasting, no line-by-line translation,
+  no renaming variables of copied code, and no reproducing their module
+  structure and function breakdown.
+- Method: read the relevant example, close it, then write the
+  implementation from your own understanding of what is needed. Design
+  sash-wm's module structure yourself. Do not keep the example open
+  while writing.
+- If something ends up closely following an example, say so, rewrite
+  it, or (if it is truly adapted) keep the MIT notice on that file and
+  list it in NOTICE.
+- Each milestone report includes a code-similarity check of
+  sash-wm/src against smallvil and anvil.
 
 ## Toolchain and target compatibility
 

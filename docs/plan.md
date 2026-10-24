@@ -74,7 +74,9 @@ sash/
   - Geometry is computed only over tiled leaves.
   - Focus moves and swaps use a minimal hardcoded keybind set.
 
-  Proof: unit tests on the tree and geometry, plus a 3-client run.
+  Proof:
+  - Unit tests on the tree and geometry, including placeholder leaves: they take no space, and removing a placeholder lets its sibling take the parent's place.
+  - A 3-client run.
 - **M4 Floating.**
   - **Modes and placement:**
     - Per-window tiled/floating state, behind the same `Layout` trait.
@@ -82,7 +84,9 @@ sash/
     - Bulk actions per monitor: float all and tile all, each with a keybind in the minimal hardcoded set.
     - Toggling is lossless. When a window floats, it keeps its leaf in the tree as a placeholder and its sibling takes the freed space. Geometry is computed over tiled leaves only. Re-tiling returns the window to its leaf. Each window remembers its last floating rectangle. Float-all starts from the current tiled rectangles; tile-all restores the tree.
     - Placement rules: client size hints, cascade or center, stay on output.
-    - Dialogs, transients (xdg parent) and fixed-size windows (min == max) float and center over their parent.
+    - Dialogs, transients (xdg parent) and fixed-size windows (min == max) float and center over their parent. They carry a separate "forced floating" flag; tile-all never touches them.
+    - A new window opened while the default mode is floating gets a placeholder leaf next to the focused leaf. Placeholders take no space, so nothing else moves.
+    - Closing a floating window removes its placeholder; its sibling takes the parent's place.
     - Splash windows only exist as an X11 window type, so that rule takes effect when XWayland arrives.
   - **Move and resize:** mouse and keyboard, from any edge or corner. Min/max sizes respected.
   - **Stacking:** raise on focus; floating windows always above tiled ones.
@@ -90,11 +94,16 @@ sash/
   Proof:
   - Unit tests for lossless toggling: tile, float-all, tile-all returns the identical tree and rectangles.
   - Unit tests for changes while floating: float a window, open a new window, close the old sibling, re-tile.
+  - Unit test: closing a floating window removes its placeholder and its sibling takes the parent's place.
+  - Unit test: tile-all leaves forced-floating windows floating.
+  - Unit test: a new window while the default mode is floating gets a placeholder next to the focused leaf, and no tiled rectangle changes.
+  - Unit test: the output size changes between float and re-tile. The tree structure stays identical and the rectangles are recomputed for the new size.
   - Definition of "identical tree" in these tests: if nothing changed while windows floated, the tree after re-tiling is identical to the tree before floating, compared as structure, split directions, split ratios, window per leaf, and resulting rectangles. If the tree changed while floating (windows opened or closed), the expected tree is the tree before floating with exactly those edits applied the way they would apply with every window tiled:
     - A new window splits the focused tiled leaf.
     - A closed window's leaf is removed and its sibling takes the parent's place.
     - The placeholder keeps its position relative to the surviving nodes. If its sibling closed, the placeholder takes the parent's place.
     - Re-tiling must produce exactly that tree and its rectangles.
+    - "Identical rectangles" assumes the output size is unchanged. If the output size changed, only the structure must be identical, and the rectangles are recomputed.
   - Unit tests for placement geometry.
   - A written manual checklist for how floating feels.
   - Frame time measured during a window drag.
