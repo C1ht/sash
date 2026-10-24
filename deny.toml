@@ -3,6 +3,12 @@
 [graph]
 all-features = true
 
+[advisories]
+ignore = [
+    # cgmath is unmaintained. Pulled in by smithay 0.7.0; remove when Smithay drops cgmath.
+    "RUSTSEC-2026-0196",
+]
+
 [licenses]
 allow = [
     "MIT",
