@@ -140,6 +140,46 @@ change this file without the owner's approval.
   (M5 snapping covers them); border hit zones for resizing come with
   decorations.
 
+## Snapping and fullscreen (M5)
+
+- Snapped and fullscreen are states of a floating window, not layout
+  modes: there are still exactly two modes.
+- Snap zones are data: a table the settings protocol will edit later
+  ("snap zones" is on the closed settings list). No UI, no config file,
+  no new settings.
+- Seven default zones, as fractions of the output, integer geometry
+  only (halves and quadrants use the floor/remainder rule and cover the
+  output exactly): top edge = fullscreen (whole output), left edge = left
+  half, right edge = right half, four corners = four quadrants. No
+  bottom-edge zone.
+- Triggers during a window drag (constants): pointer within 64 px of
+  two output edges = corner; otherwise within 8 px of the top, left or
+  right edge = that edge's zone. Corners win over edges.
+- While the pointer is in a zone, a preview rectangle is drawn: fill
+  #0A84FF at 30% alpha plus a 2 px border at 80% alpha. Plain rectangle,
+  no blur, rounding or animation. It disappears when the pointer leaves
+  the zone or the drag ends. Releasing inside a zone snaps the window;
+  dragging a tiled window to a zone floats and snaps it.
+- A snapped window remembers its pre-snap floating rectangle and its
+  zone. Dragging it away restores that size, with the pointer at the
+  same relative position in the window. Tile-all then float again
+  restores the zone, recomputed from the current output size; an output
+  resize recomputes every snapped window from its zone.
+- Edge snapping: during a mouse move or resize of a floating window,
+  its edges snap to the output edges and to edges of other visible
+  windows within 12 px (constant), nearest first. Shift held during the
+  drag disables it. Not applied to keyboard moves.
+- Client fullscreen and maximize requests are handled (set/unset
+  fullscreen, set/unset maximized) with the right configure states.
+  Until layer-shell exists both fill the whole output.
+- A fullscreen window is above all other windows. One per monitor: a
+  new one replaces the old, which returns to its previous state. A tiled
+  window going fullscreen keeps its leaf and tile; leaving fullscreen
+  restores it. Focusing another window (key or click) ends the old
+  window's fullscreen. Closing a fullscreen window restores the layout.
+- Snap keybinds: mod+Left/Right/Up/Down, by the state table in
+  docs/plan.md (owner-approved before coding).
+
 ## Keybinds
 
 - Until M6 there is one minimal hardcoded keybind table; M6 replaces it

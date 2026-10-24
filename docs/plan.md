@@ -99,7 +99,7 @@ sash/
     - Tiles on outputs too small to give every window a pixel can be 0 wide or high. They are configured as 1 (0 would mean "client chooses") and are not reachable by focus moves.
   - Resize transactions (owner decision: not now; revisit after M4 with the floating checklist; the ~150 ms timeout would be a constant, never a setting): Keep showing the old arrangement until every affected client has committed a buffer for its new configure, or a timeout (about 150 ms) passes; then switch in one frame. Clients that miss the timeout fall back to the clip rule. This removes the frame where windows show stale or partly empty content at their new tiles, at the cost of up to one timeout of latency.
   - Screenshots of three tiled foot windows, before and after a swap. Startup, frame time with 3 clients, layout time after a keybind, idle RAM and CPU.
-- **M4 Floating.** Done, pending approval. Manual checklist: docs/floating-checklist.md. Rules are in CLAUDE.md ("Floating (M4)", "Keybinds"). Summary:
+- **M4 Floating.** Done (tag `m4`). Manual checklist: docs/floating-checklist.md. Rules are in CLAUDE.md ("Floating (M4)", "Keybinds"). Summary:
   - Forced floating (dialogs, min == max), re-checked per commit; per-monitor default mode (tiled at start, debug toggle); float-all / tile-all; lossless toggling; placement (client size, center, cascade 32 px, wrap); floating above tiled, unclipped, 64 px visible per axis; z-order and click-to-focus; mod+drag move (floats tiled windows on press) and 3x3-grid resize; client move/resize requests; 40 px keyboard move/resize; hold-to-cycle mod+Tab.
   - Measurements: frame time and a frame-interval histogram during a drag and a resize, pointer-event-to-frame latency, time of toggle / float-all / tile-all, idle RAM and CPU with 3 windows. Real pointer drags need uinput/ydotool privileges, so they are measured only where no extra privilege is needed.
   - Deliverable: docs/floating-checklist.md, a manual checklist for how floating feels.
@@ -137,7 +137,27 @@ sash/
   - Unit tests for placement geometry.
   - A written manual checklist for how floating feels.
   - Frame time measured during a window drag.
-- **M5 Snapping (separate milestone after M4).**
+- **M5 Snapping and fullscreen.** Rules are in CLAUDE.md ("Snapping and fullscreen (M5)"). Step 0, a separate commit first: debug-only offscreen capture (below), used for all screenshots from now on.
+  - Constants (owner tunes after trying): corner trigger 64 px from two edges; edge trigger 8 px; edge-snap threshold 12 px; preview fill #0A84FF at 30% alpha, 2 px border at 80% alpha.
+  - Maximize vs fullscreen: until layer-shell exists both fill the whole output. Once an exclusive zone exists (panel), maximize will fill the output minus exclusive zones, fullscreen still the whole output.
+  - Proposed keybind state table (mod+arrow), awaiting owner approval:
+
+    | From \ key   | Left        | Right       | Up          | Down        |
+    |--------------|-------------|-------------|-------------|-------------|
+    | unsnapped    | left half   | right half  | fullscreen zone | nothing |
+    | left half    | bottom-left | right half  | top-left    | restore     |
+    | right half   | left half   | bottom-right| top-right   | restore     |
+    | top-left     | nothing     | top-right   | fullscreen zone | left half |
+    | top-right    | top-left    | nothing     | fullscreen zone | right half |
+    | bottom-left  | nothing     | bottom-right| top-left    | left half   |
+    | bottom-right | bottom-left | nothing     | top-right   | right half  |
+    | fullscreen zone | left half | right half | nothing    | restore     |
+
+    - Every zone is reachable: L (Left), R (Right), full (Up), TL (L, Up), TR (R, Up), BL (L, Left), BR (R, Right).
+    - Repeated Down always ends at restore: quarter -> half -> restore; full -> restore.
+    - Inside quarters, arrows move spatially; from a half, the arrow toward the edge it already touches goes to that side's bottom quarter (Up already goes to the top quarter).
+    - "Restore" = the pre-snap floating rectangle. mod+arrows do not clash with mod+H/J/K/L (focus), mod+Shift+H/J/K/L (swap) or mod+Ctrl+H/J/K/L (move).
+- **Previous M5 notes (snapping):**
   - Snap zones are defined as data, with seven defaults: top edge = fullscreen, left half, right half, and the four corners.
   - Every snap zone has a keybind.
   - Windows also snap to neighbouring windows.
@@ -150,8 +170,9 @@ Proposals (no work until approved):
 - **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
 
 Roadmap (no work now), in the proposed order:
+0. **presentation-time (wp_presentation).** On the DRM backend, so on-screen frame timing can be measured (the nested backend cannot see the host's presentation; owner decision after M4: no pacing work nested).
 1. **xdg popups.** Needed before any sash-ui app (menus, dropdowns) and by most existing apps.
-2. **linux-dmabuf.** Before the DRM backend: GPU clients need it (kitty falls back to software GL today), and it is the buffer path the DRM backend scans out.
+2. **linux-dmabuf.** Before the DRM backend: GPU clients need it (kitty falls back to software GL today), and it is the buffer path the DRM backend scans out. Once it exists, remeasure stale content during resizes with a heavier client (browser/Electron) before deciding on resize transactions.
 3. **cursor-shape.** Before the DRM backend: on DRM, sash-wm draws the cursor itself (nested, the host draws it).
 4. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
 5. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
