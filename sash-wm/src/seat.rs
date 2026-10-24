@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The seat: keyboard and pointer focus, and forwarding backend input to clients.
+//! The seat: keybinds, pointer focus, and forwarding backend input to clients.
+//! Keyboard focus follows the layout's focus (see `tiling.rs`).
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, Event, InputBackend, InputEvent, KeyboardKeyEvent,
+        AbsolutePositionEvent, Axis, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent,
         PointerAxisEvent, PointerButtonEvent,
     },
     delegate_seat,
-    desktop::{Window, WindowSurfaceType},
     input::{
         SeatHandler, SeatState,
-        keyboard::FilterResult,
+        keyboard::{FilterResult, Keycode},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
-use crate::state::Sash;
+use crate::{keybinds, state::Sash};
 
 impl SeatHandler for Sash {
     type KeyboardFocus = WlSurface;
@@ -33,38 +33,6 @@ impl SeatHandler for Sash {
 delegate_seat!(Sash);
 
 impl Sash {
-    /// Gives keyboard focus to `window` (or to nothing) and raises it.
-    pub fn focus_window(&mut self, window: Option<&Window>) {
-        let surface = window
-            .and_then(|w| w.toplevel())
-            .map(|t| t.wl_surface().clone());
-        if let Some(window) = window {
-            self.space.raise_element(window, true);
-        }
-        if let Some(keyboard) = self.seat.get_keyboard() {
-            keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
-        }
-    }
-
-    /// Focuses the top window in the stacking order, if any.
-    pub fn focus_topmost_window(&mut self) {
-        let top = self.space.elements().last().cloned();
-        self.focus_window(top.as_ref());
-    }
-
-    /// The surface (of any window, including subsurfaces and popups) at a global
-    /// position, with the global position of that surface's origin.
-    fn surface_at(
-        &self,
-        location: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let (window, window_pos) = self.space.element_under(location)?;
-        let window_pos = window_pos.to_f64();
-        let (surface, pos_in_window) =
-            window.surface_under(location - window_pos, WindowSurfaceType::ALL)?;
-        Some((surface, window_pos + pos_in_window.to_f64()))
-    }
-
     /// Moves the pointer to `location` (global logical coordinates) and updates pointer focus.
     pub fn pointer_moved_to(&mut self, location: Point<f64, Logical>, time_msec: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
@@ -80,21 +48,51 @@ impl Sash {
         pointer.frame(self);
     }
 
+    /// Handles a key press or release: runs a keybind, or forwards it to the focused
+    /// client. A key whose press ran a keybind has its release swallowed too.
+    pub fn key(&mut self, code: Keycode, key_state: KeyState, time_msec: u32) {
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let modifier = self.keybinds.modifier;
+        let action = keyboard.input(
+            self,
+            code,
+            key_state,
+            SERIAL_COUNTER.next_serial(),
+            time_msec,
+            |state, mods, key| match key_state {
+                KeyState::Pressed => {
+                    match keybinds::lookup(modifier, mods, key.raw_latin_sym_or_raw_current_sym()) {
+                        Some(action) => {
+                            state.keybinds.swallowed.push(code);
+                            FilterResult::Intercept(Some(action))
+                        }
+                        None => FilterResult::Forward,
+                    }
+                }
+                KeyState::Released => {
+                    let swallowed = &mut state.keybinds.swallowed;
+                    match swallowed.iter().position(|c| *c == code) {
+                        Some(index) => {
+                            swallowed.swap_remove(index);
+                            FilterResult::Intercept(None)
+                        }
+                        None => FilterResult::Forward,
+                    }
+                }
+            },
+        );
+        if let Some(action) = action.flatten() {
+            self.run_action(action);
+        }
+    }
+
     /// Forwards one input event from the backend to the focused clients.
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
         match event {
             InputEvent::Keyboard { event } => {
-                let Some(keyboard) = self.seat.get_keyboard() else {
-                    return;
-                };
-                keyboard.input::<(), _>(
-                    self,
-                    event.key_code(),
-                    event.state(),
-                    SERIAL_COUNTER.next_serial(),
-                    event.time_msec(),
-                    |_, _, _| FilterResult::Forward,
-                );
+                self.key(event.key_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerMotionAbsolute { event } => {
                 let Some(output) = self.output.clone() else {

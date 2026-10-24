@@ -13,5 +13,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+proptest = "1"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }

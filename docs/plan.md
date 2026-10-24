@@ -64,7 +64,7 @@ sash/
 ### Milestones (compositor only, no visual effects)
 - **M0 Skeleton.** Done.
 - **M1 Nested window.** Done (tag `m1`).
-- **M2 One client window.** Done, pending approval. compositor, xdg-shell, shm, seat, output. A client maps and gets keyboard and pointer focus.
+- **M2 One client window.** Done (tag `m2`). compositor, xdg-shell, shm, seat, output. A client maps and gets keyboard and pointer focus.
   Deviations and findings:
   - `wl_data_device_manager` is advertised (no clipboard logic), because foot refuses to start without it.
   - The EGL swap interval is set to 0 in the nested backend. Smithay leaves it at 1, which gave 30 fps and blocked the event loop for about 17 ms per frame.
@@ -75,7 +75,7 @@ sash/
   - An automated test with a small wayland-client test client that connects, maps an xdg_toplevel, and checks for keyboard and pointer focus events. Running foot by hand is extra.
   - An automated hidden-window test: hide the host window, check that a `wl_display.sync` roundtrip is still served, unhide, and check that exactly one frame follows.
   - Frame-callback policy (CLAUDE.md): no frame callbacks to clients while the output is not presenting; requests are still served.
-- **M3 BSP tiling.** Design rules are in CLAUDE.md ("BSP tiling (M3)", "Keybinds"). Summary: one `Layout` trait. The BSP tree is a plain data structure that is independent of window mode, so M4 reuses it unchanged:
+- **M3 BSP tiling.** Done, pending approval. Design rules are in CLAUDE.md ("BSP tiling (M3)", "Keybinds"). Summary: one `Layout` trait. The BSP tree is a plain data structure that is independent of window mode, so M4 reuses it unchanged:
   - The tree holds every window on the monitor. Each window has a mode flag (tiled or floating).
   - Geometry is computed only over tiled leaves.
   - Focus moves and swaps use a minimal hardcoded keybind set.
@@ -94,6 +94,10 @@ sash/
   - Property tests (proptest) over random open/close/swap/focus sequences on random output sizes, same invariants.
   - Headless integration tests: three clients get the right configure sizes; closing the middle one refills the output; swap changes positions; focus follows the keybinds; the layout updates while the output is hidden.
   - Edge cases: one pixel of remainder, a very small output, closing the last window, closing a window with an unacked configure.
+  - Implementation notes:
+    - A toplevel enters the tree on its initial commit, so its initial configure already carries the tile size. It is drawn from its first buffer. It leaves the tree on unmap or destroy.
+    - Tiles on outputs too small to give every window a pixel can be 0 wide or high. They are configured as 1 (0 would mean "client chooses") and are not reachable by focus moves.
+  - Proposed for later (not implemented): resize transactions. Keep showing the old arrangement until every affected client has committed a buffer for its new configure, or a timeout (about 150 ms) passes; then switch in one frame. Clients that miss the timeout fall back to the clip rule. This removes the frame where windows show stale or partly empty content at their new tiles, at the cost of up to one timeout of latency.
   - Screenshots of three tiled foot windows, before and after a swap. Startup, frame time with 3 clients, layout time after a keybind, idle RAM and CPU.
 - **M4 Floating.**
   - **Modes and placement:**

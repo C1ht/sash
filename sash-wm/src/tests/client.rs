@@ -41,7 +41,16 @@ pub struct Events {
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     pub configure_serial: Option<u32>,
+    /// Number of xdg_surface.configure events received.
+    pub configures: u32,
+    /// Size and tiled flag of the last xdg_toplevel.configure.
+    pub toplevel_size: Option<(i32, i32)>,
+    pub tiled: bool,
     pub keyboard_entered: bool,
+    /// Whether the client's surface has keyboard focus now (enter minus leave).
+    pub has_keyboard_focus: bool,
+    /// Evdev codes of wl_keyboard.key presses received.
+    pub keys_pressed: Vec<u32>,
     pub pointer_entered: bool,
     pub frames_done: u32,
     pub close_requested: bool,
@@ -128,21 +137,51 @@ impl TestClient {
     /// Creates a toplevel, waits for its configure, acks it and commits a buffer.
     pub fn map_window(&mut self) -> TestWindow {
         let window = self.create_window();
-        self.dispatch_until("initial configure", |e| e.configure_serial.is_some());
-        let serial = self.events.configure_serial.expect("configure serial");
-        window.xdg_surface.ack_configure(serial);
-        self.attach_buffer(&window);
-        window.surface.commit();
-        self.roundtrip();
+        let seen = self.events.configures;
+        self.dispatch_until("initial configure", |e| e.configures > seen);
+        self.ack_and_commit(&window);
         window
     }
 
+    /// Acks the last configure and commits a buffer of the configured size, like a
+    /// client that redraws on every configure.
+    pub fn ack_and_commit(&mut self, window: &TestWindow) {
+        let serial = self.events.configure_serial.expect("configure serial");
+        window.xdg_surface.ack_configure(serial);
+        self.attach_buffer(window);
+        window.surface.commit();
+        self.roundtrip();
+    }
+
+    /// Size of the next buffer: the configured size, or a default if the compositor
+    /// left it to the client.
+    fn buffer_size(&self) -> (i32, i32) {
+        match self.events.toplevel_size {
+            Some((w, h)) if w > 0 && h > 0 => (w, h),
+            _ => WINDOW_SIZE,
+        }
+    }
+
     pub fn attach_buffer(&mut self, window: &TestWindow) {
-        let buffer = self.buffer(WINDOW_SIZE);
+        let size = self.buffer_size();
+        let buffer = self.buffer(size);
         window.surface.attach(Some(&buffer), 0, 0);
-        window
-            .surface
-            .damage_buffer(0, 0, WINDOW_SIZE.0, WINDOW_SIZE.1);
+        window.surface.damage_buffer(0, 0, size.0, size.1);
+    }
+
+    /// Destroys the window (what a client does on close).
+    pub fn destroy(&mut self, window: TestWindow) {
+        window.toplevel.destroy();
+        window.xdg_surface.destroy();
+        window.surface.destroy();
+        self.roundtrip();
+    }
+
+    /// Unmaps the window by committing a null buffer; it stays alive.
+    pub fn unmap(&mut self, window: &TestWindow) {
+        window.surface.attach(None, 0, 0);
+        window.surface.commit();
+        self.roundtrip();
     }
 
     /// Requests a frame callback, damages the surface and commits.
@@ -257,8 +296,18 @@ impl Dispatch<WlKeyboard, ()> for Events {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_keyboard::Event::Enter { .. } = event {
-            events.keyboard_entered = true;
+        match event {
+            wl_keyboard::Event::Enter { .. } => {
+                events.keyboard_entered = true;
+                events.has_keyboard_focus = true;
+            }
+            wl_keyboard::Event::Leave { .. } => events.has_keyboard_focus = false,
+            wl_keyboard::Event::Key {
+                key,
+                state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+                ..
+            } => events.keys_pressed.push(key),
+            _ => {}
         }
     }
 }
@@ -304,6 +353,7 @@ impl Dispatch<XdgSurface, ()> for Events {
     ) {
         if let xdg_surface::Event::Configure { serial } = event {
             events.configure_serial = Some(serial);
+            events.configures += 1;
         }
     }
 }
@@ -317,8 +367,24 @@ impl Dispatch<XdgToplevel, ()> for Events {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_toplevel::Event::Close = event {
-            events.close_requested = true;
+        match event {
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => {
+                events.toplevel_size = Some((width, height));
+                // States are a u32 array; 5..=8 are tiled_left/right/top/bottom.
+                let states: Vec<u32> = states
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| u32::from_ne_bytes(*bytes))
+                    .collect();
+                events.tiled = (5..=8).all(|tiled| states.contains(&tiled));
+            }
+            xdg_toplevel::Event::Close => events.close_requested = true,
+            _ => {}
         }
     }
 }

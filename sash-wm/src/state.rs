@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::time::Instant;
+use std::{ffi::OsString, time::Instant};
 
 use smithay::{
     desktop::{Space, Window},
@@ -14,6 +14,11 @@ use smithay::{
         compositor::CompositorState, selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState, shm::ShmState,
     },
+};
+
+use crate::{
+    keybinds::{Keybinds, Modifier},
+    tiling::Tiling,
 };
 
 const KEY_REPEAT_DELAY_MS: i32 = 600;
@@ -48,11 +53,12 @@ pub struct Sash {
     /// The only seat, with one keyboard and one pointer.
     pub seat: Seat<Sash>,
 
-    /// Mapped windows and the output they are shown on.
+    /// Mapped windows at their tile positions, and the output. Used for output
+    /// enter/leave and frame callbacks; drawing and hit-testing go through `tiling`.
     pub space: Space<Window>,
-    /// Toplevels that exist but have no buffer yet (or unmapped themselves).
-    pub unmapped: Vec<Window>,
     pub output: Option<Output>,
+    pub tiling: Tiling,
+    pub keybinds: Keybinds,
 
     /// Process start; the clock for frame callback timestamps and startup time.
     pub started: Instant,
@@ -66,6 +72,8 @@ impl Sash {
         loop_signal: LoopSignal,
         redraw: Ping,
         started: Instant,
+        modifier: Modifier,
+        socket_name: OsString,
     ) -> Self {
         let mut protocols = Protocols::advertise(&display_handle);
         let mut seat = protocols.seat.new_wl_seat(&display_handle, "seat0");
@@ -81,8 +89,9 @@ impl Sash {
             protocols,
             seat,
             space: Space::default(),
-            unmapped: Vec::new(),
             output: None,
+            tiling: Tiling::new(),
+            keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,
             redraw,

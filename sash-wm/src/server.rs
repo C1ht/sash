@@ -9,7 +9,7 @@ use smithay::reexports::{
     wayland_server::Display,
 };
 
-use crate::{clients, state::Sash};
+use crate::{clients, keybinds::Modifier, state::Sash};
 
 pub struct Server {
     pub display: Display<Sash>,
@@ -23,6 +23,7 @@ impl Server {
         event_loop: &EventLoop<'static, Server>,
         redraw: Ping,
         start_time: Instant,
+        modifier: Modifier,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut display = Display::<Sash>::new()?;
         let socket_name = clients::listen(event_loop)?;
@@ -31,6 +32,8 @@ impl Server {
             event_loop.get_signal(),
             redraw,
             start_time,
+            modifier,
+            socket_name.clone(),
         );
 
         // Wake up when clients send requests. A duplicate of the display's fd lets the

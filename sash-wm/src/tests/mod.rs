@@ -4,6 +4,7 @@
 
 mod client;
 mod harness;
+mod tiling;
 
 use std::{sync::mpsc, thread};
 

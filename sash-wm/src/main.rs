@@ -3,7 +3,10 @@
 mod backend;
 mod clients;
 mod data_device;
+mod keybinds;
+mod layout;
 mod output;
+mod render;
 mod seat;
 mod server;
 mod shell;
@@ -11,6 +14,7 @@ mod state;
 mod surface;
 #[cfg(test)]
 mod tests;
+mod tiling;
 
 use std::time::Instant;
 
@@ -31,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut event_loop: EventLoop<Server> = EventLoop::try_new()?;
     let (redraw, redraw_requests) = ping::make_ping()?;
-    let mut server = Server::new(&event_loop, redraw, start_time)?;
+    let mut server = Server::new(&event_loop, redraw, start_time, backend::winit::MODIFIER)?;
     tracing::info!(socket = ?server.socket_name, "listening on wayland socket");
 
     backend::winit::start(&event_loop, &mut server.state, redraw_requests)?;

@@ -36,7 +36,7 @@ impl CompositorHandler for Sash {
         }
         on_commit_buffer_handler::<Self>(surface);
 
-        self.window_committed(&root_of(surface));
+        self.root_committed(&root_of(surface));
     }
 }
 

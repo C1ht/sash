@@ -22,9 +22,12 @@ use smithay::{
     utils::{Physical, Size, Transform},
 };
 
-use crate::{output, server::Server, state::Sash};
+use crate::{keybinds::Modifier, output, render, server::Server, state::Sash};
 
 const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
+
+/// Keybind modifier when nested: the host compositor usually captures Super.
+pub const MODIFIER: Modifier = Modifier::Alt;
 
 /// Counts used to check that every resize leads to a rendered frame.
 #[derive(Debug, Default)]
@@ -89,8 +92,10 @@ pub fn start(
     disable_swap_wait(&mut backend)?;
 
     let size = backend.window_size();
+    let output = output::create(state, "nested", size);
+    state.set_layout_area(size.to_logical(1));
     let nested = Rc::new(RefCell::new(Nested {
-        output: output::create(state, "nested", size),
+        output,
         damage: damage_tracker(size),
         backend,
         counters: Counters::default(),
@@ -120,6 +125,7 @@ impl Nested {
                 self.counters.resizes_received += 1;
                 tracing::debug!(w = size.w, h = size.h, counters = ?self.counters, "resize");
                 output::set_size(&self.output, size);
+                state.set_layout_area(size.to_logical(1));
                 self.damage = damage_tracker(size);
                 self.backend.window().request_redraw();
             }
@@ -159,9 +165,7 @@ impl Nested {
         let age = self.backend.buffer_age().unwrap_or(0);
         let damage = {
             let (renderer, mut framebuffer) = self.backend.bind()?;
-            let elements = state
-                .space
-                .render_elements_for_output(renderer, &self.output, 1.0)?;
+            let elements = render::tile_elements(state, renderer, 1.0);
             let result = self.damage.render_output(
                 renderer,
                 &mut framebuffer,

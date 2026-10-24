@@ -2,9 +2,8 @@
 
 //! xdg-shell: toplevel lifecycle and the commit rules Smithay leaves to the compositor.
 //!
-//! A toplevel is created unmapped. Its first commit gets the initial configure; the
-//! first commit with a buffer after the client acked a configure maps it. No layout
-//! yet: mapped windows sit at the output origin at the size the client chose.
+//! Window lifecycle and placement live in `tiling.rs`; this module handles the
+//! protocol side.
 
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
@@ -43,11 +42,11 @@ impl XdgShellHandler for Sash {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        self.unmapped.push(Window::new_wayland_window(surface));
+        self.add_toplevel(Window::new_wayland_window(surface));
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        self.remove_window(surface.wl_surface());
+        self.forget_toplevel(surface.wl_surface());
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {
@@ -114,16 +113,6 @@ impl Dispatch<XdgToplevel, XdgShellSurfaceUserData> for Sash {
     }
 }
 
-fn is_toplevel_of(window: &Window, surface: &WlSurface) -> bool {
-    window
-        .toplevel()
-        .is_some_and(|toplevel| toplevel.wl_surface() == surface)
-}
-
-fn has_buffer(surface: &WlSurface) -> bool {
-    with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
-}
-
 /// True if a non-zero maximum is below the minimum on the same axis (0 means unset).
 /// Negative values never get this far; see the xdg_toplevel dispatch above.
 fn max_below_min(min: Size<i32, Logical>, max: Size<i32, Logical>) -> bool {
@@ -132,11 +121,9 @@ fn max_below_min(min: Size<i32, Logical>, max: Size<i32, Logical>) -> bool {
 
 impl Sash {
     fn toplevel_for(&self, surface: &WlSurface) -> Option<ToplevelSurface> {
-        self.unmapped
-            .iter()
-            .chain(self.space.elements())
-            .find(|window| is_toplevel_of(window, surface))
-            .and_then(|window| window.toplevel().cloned())
+        self.tiling
+            .by_surface(surface)
+            .and_then(|tile| tile.window.toplevel().cloned())
     }
 
     /// Checks a commit on a toplevel surface. Sends a protocol error and returns true
@@ -192,68 +179,11 @@ impl Sash {
     }
 
     /// Handles a commit on a root surface (after the buffer was imported).
-    pub fn window_committed(&mut self, root: &WlSurface) {
-        if let Some(index) = self.unmapped.iter().position(|w| is_toplevel_of(w, root)) {
-            let window = self.unmapped[index].clone();
-            window.on_commit();
-            let toplevel = window.toplevel().expect("only toplevels are tracked");
-            if !toplevel.is_initial_configure_sent() {
-                toplevel.send_configure();
-            } else if has_buffer(root) {
-                self.unmapped.remove(index);
-                self.map_window(window);
-            }
-            return;
-        }
-
-        let Some(window) = self
-            .space
-            .elements()
-            .find(|w| is_toplevel_of(w, root))
-            .cloned()
-        else {
-            return;
-        };
-        window.on_commit();
-        if !has_buffer(root) {
-            // A null buffer unmaps; the client starts over with a new initial configure.
-            self.space.unmap_elem(&window);
-            self.unmapped.push(window);
-            self.focus_topmost_window();
-        }
-        self.request_redraw();
-    }
-
-    fn map_window(&mut self, window: Window) {
-        self.space.map_element(window.clone(), (0, 0), true);
-        self.focus_window(Some(&window));
-        self.request_redraw();
-    }
-
-    fn remove_window(&mut self, surface: &WlSurface) {
-        self.unmapped.retain(|w| !is_toplevel_of(w, surface));
-        let mapped = self
-            .space
-            .elements()
-            .find(|w| is_toplevel_of(w, surface))
-            .cloned();
-        if let Some(window) = mapped {
-            self.space.unmap_elem(&window);
-            self.focus_topmost_window();
-            self.request_redraw();
-        }
-    }
-
-    /// Asks the client to close the window (xdg_toplevel.close). The window goes away
-    /// when the client destroys the toplevel.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no keybind until M3; used by tests")
-    )]
-    pub fn request_close(&self, window: &Window) {
-        if let Some(toplevel) = window.toplevel() {
-            toplevel.send_close();
-        }
+    pub fn root_committed(&mut self, root: &WlSurface) {
+        tracing::trace!(surface = ?root.id(), "commit");
+        let has_buffer =
+            with_renderer_surface_state(root, |state| state.buffer().is_some()).unwrap_or(false);
+        self.toplevel_committed(root, has_buffer);
     }
 }
 
