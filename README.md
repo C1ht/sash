@@ -27,6 +27,20 @@ RUST_LOG=sash_wm=debug cargo run -p sash-wm
 sash-wm logs the name of its own Wayland socket. Start clients against it
 with `WAYLAND_DISPLAY=<socket> <client>`.
 
+## Synthetic input (debug builds)
+
+Debug builds open `$XDG_RUNTIME_DIR/sash-wm-input-<wayland socket>.sock` (mode 0600).
+Each line is one command, answered with `ok` or `error: ...`:
+
+```text
+motion <x> <y>                                  pointer to (x, y), output coordinates
+button <left|right|middle|code> <press|release>
+key <evdev code> <press|release>                e.g. 56 = left Alt
+```
+
+Release builds contain neither this nor the capture code: `tools/check-release.sh`
+checks the release binary (CI runs it).
+
 ## Screenshots (debug builds)
 
 ```sh
@@ -35,8 +49,8 @@ kill -USR1 <sash-wm pid>     # writes /tmp/shots/sash-wm-capture-1.png
 ```
 
 sash-wm renders its current output once more into an offscreen buffer and
-writes it as a PNG; the host screen is never read. Release builds have no
-SIGUSR1 handler (the signal's default action ends the process).
+writes it as a PNG; the host screen is never read. Release builds ignore
+SIGUSR1.
 
 ## Debian 13 (trixie) packages
 

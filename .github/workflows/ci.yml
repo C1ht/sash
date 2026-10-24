@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build and check in a Debian 13 (trixie) container: the target distro.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  trixie:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_DENY_VERSION: 0.20.2
+    steps:
+      - name: System packages
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential pkg-config curl ca-certificates git binutils \
+            libxkbcommon-dev libwayland-client0
+
+      - uses: actions/checkout@v4
+
+      - name: Rust (version from rust-toolchain.toml)
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y -q --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cargo-deny (pinned release)
+        run: |
+          name="cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl"
+          url="https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$name.tar.gz"
+          curl -sSfL "$url" -o /tmp/deny.tar.gz
+          curl -sSfL "$url.sha256" -o /tmp/deny.sha256
+          echo "$(cut -d' ' -f1 /tmp/deny.sha256)  /tmp/deny.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/deny.tar.gz -C /tmp
+          install "/tmp/$name/cargo-deny" "$HOME/.cargo/bin/"
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Test
+        run: |
+          mkdir -p /tmp/runtime && chmod 700 /tmp/runtime
+          XDG_RUNTIME_DIR=/tmp/runtime cargo test --locked
+
+      - name: Licenses and advisories
+        run: cargo deny check
+
+      - name: Release has no debug-only code
+        run: tools/check-release.sh
+
+      - name: Release glibc floor
+        run: objdump -T target/release/sash-wm | grep -oP 'GLIBC_[0-9.]+' | sort -uV | tail -1

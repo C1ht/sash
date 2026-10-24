@@ -15,6 +15,8 @@ mod server;
 mod shell;
 mod state;
 mod surface;
+#[cfg(debug_assertions)]
+mod synthetic;
 #[cfg(test)]
 mod tests;
 mod windows;
@@ -42,6 +44,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(socket = ?server.socket_name, "listening on wayland socket");
 
     backend::winit::start(&event_loop, &mut server.state, redraw_requests)?;
+
+    #[cfg(debug_assertions)]
+    {
+        let path = synthetic::listen(&event_loop, &server.socket_name)?;
+        tracing::info!(path = %path.display(), "synthetic input socket (debug build)");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        use nix::sys::signal::{SigHandler, Signal, signal};
+        // Safety: installs SIG_IGN, which runs no code in the signal context. Debug builds
+        // use SIGUSR1 for the offscreen capture; release builds ignore it.
+        unsafe { signal(Signal::SIGUSR1, SigHandler::SigIgn) }?;
+    }
 
     event_loop.run(None, &mut server, Server::flush)?;
     Ok(())
