@@ -2,12 +2,23 @@
 
 //! Window layouts as plain data: no Smithay or Wayland types, so they can be tested
 //! without a compositor. The compositor maps `WindowId`s to its windows.
+//!
+//! - `BspTree`: the tiling layout. Holds every window of the monitor as a leaf; only
+//!   tiled leaves take space.
+//! - `FloatingLayout`: rectangles and stacking order of floating windows.
+//! - `MonitorLayout`: combines the two with per-window mode, focus and history.
 
 mod bsp;
+mod floating;
+mod geometry;
+mod monitor;
 #[cfg(test)]
 mod proptests;
 
 pub use bsp::BspTree;
+pub use floating::FloatingLayout;
+pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone};
+pub use monitor::{MonitorLayout, NewWindow, STEP};
 
 /// Identifies a window in a layout. Assigned by the compositor, never reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -63,38 +74,40 @@ pub enum Direction {
     Down,
 }
 
-/// How a window is placed. Only `Tiled` is used until M4.
+/// How a window is placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Tiled,
-    #[cfg_attr(not(test), expect(dead_code, reason = "floating arrives in M4"))]
     Floating,
 }
 
-/// The interface shared by the BSP tiling layout and (from M4) the floating layout.
+/// What a layout may use when a window is inserted.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InsertHint {
+    /// BSP: the leaf to split (usually the focused window).
+    pub next_to: Option<WindowId>,
+    /// Floating: the size the client chose.
+    pub size: (i32, i32),
+    /// Floating: center over this rectangle (a dialog's parent) instead of cascading.
+    pub center_over: Option<Rect>,
+    /// Floating: the client's min/max size.
+    pub limits: SizeLimits,
+}
+
+/// The interface shared by the BSP tiling layout and the floating layout.
 pub trait Layout {
     /// Sets the area windows are laid out in: the output, in logical pixels.
     fn set_area(&mut self, area: Rect);
 
-    /// Adds a window, which becomes focused.
-    fn insert(&mut self, window: WindowId);
+    /// Adds a window.
+    fn insert(&mut self, window: WindowId, hint: &InsertHint);
 
     /// Removes a window. Returns false if it is not in the layout.
     fn remove(&mut self, window: WindowId) -> bool;
 
     fn contains(&self, window: WindowId) -> bool;
 
-    fn focused(&self) -> Option<WindowId>;
-
-    /// Focuses a window. Returns false if it is not in the layout.
-    fn focus(&mut self, window: WindowId) -> bool;
-
-    /// The window next to `window` in `direction`, if there is one.
-    fn neighbour(&self, window: WindowId, direction: Direction) -> Option<WindowId>;
-
-    /// Exchanges the places of two windows. Returns false if either is missing.
-    fn swap(&mut self, a: WindowId, b: WindowId) -> bool;
-
-    /// The rectangle of every window that currently takes space.
+    /// The rectangle of every window that currently takes space. For floating windows
+    /// the order is the stacking order, bottom first.
     fn rects(&self) -> Vec<(WindowId, Rect)>;
 }

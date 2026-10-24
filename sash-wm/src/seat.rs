@@ -1,24 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The seat: keybinds, pointer focus, and forwarding backend input to clients.
-//! Keyboard focus follows the layout's focus (see `tiling.rs`).
+//! Keyboard focus follows the layout's focus (see `windows.rs`).
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent,
-        PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
+        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
     },
     delegate_seat,
     input::{
         SeatHandler, SeatState,
         keyboard::{FilterResult, Keycode},
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, GrabStartData, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
-use crate::{keybinds, state::Sash};
+use crate::{keybinds, state::Sash, windows::DragKind};
+
+/// Linux input event codes (linux/input-event-codes.h).
+pub const BTN_LEFT: u32 = 0x110;
+pub const BTN_RIGHT: u32 = 0x111;
 
 impl SeatHandler for Sash {
     type KeyboardFocus = WlSurface;
@@ -86,6 +90,73 @@ impl Sash {
         if let Some(action) = action.flatten() {
             self.run_action(action);
         }
+        // Releasing the modifier ends a mod+Tab cycle.
+        if self.keybinds.cycle.is_some() && !modifier.held(&keyboard.modifier_state()) {
+            self.commit_cycle();
+        }
+    }
+
+    /// Handles a pointer button. A plain press on a window focuses and raises it and is
+    /// delivered. mod+left-drag moves and mod+right-drag resizes; mod+clicks are never
+    /// delivered, nor are their releases.
+    pub fn pointer_button(&mut self, button: u32, state: ButtonState, time_msec: u32) {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        let location = pointer.current_location();
+        match state {
+            ButtonState::Pressed if !pointer.is_grabbed() => {
+                let mod_held = self
+                    .seat
+                    .get_keyboard()
+                    .is_some_and(|k| self.keybinds.modifier.held(&k.modifier_state()));
+                let under = self.window_at(location);
+                if mod_held {
+                    self.windows.swallowed_buttons.push(button);
+                    if let Some(window) = under {
+                        let kind = match button {
+                            BTN_LEFT => Some(DragKind::Move),
+                            BTN_RIGHT => {
+                                self.resize_edges_at(window, location).map(DragKind::Resize)
+                            }
+                            _ => None,
+                        };
+                        if let Some(kind) = kind {
+                            let start = GrabStartData {
+                                focus: None,
+                                button,
+                                location,
+                            };
+                            self.start_pointer_drag(window, kind, start, serial);
+                        }
+                    }
+                    return;
+                }
+                if let Some(window) = under {
+                    self.focus_window(window);
+                }
+            }
+            ButtonState::Released => {
+                let swallowed = &mut self.windows.swallowed_buttons;
+                if let Some(index) = swallowed.iter().position(|b| *b == button) {
+                    swallowed.swap_remove(index);
+                    // A drag grab still needs the release to end.
+                    if !pointer.is_grabbed() {
+                        return;
+                    }
+                }
+            }
+            ButtonState::Pressed => {}
+        }
+        let event = ButtonEvent {
+            button,
+            state,
+            serial,
+            time: time_msec,
+        };
+        pointer.button(self, &event);
+        pointer.frame(self);
     }
 
     /// Forwards one input event from the backend to the focused clients.
@@ -105,18 +176,7 @@ impl Sash {
                 self.pointer_moved_to(location, event.time_msec());
             }
             InputEvent::PointerButton { event } => {
-                let Some(pointer) = self.seat.get_pointer() else {
-                    return;
-                };
-                let button = ButtonEvent {
-                    button: event.button_code(),
-                    state: event.state(),
-                    serial: SERIAL_COUNTER.next_serial(),
-                    time: event.time_msec(),
-                };
-                // Buttons are only delivered; click-to-focus comes with M6.
-                pointer.button(self, &button);
-                pointer.frame(self);
+                self.pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event } => {
                 let Some(pointer) = self.seat.get_pointer() else {

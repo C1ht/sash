@@ -18,7 +18,7 @@ use smithay::{
 
 use crate::{
     keybinds::{Keybinds, Modifier},
-    tiling::Tiling,
+    windows::Windows,
 };
 
 const KEY_REPEAT_DELAY_MS: i32 = 600;
@@ -54,10 +54,10 @@ pub struct Sash {
     pub seat: Seat<Sash>,
 
     /// Mapped windows at their tile positions, and the output. Used for output
-    /// enter/leave and frame callbacks; drawing and hit-testing go through `tiling`.
+    /// enter/leave and frame callbacks; drawing and hit-testing go through `windows`.
     pub space: Space<Window>,
     pub output: Option<Output>,
-    pub tiling: Tiling,
+    pub windows: Windows,
     pub keybinds: Keybinds,
 
     /// Process start; the clock for frame callback timestamps and startup time.
@@ -90,7 +90,7 @@ impl Sash {
             seat,
             space: Space::default(),
             output: None,
-            tiling: Tiling::new(),
+            windows: Windows::new(),
             keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,

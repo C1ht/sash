@@ -9,8 +9,12 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use std::collections::HashMap;
+
 use wayland_client::{
-    Connection, Dispatch, DispatchError, EventQueue, QueueHandle, WEnum, delegate_noop,
+    Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, WEnum,
+    backend::ObjectId,
+    delegate_noop,
     protocol::{
         wl_buffer::WlBuffer,
         wl_callback::{self, WlCallback},
@@ -33,9 +37,18 @@ use wayland_protocols::xdg::shell::client::{
 pub const WINDOW_SIZE: (i32, i32) = (100, 100);
 
 /// Globals the client bound and the events it saw.
+/// The last xdg_toplevel.configure of one window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToplevelConfig {
+    pub size: (i32, i32),
+    pub tiled: bool,
+    pub resizing: bool,
+}
+
 #[derive(Default)]
 pub struct Events {
     compositor: Option<WlCompositor>,
+    seat: Option<WlSeat>,
     shm: Option<WlShm>,
     wm_base: Option<XdgWmBase>,
     keyboard: Option<WlKeyboard>,
@@ -54,12 +67,20 @@ pub struct Events {
     pub pointer_entered: bool,
     pub frames_done: u32,
     pub close_requested: bool,
+    /// Per window: last configure (by xdg_toplevel) and its serial (by xdg_surface).
+    configs: HashMap<ObjectId, ToplevelConfig>,
+    serials: HashMap<ObjectId, u32>,
+    /// Serial of the last wl_pointer.button press, and all buttons pressed.
+    pub button_serial: Option<u32>,
+    pub buttons_pressed: Vec<u32>,
 }
 
 pub struct TestWindow {
     pub surface: WlSurface,
     pub xdg_surface: XdgSurface,
     pub toplevel: XdgToplevel,
+    /// The size this client draws when the compositor lets it choose.
+    pub preferred: (i32, i32),
 }
 
 pub struct TestClient {
@@ -131,6 +152,7 @@ impl TestClient {
             surface,
             xdg_surface,
             toplevel,
+            preferred: WINDOW_SIZE,
         }
     }
 
@@ -146,24 +168,29 @@ impl TestClient {
     /// Acks the last configure and commits a buffer of the configured size, like a
     /// client that redraws on every configure.
     pub fn ack_and_commit(&mut self, window: &TestWindow) {
-        let serial = self.events.configure_serial.expect("configure serial");
+        let serial = self.events.serials[&window.xdg_surface.id()];
         window.xdg_surface.ack_configure(serial);
         self.attach_buffer(window);
         window.surface.commit();
         self.roundtrip();
     }
 
-    /// Size of the next buffer: the configured size, or a default if the compositor
-    /// left it to the client.
-    fn buffer_size(&self) -> (i32, i32) {
-        match self.events.toplevel_size {
+    /// The last configure this window got.
+    pub fn config(&self, window: &TestWindow) -> Option<ToplevelConfig> {
+        self.events.configs.get(&window.toplevel.id()).copied()
+    }
+
+    /// Size of the next buffer: the configured size, or the client's own choice if the
+    /// compositor left it to the client (0x0).
+    fn buffer_size(&self, window: &TestWindow) -> (i32, i32) {
+        match self.config(window).map(|c| c.size) {
             Some((w, h)) if w > 0 && h > 0 => (w, h),
-            _ => WINDOW_SIZE,
+            _ => window.preferred,
         }
     }
 
     pub fn attach_buffer(&mut self, window: &TestWindow) {
-        let size = self.buffer_size();
+        let size = self.buffer_size(window);
         let buffer = self.buffer(size);
         window.surface.attach(Some(&buffer), 0, 0);
         window.surface.damage_buffer(0, 0, size.0, size.1);
@@ -174,6 +201,24 @@ impl TestClient {
         window.toplevel.destroy();
         window.xdg_surface.destroy();
         window.surface.destroy();
+        self.roundtrip();
+    }
+
+    /// Asks the compositor to move the window, with the serial of the last button press.
+    pub fn request_move(&mut self, window: &TestWindow) {
+        let serial = self.events.button_serial.expect("a button press");
+        window
+            .toplevel
+            ._move(self.events.seat.as_ref().expect("wl_seat"), serial);
+        self.roundtrip();
+    }
+
+    /// Asks the compositor to resize the window from the given edge.
+    pub fn request_resize(&mut self, window: &TestWindow, edge: xdg_toplevel::ResizeEdge) {
+        let serial = self.events.button_serial.expect("a button press");
+        window
+            .toplevel
+            .resize(self.events.seat.as_ref().expect("wl_seat"), serial, edge);
         self.roundtrip();
     }
 
@@ -257,7 +302,7 @@ impl Dispatch<WlRegistry, ()> for Events {
             "wl_shm" => events.shm = Some(registry.bind(name, 1, qh, ())),
             "xdg_wm_base" => events.wm_base = Some(registry.bind(name, version.min(3), qh, ())),
             "wl_seat" => {
-                registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ());
+                events.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ()));
             }
             _ => {}
         }
@@ -321,8 +366,18 @@ impl Dispatch<WlPointer, ()> for Events {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Enter { .. } = event {
-            events.pointer_entered = true;
+        match event {
+            wl_pointer::Event::Enter { .. } => events.pointer_entered = true,
+            wl_pointer::Event::Button {
+                serial,
+                button,
+                state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+                ..
+            } => {
+                events.button_serial = Some(serial);
+                events.buttons_pressed.push(button);
+            }
+            _ => {}
         }
     }
 }
@@ -345,7 +400,7 @@ impl Dispatch<XdgWmBase, ()> for Events {
 impl Dispatch<XdgSurface, ()> for Events {
     fn event(
         events: &mut Self,
-        _: &XdgSurface,
+        xdg_surface: &XdgSurface,
         event: xdg_surface::Event,
         _: &(),
         _: &Connection,
@@ -353,6 +408,7 @@ impl Dispatch<XdgSurface, ()> for Events {
     ) {
         if let xdg_surface::Event::Configure { serial } = event {
             events.configure_serial = Some(serial);
+            events.serials.insert(xdg_surface.id(), serial);
             events.configures += 1;
         }
     }
@@ -361,7 +417,7 @@ impl Dispatch<XdgSurface, ()> for Events {
 impl Dispatch<XdgToplevel, ()> for Events {
     fn event(
         events: &mut Self,
-        _: &XdgToplevel,
+        toplevel: &XdgToplevel,
         event: xdg_toplevel::Event,
         _: &(),
         _: &Connection,
@@ -382,6 +438,13 @@ impl Dispatch<XdgToplevel, ()> for Events {
                     .map(|bytes| u32::from_ne_bytes(*bytes))
                     .collect();
                 events.tiled = (5..=8).all(|tiled| states.contains(&tiled));
+                // 3 is resizing.
+                let config = ToplevelConfig {
+                    size: (width, height),
+                    tiled: events.tiled,
+                    resizing: states.contains(&3),
+                };
+                events.configs.insert(toplevel.id(), config);
             }
             xdg_toplevel::Event::Close => events.close_requested = true,
             _ => {}

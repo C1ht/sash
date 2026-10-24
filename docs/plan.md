@@ -99,10 +99,14 @@ sash/
     - Tiles on outputs too small to give every window a pixel can be 0 wide or high. They are configured as 1 (0 would mean "client chooses") and are not reachable by focus moves.
   - Resize transactions (owner decision: not now; revisit after M4 with the floating checklist; the ~150 ms timeout would be a constant, never a setting): Keep showing the old arrangement until every affected client has committed a buffer for its new configure, or a timeout (about 150 ms) passes; then switch in one frame. Clients that miss the timeout fall back to the clip rule. This removes the frame where windows show stale or partly empty content at their new tiles, at the cost of up to one timeout of latency.
   - Screenshots of three tiled foot windows, before and after a swap. Startup, frame time with 3 clients, layout time after a keybind, idle RAM and CPU.
-- **M4 Floating.** Rules are in CLAUDE.md ("Floating (M4)", "Keybinds"). Summary:
+- **M4 Floating.** Done, pending approval. Manual checklist: docs/floating-checklist.md. Rules are in CLAUDE.md ("Floating (M4)", "Keybinds"). Summary:
   - Forced floating (dialogs, min == max), re-checked per commit; per-monitor default mode (tiled at start, debug toggle); float-all / tile-all; lossless toggling; placement (client size, center, cascade 32 px, wrap); floating above tiled, unclipped, 64 px visible per axis; z-order and click-to-focus; mod+drag move (floats tiled windows on press) and 3x3-grid resize; client move/resize requests; 40 px keyboard move/resize; hold-to-cycle mod+Tab.
   - Measurements: frame time and a frame-interval histogram during a drag and a resize, pointer-event-to-frame latency, time of toggle / float-all / tile-all, idle RAM and CPU with 3 windows. Real pointer drags need uinput/ydotool privileges, so they are measured only where no extra privilege is needed.
   - Deliverable: docs/floating-checklist.md, a manual checklist for how floating feels.
+  - Implementation notes:
+    - The `Layout` trait now has set_area / insert(hint) / remove / contains / rects; focus and history moved to `MonitorLayout`.
+    - Every window keeps a leaf in the BSP tree; floating and forced-floating windows are placeholders.
+  - Open item (no work): frame pacing in the nested backend. Render intervals spread from about 8 to 25 ms around a 16.9 ms mean, because sash-wm renders when both the host's frame callback and a client commit have arrived. The host's presentation timing is not visible from inside; measuring it needs presentation feedback from the host.
   Original M4 notes:
   - **Modes and placement:**
     - Per-window tiled/floating state, behind the same `Layout` trait.

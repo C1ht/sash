@@ -13,7 +13,7 @@ use std::{
 };
 
 use smithay::{
-    backend::input::KeyState,
+    backend::input::{ButtonState, KeyState},
     input::keyboard::Keycode,
     output::Output,
     reexports::calloop::{EventLoop, ping},
@@ -21,7 +21,7 @@ use smithay::{
 
 use crate::{
     keybinds::Modifier,
-    layout::{Rect, WindowId},
+    layout::{Mode, Rect, WindowId},
     output,
     server::Server,
 };
@@ -102,38 +102,56 @@ impl Harness {
     }
 
     pub fn mapped_windows(&self) -> usize {
-        self.server
-            .state
-            .tiling
-            .tiles()
-            .filter(|t| t.mapped)
-            .count()
+        self.server.state.windows.all().filter(|m| m.mapped).count()
     }
 
     /// Toplevels the compositor knows that have not mapped (yet).
     pub fn unmapped_windows(&self) -> usize {
         self.server
             .state
-            .tiling
-            .tiles()
-            .filter(|t| !t.mapped)
+            .windows
+            .all()
+            .filter(|m| !m.mapped)
             .count()
     }
 
     /// The tile of the n-th toplevel created in this harness (ids start at 1).
     pub fn rect_of(&self, id: u64) -> Option<Rect> {
-        self.server
-            .state
-            .tiling
-            .tiles()
-            .find(|t| t.id == WindowId(id))
-            .and_then(|t| t.rect)
+        self.server.state.windows.layout.rect_of(WindowId(id))
     }
 
     /// Id of the window with keyboard focus.
     pub fn keyboard_focus(&self) -> Option<u64> {
         let focus = self.server.state.seat.get_keyboard()?.current_focus()?;
-        self.server.state.tiling.by_surface(&focus).map(|t| t.id.0)
+        self.server.state.windows.by_surface(&focus).map(|m| m.id.0)
+    }
+
+    /// Presses or releases one key (evdev code), e.g. to hold a modifier.
+    pub fn key(&mut self, key: u32, state: KeyState) {
+        self.server.state.key(Keycode::new(key + 8), state, 0);
+        self.server.flush();
+    }
+
+    pub fn pointer_to(&mut self, x: f64, y: f64) {
+        self.server.state.pointer_moved_to((x, y).into(), 0);
+        self.server.flush();
+    }
+
+    pub fn button(&mut self, button: u32, state: ButtonState) {
+        self.server.state.pointer_button(button, state, 0);
+        self.server.flush();
+    }
+
+    pub fn mode_of(&self, id: u64) -> Option<Mode> {
+        self.server.state.windows.layout.mode(WindowId(id))
+    }
+
+    pub fn pointer_grabbed(&self) -> bool {
+        self.server
+            .state
+            .seat
+            .get_pointer()
+            .is_some_and(|p| p.is_grabbed())
     }
 
     /// Presses the keys in order, then releases them in reverse (evdev codes).
@@ -210,4 +228,8 @@ pub mod keys {
     pub const K: u32 = 37;
     pub const L: u32 = 38;
     pub const Q: u32 = 16;
+    pub const F: u32 = 33;
+    pub const T: u32 = 20;
+    pub const TAB: u32 = 15;
+    pub const CTRL: u32 = 29;
 }

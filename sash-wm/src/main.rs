@@ -3,18 +3,19 @@
 mod backend;
 mod clients;
 mod data_device;
+mod grab;
 mod keybinds;
 mod layout;
 mod output;
 mod render;
-mod seat;
+pub mod seat;
 mod server;
 mod shell;
 mod state;
 mod surface;
 #[cfg(test)]
 mod tests;
-mod tiling;
+mod windows;
 
 use std::time::Instant;
 

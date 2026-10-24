@@ -2,12 +2,13 @@
 
 //! xdg-shell: toplevel lifecycle and the commit rules Smithay leaves to the compositor.
 //!
-//! Window lifecycle and placement live in `tiling.rs`; this module handles the
+//! Window lifecycle and placement live in `windows.rs`; this module handles the
 //! protocol side.
 
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
     desktop::Window,
+    input::Seat,
     reexports::{
         wayland_protocols::xdg::shell::server::{
             xdg_popup::XdgPopup,
@@ -34,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::state::Sash;
+use crate::{layout::Edges, state::Sash, windows::DragKind};
 
 impl XdgShellHandler for Sash {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -47,6 +48,20 @@ impl XdgShellHandler for Sash {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         self.forget_toplevel(surface.wl_surface());
+    }
+
+    fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
+        self.client_drag(&surface, &seat, serial, DragKind::Move);
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        seat: WlSeat,
+        serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
+    ) {
+        self.client_drag(&surface, &seat, serial, DragKind::Resize(edges_from(edges)));
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {
@@ -119,11 +134,52 @@ fn max_below_min(min: Size<i32, Logical>, max: Size<i32, Logical>) -> bool {
     (max.w > 0 && max.w < min.w) || (max.h > 0 && max.h < min.h)
 }
 
+/// The edges an xdg_toplevel.resize request moves.
+fn edges_from(edges: xdg_toplevel::ResizeEdge) -> Edges {
+    use xdg_toplevel::ResizeEdge as E;
+    Edges {
+        left: matches!(edges, E::Left | E::TopLeft | E::BottomLeft),
+        right: matches!(edges, E::Right | E::TopRight | E::BottomRight),
+        top: matches!(edges, E::Top | E::TopLeft | E::TopRight),
+        bottom: matches!(edges, E::Bottom | E::BottomLeft | E::BottomRight),
+    }
+}
+
 impl Sash {
+    /// A client asked to move or resize its window (e.g. a drag on its title bar). It
+    /// must hold a pointer button pressed on that window, with the serial of the press.
+    fn client_drag(
+        &mut self,
+        surface: &ToplevelSurface,
+        seat: &WlSeat,
+        serial: Serial,
+        kind: DragKind,
+    ) {
+        let Some(pointer) = Seat::<Sash>::from_resource(seat).and_then(|s| s.get_pointer()) else {
+            return;
+        };
+        if !pointer.has_grab(serial) {
+            return;
+        }
+        let Some(start) = pointer.grab_start_data() else {
+            return;
+        };
+        let pressed_on_window = start
+            .focus
+            .as_ref()
+            .is_some_and(|(focus, _)| focus.id().same_client_as(&surface.wl_surface().id()));
+        let Some(id) = self.windows.by_surface(surface.wl_surface()).map(|m| m.id) else {
+            return;
+        };
+        if pressed_on_window {
+            self.start_pointer_drag(id, kind, start, serial);
+        }
+    }
+
     fn toplevel_for(&self, surface: &WlSurface) -> Option<ToplevelSurface> {
-        self.tiling
+        self.windows
             .by_surface(surface)
-            .and_then(|tile| tile.window.toplevel().cloned())
+            .and_then(|managed| managed.window.toplevel().cloned())
     }
 
     /// Checks a commit on a toplevel surface. Sends a protocol error and returns true

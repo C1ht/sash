@@ -3,10 +3,12 @@
 //! Binary space partitioning: every split divides a rectangle in two, and every leaf is
 //! one window. The tree only records structure; rectangles are derived from the area
 //! on demand, so changing the output size never changes the structure.
+//!
+//! Every window of the monitor has a leaf. A floating window's leaf is a placeholder:
+//! it takes no space (its sibling gets it) but keeps the window's place, so tiling it
+//! again restores the tree exactly.
 
-use std::collections::HashMap;
-
-use super::{Direction, Layout, Mode, Rect, WindowId};
+use super::{InsertHint, Layout, Mode, Rect, WindowId};
 
 /// Share of a split's length given to the first child.
 const SPLIT_RATIO: f64 = 0.5;
@@ -40,11 +42,8 @@ enum Node {
 }
 
 impl Node {
-    fn leaf(window: WindowId) -> Self {
-        Node::Leaf(Leaf {
-            window,
-            mode: Mode::Tiled,
-        })
+    fn leaf(window: WindowId, mode: Mode) -> Self {
+        Node::Leaf(Leaf { window, mode })
     }
 
     fn find_mut(&mut self, window: WindowId) -> Option<&mut Node> {
@@ -83,30 +82,35 @@ impl Node {
         }
     }
 
-    fn takes_space(&self) -> bool {
+    /// Whether the subtree takes space: it has a tiled leaf, or the leaf of `also`
+    /// (treated as tiled, to ask where a placeholder would go).
+    fn takes_space(&self, also: Option<WindowId>) -> bool {
         match self {
-            Node::Leaf(leaf) => leaf.mode == Mode::Tiled,
-            Node::Split(split) => split.first.takes_space() || split.second.takes_space(),
+            Node::Leaf(leaf) => leaf.mode == Mode::Tiled || Some(leaf.window) == also,
+            Node::Split(split) => split.first.takes_space(also) || split.second.takes_space(also),
         }
     }
 
-    /// Appends the rectangle of every tiled leaf under this node, which covers `area`.
-    /// A subtree without tiled leaves takes no space; its sibling gets all of it.
-    fn place(&self, area: Rect, out: &mut Vec<(WindowId, Rect)>) {
+    /// Appends the rectangle of every leaf that takes space under this node, which
+    /// covers `area`. A subtree that takes no space gives all of it to its sibling.
+    fn place(&self, area: Rect, also: Option<WindowId>, out: &mut Vec<(WindowId, Rect)>) {
         match self {
             Node::Leaf(leaf) => {
-                if leaf.mode == Mode::Tiled {
+                if leaf.mode == Mode::Tiled || Some(leaf.window) == also {
                     out.push((leaf.window, area));
                 }
             }
-            Node::Split(split) => match (split.first.takes_space(), split.second.takes_space()) {
+            Node::Split(split) => match (
+                split.first.takes_space(also),
+                split.second.takes_space(also),
+            ) {
                 (true, true) => {
                     let (a, b) = divide(area, split.orientation, split.ratio);
-                    split.first.place(a, out);
-                    split.second.place(b, out);
+                    split.first.place(a, also, out);
+                    split.second.place(b, also, out);
                 }
-                (true, false) => split.first.place(area, out),
-                (false, true) => split.second.place(area, out),
+                (true, false) => split.first.place(area, also, out),
+                (false, true) => split.second.place(area, also, out),
                 (false, false) => {}
             },
         }
@@ -184,25 +188,15 @@ fn remove_leaf(node: Node, window: WindowId, sibling_windows: &mut Vec<WindowId>
 }
 
 /// The BSP tiling layout of one output.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BspTree {
     area: Rect,
     root: Option<Node>,
-    focused: Option<WindowId>,
-    /// When each window was last focused; higher is more recent.
-    focus_order: HashMap<WindowId, u64>,
-    focus_clock: u64,
 }
 
 impl BspTree {
     pub fn new(area: Rect) -> Self {
-        Self {
-            area,
-            root: None,
-            focused: None,
-            focus_order: HashMap::new(),
-            focus_clock: 0,
-        }
+        Self { area, root: None }
     }
 
     /// All windows in the tree, in leaf order (first child before second).
@@ -219,154 +213,97 @@ impl BspTree {
         self.root.is_none()
     }
 
-    fn rect_of(&self, window: WindowId) -> Option<Rect> {
+    pub fn rect_of(&self, window: WindowId) -> Option<Rect> {
         self.rects()
             .into_iter()
             .find(|(w, _)| *w == window)
             .map(|(_, rect)| rect)
     }
 
-    fn last_focused_of(&self, windows: &[WindowId]) -> Option<WindowId> {
-        windows
-            .iter()
-            .copied()
-            .max_by_key(|w| self.focus_order.get(w).copied().unwrap_or(0))
+    /// The rectangle `window`'s leaf would get if it were tiled (for a placeholder).
+    fn rect_if_tiled(&self, window: WindowId) -> Option<Rect> {
+        let mut out = Vec::new();
+        self.root.as_ref()?.place(self.area, Some(window), &mut out);
+        out.into_iter()
+            .find(|(w, _)| *w == window)
+            .map(|(_, rect)| rect)
     }
 
     #[cfg(test)]
-    pub(crate) fn set_mode(&mut self, window: WindowId, mode: Mode) {
-        if let Some(Node::Leaf(leaf)) = self.root.as_mut().and_then(|root| root.find_mut(window)) {
-            leaf.mode = mode;
-        }
-    }
-}
-
-impl Layout for BspTree {
-    fn set_area(&mut self, area: Rect) {
-        self.area = area;
+    pub fn mode_of(&self, window: WindowId) -> Option<Mode> {
+        let mut leaves = Vec::new();
+        self.root.as_ref()?.leaves(&mut leaves);
+        leaves
+            .iter()
+            .find(|leaf| leaf.window == window)
+            .map(|leaf| leaf.mode)
     }
 
-    fn insert(&mut self, window: WindowId) {
-        debug_assert!(!self.contains(window), "{window:?} inserted twice");
-        let target = self
-            .focused
-            .or_else(|| self.windows().last().copied())
-            .and_then(|focused| self.rect_of(focused).map(|rect| (focused, rect)));
-        match (&mut self.root, target) {
-            (Some(root), Some((target, rect))) => {
-                let orientation = if rect.w >= rect.h {
-                    Orientation::SideBySide
-                } else {
-                    Orientation::Stacked
-                };
-                let slot = root
-                    .find_mut(target)
-                    .expect("the focused window is in the tree");
-                let old = std::mem::replace(slot, Node::leaf(window));
-                *slot = Node::Split(Box::new(Split {
-                    orientation,
-                    ratio: SPLIT_RATIO,
-                    first: old,
-                    second: Node::leaf(window),
-                }));
-            }
-            (Some(_), None) => {
-                unreachable!("a non-empty tree always has a window with a rectangle")
-            }
-            (None, _) => self.root = Some(Node::leaf(window)),
-        }
-        self.focus(window);
-    }
-
-    fn remove(&mut self, window: WindowId) -> bool {
-        let Some(root) = self.root.take() else {
-            return false;
-        };
-        let mut sibling_windows = Vec::new();
-        let found = match remove_leaf(root, window, &mut sibling_windows) {
-            Removal::NotFound(root) => {
-                self.root = Some(root);
-                false
-            }
-            Removal::WasThisLeaf => true,
-            Removal::Replaced(root) => {
-                self.root = Some(root);
+    /// Marks a leaf as tiled or as a floating placeholder. Structure does not change.
+    pub fn set_mode(&mut self, window: WindowId, mode: Mode) -> bool {
+        match self.root.as_mut().and_then(|root| root.find_mut(window)) {
+            Some(Node::Leaf(leaf)) => {
+                leaf.mode = mode;
                 true
             }
+            _ => false,
+        }
+    }
+
+    /// Adds `window` with the given leaf mode by splitting `next_to`'s leaf (or the
+    /// last leaf) along the longer side of the rectangle that leaf has, or would have
+    /// if it were tiled. The new window is the second child.
+    pub fn insert_with_mode(&mut self, window: WindowId, next_to: Option<WindowId>, mode: Mode) {
+        debug_assert!(!self.contains(window), "{window:?} inserted twice");
+        let new = Node::leaf(window, mode);
+        let target = next_to
+            .filter(|w| self.contains(*w))
+            .or_else(|| self.windows().last().copied());
+        let Some(target) = target else {
+            self.root = Some(new);
+            return;
         };
-        if found {
-            self.focus_order.remove(&window);
-            if self.focused == Some(window) {
-                self.focused = None;
-                if let Some(next) = self.last_focused_of(&sibling_windows) {
-                    self.focus(next);
-                }
+        let rect = self.rect_if_tiled(target).unwrap_or(self.area);
+        let orientation = if rect.w >= rect.h {
+            Orientation::SideBySide
+        } else {
+            Orientation::Stacked
+        };
+        let slot = self
+            .root
+            .as_mut()
+            .and_then(|root| root.find_mut(target))
+            .expect("the target is in the tree");
+        let old = std::mem::replace(slot, new.clone());
+        *slot = Node::Split(Box::new(Split {
+            orientation,
+            ratio: SPLIT_RATIO,
+            first: old,
+            second: new,
+        }));
+    }
+
+    /// Removes `window`'s leaf; its sibling takes the parent's place. Returns the
+    /// windows of that sibling subtree (empty if `window` was the only leaf), or None
+    /// if `window` is not in the tree.
+    pub fn remove_returning_sibling(&mut self, window: WindowId) -> Option<Vec<WindowId>> {
+        let root = self.root.take()?;
+        let mut sibling_windows = Vec::new();
+        match remove_leaf(root, window, &mut sibling_windows) {
+            Removal::NotFound(root) => {
+                self.root = Some(root);
+                None
+            }
+            Removal::WasThisLeaf => Some(sibling_windows),
+            Removal::Replaced(root) => {
+                self.root = Some(root);
+                Some(sibling_windows)
             }
         }
-        found
     }
 
-    fn contains(&self, window: WindowId) -> bool {
-        self.windows().contains(&window)
-    }
-
-    fn focused(&self) -> Option<WindowId> {
-        self.focused
-    }
-
-    fn focus(&mut self, window: WindowId) -> bool {
-        if !self.contains(window) {
-            return false;
-        }
-        self.focus_clock += 1;
-        self.focus_order.insert(window, self.focus_clock);
-        self.focused = Some(window);
-        true
-    }
-
-    fn neighbour(&self, window: WindowId, direction: Direction) -> Option<WindowId> {
-        let rects = self.rects();
-        let (_, from) = *rects.iter().find(|(w, _)| *w == window)?;
-        let spans_overlap = |a0: i32, a1: i32, b0: i32, b1: i32| a0 < b1 && b0 < a1;
-        rects
-            .iter()
-            .filter(|(w, _)| *w != window)
-            .filter_map(|&(w, to)| {
-                // Distance from `from`'s edge to `to`'s facing edge, if `to` lies in
-                // `direction` and shares part of `from`'s span.
-                let (gap, overlap) = match direction {
-                    Direction::Right => (
-                        to.x - from.right(),
-                        spans_overlap(from.y, from.bottom(), to.y, to.bottom()),
-                    ),
-                    Direction::Left => (
-                        from.x - to.right(),
-                        spans_overlap(from.y, from.bottom(), to.y, to.bottom()),
-                    ),
-                    Direction::Down => (
-                        to.y - from.bottom(),
-                        spans_overlap(from.x, from.right(), to.x, to.right()),
-                    ),
-                    Direction::Up => (
-                        from.y - to.bottom(),
-                        spans_overlap(from.x, from.right(), to.x, to.right()),
-                    ),
-                };
-                (gap >= 0 && overlap).then_some((w, to, gap))
-            })
-            .min_by_key(|&(w, to, gap)| {
-                let recency = self.focus_order.get(&w).copied().unwrap_or(0);
-                // Final tie-break by position: topmost for left/right, leftmost for up/down.
-                let position = match direction {
-                    Direction::Left | Direction::Right => (to.y, to.x),
-                    Direction::Up | Direction::Down => (to.x, to.y),
-                };
-                (gap, std::cmp::Reverse(recency), position)
-            })
-            .map(|(w, _, _)| w)
-    }
-
-    fn swap(&mut self, a: WindowId, b: WindowId) -> bool {
+    /// Exchanges the windows of two leaves (with their modes); structure stays.
+    pub fn swap(&mut self, a: WindowId, b: WindowId) -> bool {
         if a == b || !self.contains(a) || !self.contains(b) {
             return false;
         }
@@ -381,11 +318,29 @@ impl Layout for BspTree {
         }
         true
     }
+}
+
+impl Layout for BspTree {
+    fn set_area(&mut self, area: Rect) {
+        self.area = area;
+    }
+
+    fn insert(&mut self, window: WindowId, hint: &InsertHint) {
+        self.insert_with_mode(window, hint.next_to, Mode::Tiled);
+    }
+
+    fn remove(&mut self, window: WindowId) -> bool {
+        self.remove_returning_sibling(window).is_some()
+    }
+
+    fn contains(&self, window: WindowId) -> bool {
+        self.windows().contains(&window)
+    }
 
     fn rects(&self) -> Vec<(WindowId, Rect)> {
         let mut out = Vec::new();
         if let Some(root) = &self.root {
-            root.place(self.area, &mut out);
+            root.place(self.area, None, &mut out);
         }
         out
     }
@@ -405,7 +360,7 @@ pub(crate) mod tests {
         tree.rect_of(id(window)).expect("window has a rectangle")
     }
 
-    /// The invariants every tree must keep after any operation.
+    /// Structural invariants plus exact coverage of the area by the tiled leaves.
     pub(crate) fn check_invariants(tree: &BspTree) {
         let windows = tree.windows();
         let mut unique = windows.clone();
@@ -418,10 +373,14 @@ pub(crate) mod tests {
         );
 
         let rects = tree.rects();
+        let tiled = windows
+            .iter()
+            .filter(|w| tree.mode_of(**w) == Some(Mode::Tiled))
+            .count();
         assert_eq!(
             rects.len(),
-            windows.len(),
-            "every (tiled) window gets exactly one rectangle"
+            tiled,
+            "every tiled window gets exactly one rectangle"
         );
         for (w, r) in &rects {
             assert!(r.w >= 0 && r.h >= 0, "{w:?} has a negative size: {r:?}");
@@ -444,20 +403,14 @@ pub(crate) mod tests {
                 "rectangles do not cover the area exactly"
             );
         }
-
-        match tree.focused() {
-            Some(focused) => assert!(
-                windows.contains(&focused),
-                "focus on a window not in the tree"
-            ),
-            None => assert!(windows.is_empty(), "windows exist but none is focused"),
-        }
     }
 
+    /// Opens windows 1..=n, each next to the previous one (as if each new window had
+    /// focus).
     fn tree_with(n: u64) -> BspTree {
         let mut tree = BspTree::new(AREA);
         for i in 1..=n {
-            tree.insert(id(i));
+            tree.insert_with_mode(id(i), (i > 1).then(|| id(i - 1)), Mode::Tiled);
         }
         tree
     }
@@ -466,30 +419,25 @@ pub(crate) mod tests {
     fn first_window_fills_the_area() {
         let tree = tree_with(1);
         assert_eq!(tree.rects(), vec![(id(1), AREA)]);
-        assert_eq!(tree.focused(), Some(id(1)));
         check_invariants(&tree);
     }
 
     #[test]
-    fn new_window_splits_focused_leaf_along_longer_side() {
+    fn new_window_splits_target_leaf_along_longer_side() {
         let mut tree = tree_with(2);
-        // 800x600 is wider than tall: side by side, new window second and focused.
         assert_eq!(rect_of(&tree, 1), Rect::new(0, 0, 400, 600));
         assert_eq!(rect_of(&tree, 2), Rect::new(400, 0, 400, 600));
-        assert_eq!(tree.focused(), Some(id(2)));
-        // 400x600 is taller than wide: stacked.
-        tree.insert(id(3));
+        tree.insert_with_mode(id(3), Some(id(2)), Mode::Tiled);
         assert_eq!(rect_of(&tree, 2), Rect::new(400, 0, 400, 300));
         assert_eq!(rect_of(&tree, 3), Rect::new(400, 300, 400, 300));
-        assert_eq!(tree.focused(), Some(id(3)));
         check_invariants(&tree);
     }
 
     #[test]
     fn square_leaf_splits_side_by_side() {
         let mut tree = BspTree::new(Rect::new(0, 0, 500, 500));
-        tree.insert(id(1));
-        tree.insert(id(2));
+        tree.insert_with_mode(id(1), None, Mode::Tiled);
+        tree.insert_with_mode(id(2), Some(id(1)), Mode::Tiled);
         assert_eq!(rect_of(&tree, 1), Rect::new(0, 0, 250, 500));
         assert_eq!(rect_of(&tree, 2), Rect::new(250, 0, 250, 500));
     }
@@ -497,11 +445,11 @@ pub(crate) mod tests {
     #[test]
     fn odd_length_gives_the_remainder_to_the_second_child() {
         let mut tree = BspTree::new(Rect::new(0, 0, 801, 601));
-        tree.insert(id(1));
-        tree.insert(id(2));
+        tree.insert_with_mode(id(1), None, Mode::Tiled);
+        tree.insert_with_mode(id(2), Some(id(1)), Mode::Tiled);
         assert_eq!(rect_of(&tree, 1), Rect::new(0, 0, 400, 601));
         assert_eq!(rect_of(&tree, 2), Rect::new(400, 0, 401, 601));
-        tree.insert(id(3));
+        tree.insert_with_mode(id(3), Some(id(2)), Mode::Tiled);
         assert_eq!(rect_of(&tree, 2), Rect::new(400, 0, 401, 300));
         assert_eq!(rect_of(&tree, 3), Rect::new(400, 300, 401, 301));
         check_invariants(&tree);
@@ -510,8 +458,8 @@ pub(crate) mod tests {
     #[test]
     fn area_offset_is_respected() {
         let mut tree = BspTree::new(Rect::new(1920, 100, 1000, 500));
-        tree.insert(id(1));
-        tree.insert(id(2));
+        tree.insert_with_mode(id(1), None, Mode::Tiled);
+        tree.insert_with_mode(id(2), Some(id(1)), Mode::Tiled);
         assert_eq!(rect_of(&tree, 1), Rect::new(1920, 100, 500, 500));
         assert_eq!(rect_of(&tree, 2), Rect::new(2420, 100, 500, 500));
         check_invariants(&tree);
@@ -522,7 +470,7 @@ pub(crate) mod tests {
         for (w, h) in [(1, 1), (2, 1), (1, 3), (3, 2)] {
             let mut tree = BspTree::new(Rect::new(0, 0, w, h));
             for i in 1..=6 {
-                tree.insert(id(i));
+                tree.insert_with_mode(id(i), (i > 1).then(|| id(i - 1)), Mode::Tiled);
                 check_invariants(&tree);
             }
             for i in [3, 1, 6] {
@@ -533,15 +481,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn close_gives_parent_space_to_sibling_and_focus_to_its_last_focused_window() {
-        let mut tree = tree_with(3); // 1 | (2 / 3), focus 3
-        tree.focus(id(2));
-        tree.focus(id(1));
-        assert!(tree.remove(id(1)));
-        // The sibling subtree (2 / 3) takes the whole area; 2 was focused more recently.
+    fn remove_promotes_the_sibling_and_reports_its_windows() {
+        let mut tree = tree_with(3); // 1 | (2 / 3)
+        assert_eq!(
+            tree.remove_returning_sibling(id(1)),
+            Some(vec![id(2), id(3)])
+        );
         assert_eq!(rect_of(&tree, 2), Rect::new(0, 0, 800, 300));
         assert_eq!(rect_of(&tree, 3), Rect::new(0, 300, 800, 300));
-        assert_eq!(tree.focused(), Some(id(2)));
+        assert_eq!(tree.remove_returning_sibling(id(3)), Some(vec![id(2)]));
+        assert_eq!(tree.remove_returning_sibling(id(2)), Some(vec![]));
+        assert!(tree.is_empty());
+        assert_eq!(tree.remove_returning_sibling(id(2)), None);
         check_invariants(&tree);
     }
 
@@ -551,42 +502,7 @@ pub(crate) mod tests {
         assert!(tree.remove(id(2)));
         assert_eq!(rect_of(&tree, 1), Rect::new(0, 0, 400, 600));
         assert_eq!(rect_of(&tree, 3), Rect::new(400, 0, 400, 600));
-        assert_eq!(
-            tree.focused(),
-            Some(id(3)),
-            "focus was not on the closed window"
-        );
         check_invariants(&tree);
-    }
-
-    #[test]
-    fn closing_unfocused_window_keeps_focus() {
-        let mut tree = tree_with(3);
-        tree.focus(id(1));
-        assert!(tree.remove(id(3)));
-        assert_eq!(tree.focused(), Some(id(1)));
-        check_invariants(&tree);
-    }
-
-    #[test]
-    fn closing_the_last_window_empties_the_tree() {
-        let mut tree = tree_with(1);
-        assert!(tree.remove(id(1)));
-        assert!(tree.is_empty());
-        assert_eq!(tree.focused(), None);
-        assert!(tree.rects().is_empty());
-        check_invariants(&tree);
-        tree.insert(id(2));
-        assert_eq!(tree.rects(), vec![(id(2), AREA)]);
-    }
-
-    #[test]
-    fn removing_unknown_window_changes_nothing() {
-        let mut tree = tree_with(2);
-        let before = tree.rects();
-        assert!(!tree.remove(id(99)));
-        assert_eq!(tree.rects(), before);
-        assert!(!BspTree::new(AREA).remove(id(1)));
     }
 
     #[test]
@@ -596,55 +512,11 @@ pub(crate) mod tests {
         assert!(tree.swap(id(1), id(3)));
         assert_eq!(rect_of(&tree, 3), Rect::new(0, 0, 400, 600));
         assert_eq!(rect_of(&tree, 1), Rect::new(400, 300, 400, 300));
-        assert_eq!(tree.focused(), Some(id(3)), "swap does not change focus");
-        // Same shape: swapping back restores the identical tree.
         assert!(tree.swap(id(1), id(3)));
         assert_eq!(tree.root, before);
         assert!(!tree.swap(id(1), id(1)));
         assert!(!tree.swap(id(1), id(99)));
         check_invariants(&tree);
-    }
-
-    #[test]
-    fn focus_moves_by_direction_without_wrapping() {
-        let tree = tree_with(3); // 1 | (2 / 3)
-        assert_eq!(tree.neighbour(id(3), Direction::Up), Some(id(2)));
-        assert_eq!(tree.neighbour(id(2), Direction::Down), Some(id(3)));
-        assert_eq!(tree.neighbour(id(3), Direction::Left), Some(id(1)));
-        assert_eq!(
-            tree.neighbour(id(3), Direction::Right),
-            None,
-            "no wrap-around"
-        );
-        assert_eq!(tree.neighbour(id(1), Direction::Left), None);
-        assert_eq!(tree.neighbour(id(2), Direction::Up), None);
-    }
-
-    #[test]
-    fn focus_move_tie_goes_to_most_recently_focused_then_topmost() {
-        let mut tree = tree_with(3); // 1 | (2 / 3): 2 and 3 both touch 1's right edge
-        tree.focus(id(1));
-        // 3 was focused more recently than 2.
-        assert_eq!(tree.neighbour(id(1), Direction::Right), Some(id(3)));
-        tree.focus(id(2));
-        tree.focus(id(1));
-        assert_eq!(tree.neighbour(id(1), Direction::Right), Some(id(2)));
-        // Without any focus history, position decides: topmost.
-        tree.focus_order.clear();
-        assert_eq!(tree.neighbour(id(1), Direction::Right), Some(id(2)));
-    }
-
-    #[test]
-    fn neighbour_must_share_part_of_the_span() {
-        // 1 | (2 / (3 | 4)): 4 is right of 3; nothing is right of 4.
-        let mut tree = tree_with(3);
-        tree.insert(id(4)); // splits 3 (400x300) side by side
-        assert_eq!(rect_of(&tree, 4), Rect::new(600, 300, 200, 300));
-        assert_eq!(tree.neighbour(id(4), Direction::Up), Some(id(2)));
-        assert_eq!(tree.neighbour(id(4), Direction::Left), Some(id(3)));
-        assert_eq!(tree.neighbour(id(3), Direction::Left), Some(id(1)));
-        // 2 and 3 both touch 1's right edge; 3 was focused (inserted) after 2. 4 is farther.
-        assert_eq!(tree.neighbour(id(1), Direction::Right), Some(id(3)));
     }
 
     #[test]
@@ -660,9 +532,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn floating_leaf_takes_no_space() {
+    fn placeholder_takes_no_space_and_restores_exactly() {
         let mut tree = tree_with(3); // 1 | (2 / 3)
-        tree.set_mode(id(2), Mode::Floating);
+        let before = tree.clone();
+        assert!(tree.set_mode(id(2), Mode::Floating));
         assert_eq!(
             tree.rects(),
             vec![
@@ -670,7 +543,36 @@ pub(crate) mod tests {
                 (id(3), Rect::new(400, 0, 400, 600))
             ]
         );
+        check_invariants(&tree);
+        assert!(tree.set_mode(id(2), Mode::Tiled));
+        assert_eq!(tree, before);
+    }
+
+    #[test]
+    fn splitting_a_placeholder_uses_the_rectangle_it_would_have() {
+        // 1 | 2 with 2 floating: 1 fills the area. A window opened next to 2 splits 2's
+        // would-be rectangle (400x600, taller than wide): stacked.
+        let mut tree = tree_with(2);
+        tree.set_mode(id(2), Mode::Floating);
+        tree.insert_with_mode(id(3), Some(id(2)), Mode::Floating);
+        assert_eq!(
+            tree.rects(),
+            vec![(id(1), AREA)],
+            "placeholders move nothing"
+        );
         tree.set_mode(id(2), Mode::Tiled);
+        tree.set_mode(id(3), Mode::Tiled);
         assert_eq!(rect_of(&tree, 2), Rect::new(400, 0, 400, 300));
+        assert_eq!(rect_of(&tree, 3), Rect::new(400, 300, 400, 300));
+    }
+
+    #[test]
+    fn closing_a_placeholder_promotes_its_sibling() {
+        let mut tree = tree_with(3); // 1 | (2 / 3)
+        tree.set_mode(id(2), Mode::Floating);
+        assert!(tree.remove(id(2)));
+        assert_eq!(rect_of(&tree, 3), Rect::new(400, 0, 400, 600));
+        assert_eq!(tree.windows(), vec![id(1), id(3)]);
+        check_invariants(&tree);
     }
 }

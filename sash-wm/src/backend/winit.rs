@@ -131,6 +131,7 @@ impl Nested {
             }
             WinitEvent::Redraw => {
                 self.counters.redraws_received += 1;
+                let input_since = state.windows.input_pending_since.take();
                 let times = match self.render(state) {
                     Ok(times) => times,
                     Err(err) => {
@@ -139,10 +140,14 @@ impl Nested {
                     }
                 };
                 self.counters.frames_rendered += 1;
+                // From sash-wm handling the input (a drag motion, a keybind) to the frame
+                // showing its effect being submitted, including the wait for the host.
+                let input_to_frame_us = input_since.map(|t| t.elapsed().as_micros() as u64);
                 tracing::debug!(
                     frame_time_us = times.total_us(),
                     render_us = times.render_us,
                     submit_us = times.submit_us,
+                    input_to_frame_us,
                     counters = ?self.counters,
                     "frame"
                 );
@@ -165,7 +170,7 @@ impl Nested {
         let age = self.backend.buffer_age().unwrap_or(0);
         let damage = {
             let (renderer, mut framebuffer) = self.backend.bind()?;
-            let elements = render::tile_elements(state, renderer, 1.0);
+            let elements = render::output_elements(state, renderer, 1.0);
             let result = self.damage.render_output(
                 renderer,
                 &mut framebuffer,
