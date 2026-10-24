@@ -24,8 +24,6 @@ use smithay::{
 
 use crate::{keybinds::Modifier, output, render, server::Server, state::Sash};
 
-const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
-
 /// Keybind modifier when nested: the host compositor usually captures Super.
 pub const MODIFIER: Modifier = Modifier::Alt;
 
@@ -42,6 +40,9 @@ struct Nested {
     output: Output,
     damage: OutputDamageTracker,
     counters: Counters,
+    /// Number of offscreen captures written (debug builds).
+    #[cfg(debug_assertions)]
+    captures: u32,
 }
 
 /// The GL framebuffer of the winit window is upside down relative to the output.
@@ -99,6 +100,8 @@ pub fn start(
         damage: damage_tracker(size),
         backend,
         counters: Counters::default(),
+        #[cfg(debug_assertions)]
+        captures: 0,
     }));
 
     let handle = event_loop.handle();
@@ -108,6 +111,16 @@ pub fn start(
             for_redraws.borrow().backend.window().request_redraw();
         })
         .map_err(|err| err.error)?;
+    #[cfg(debug_assertions)]
+    {
+        use calloop::signals::{Signal, Signals};
+        let for_capture = nested.clone();
+        handle
+            .insert_source(Signals::new(&[Signal::SIGUSR1])?, move |_, _, server| {
+                for_capture.borrow_mut().capture(&server.state);
+            })
+            .map_err(|err| err.error)?;
+    }
     handle
         .insert_source(host_events, move |event, _, server| {
             nested.borrow_mut().handle(event, &mut server.state);
@@ -118,6 +131,32 @@ pub fn start(
 }
 
 impl Nested {
+    /// Writes the current output to $SASH_CAPTURE_DIR/sash-wm-capture-<n>.png.
+    #[cfg(debug_assertions)]
+    fn capture(&mut self, state: &Sash) {
+        use crate::capture::{CAPTURE_DIR_VAR, write_png};
+        use smithay::backend::renderer::gles::GlesTexture;
+        let Some(dir) = std::env::var_os(CAPTURE_DIR_VAR) else {
+            tracing::warn!("SIGUSR1: set {CAPTURE_DIR_VAR} to capture the output");
+            return;
+        };
+        self.captures += 1;
+        let path =
+            std::path::Path::new(&dir).join(format!("sash-wm-capture-{}.png", self.captures));
+        let size = self.backend.window_size();
+        let start = std::time::Instant::now();
+        match write_png::<_, GlesTexture>(self.backend.renderer(), state, size, &path) {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                w = size.w,
+                h = size.h,
+                ms = start.elapsed().as_millis() as u64,
+                "captured output"
+            ),
+            Err(err) => tracing::error!(%err, "capture failed"),
+        }
+    }
+
     fn handle(&mut self, event: WinitEvent, state: &mut Sash) {
         tracing::trace!(?event, "winit event");
         match event {
@@ -176,7 +215,7 @@ impl Nested {
                 &mut framebuffer,
                 age,
                 &elements,
-                CLEAR_COLOR,
+                render::CLEAR_COLOR,
             )?;
             result.damage.cloned()
         };

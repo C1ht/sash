@@ -27,6 +27,17 @@ RUST_LOG=sash_wm=debug cargo run -p sash-wm
 sash-wm logs the name of its own Wayland socket. Start clients against it
 with `WAYLAND_DISPLAY=<socket> <client>`.
 
+## Screenshots (debug builds)
+
+```sh
+SASH_CAPTURE_DIR=/tmp/shots cargo run -p sash-wm &
+kill -USR1 <sash-wm pid>     # writes /tmp/shots/sash-wm-capture-1.png
+```
+
+sash-wm renders its current output once more into an offscreen buffer and
+writes it as a PNG; the host screen is never read. Release builds have no
+SIGUSR1 handler (the signal's default action ends the process).
+
 ## Debian 13 (trixie) packages
 
 - Build: `build-essential pkg-config libxkbcommon-dev`

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod backend;
+#[cfg(debug_assertions)]
+mod capture;
 mod clients;
 mod data_device;
 mod grab;

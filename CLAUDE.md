@@ -322,10 +322,12 @@ change this file without the owner's approval.
 
 ## Screenshots and measurements
 
-- Screenshots capture only the nested sash-wm window, through the guard
-  (nested window on the active workspace, no fullscreen window there),
-  and every image is looked at before it is used. Never capture the
-  whole host screen.
+- Screenshots come only from sash-wm's own offscreen capture (debug
+  builds): `SASH_CAPTURE_DIR=<dir>` in the environment, then
+  `kill -USR1 <pid>` writes `<dir>/sash-wm-capture-<n>.png`. It re-renders
+  the current output offscreen and never reads the host screen (works
+  while the nested window is hidden). Every image is looked at before it
+  is used. Never capture the host screen.
 - Busy-client runs report a frame-interval histogram, not only render
   time.
 

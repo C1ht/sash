@@ -8,6 +8,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Debug-only offscreen capture (SIGUSR1): signal source and PNG encoder.
+calloop = { version = "0.14", features = ["signals"] }
+png = "0.18"
 smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "desktop", "wayland_frontend"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

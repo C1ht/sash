@@ -16,6 +16,9 @@ use smithay::{
 
 use crate::{layout::Mode, state::Sash};
 
+/// Background where no window is.
+pub const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
+
 render_elements! {
     pub OutputElement<R> where R: ImportAll;
     Tiled=CropRenderElement<WaylandSurfaceRenderElement<R>>,
