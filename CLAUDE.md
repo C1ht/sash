@@ -231,8 +231,18 @@ change this file without the owner's approval.
   unix socket in $XDG_RUNTIME_DIR, mode 0600, feeding the same input
   handlers as the backend) exist in debug builds only and are never
   compiled into release builds; a check enforces this.
-- In release builds SIGUSR1 is ignored (SIG_IGN), not the default
-  action.
+- In release builds SIGUSR1 is ignored (SIG_IGN, via nix as a direct
+  dependency), not the default action.
+- The release check is tools/check-release.sh; GitHub Actions runs it
+  with build, clippy, fmt, test and cargo deny.
+- Owner decisions (M6):
+  - Tiled keyboard resize has the floating meaning: L wider, H narrower,
+    J taller, K shorter, by moving the window's right (L/H) or bottom
+    (J/K) edge's split; nothing if that edge is on the output boundary.
+  - Configures from pointer drags (floating and tiled) are batched once
+    per presented frame, with a 16 ms timer fallback while the output
+    is not presenting. Keybind actions stay immediate.
+  - Mouse bindings are rows of the same keybind table and doc.
 
 ## Keybinds
 
