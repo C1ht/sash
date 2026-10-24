@@ -83,6 +83,59 @@ change this file without the owner's approval.
     is inserted as a new window when it maps again.
   - Dialogs and transients tile like any window until M4.
 
+## Floating (M4)
+
+- Per window: tiled or floating, plus a separate forced-floating flag.
+  Still one `Layout` trait and exactly two modes.
+- Forced floating: xdg_toplevels with a parent (dialogs), and windows
+  whose min and max size are equal and non-zero. Re-checked on every
+  commit; when the reason goes away, the window follows its own
+  tiled/floating state again. Centered over the parent (or on the
+  output if none), whatever the default mode. mod+F does nothing on a
+  forced-floating window; tile-all never touches it.
+- The per-monitor default mode (tiled at startup) decides how new
+  windows start. No other setting: every step size and timeout is a
+  constant. Until the settings protocol exists, mod+Ctrl+D toggles the
+  default in debug builds only.
+- Bulk actions per monitor: float-all starts each window at its current
+  tiled rectangle; tile-all restores the tree.
+- Lossless toggling: the BSP tree and each window's last floating
+  rectangle are kept ("identical tree" definition in docs/plan.md). The
+  first time a tiled window floats it keeps its current tile rectangle.
+- New floating window: the client chooses its size (configure 0x0),
+  clamped to min/max and the output. The first is centered on the
+  output; the next ones cascade by 32 px and wrap back to the center
+  when they would leave the output.
+- Floating windows draw above tiled ones, are not clipped to tiles, and
+  keep at least min(64, size) px visible on the output on each axis
+  when moved. An output resize clamps them back.
+- Z-order: one list per monitor of floating windows. Focusing or
+  clicking a window raises it. Pointer hit-testing uses the topmost.
+- Click-to-focus for all windows: a plain click focuses, raises and is
+  delivered to the client; mod+click starts a move/resize and is never
+  delivered.
+- Close: closing a tiled window keeps the M3 focus rule; closing a
+  floating window focuses the most recently focused window.
+- Directional focus (mod+H/J/K/L) considers every window by geometry: a
+  candidate's center lies past the focused window's center in that
+  direction and the perpendicular spans overlap; nearest by edge gap
+  (overlap counts as 0), ties by most recent focus, then position.
+- Mouse: mod+left-drag moves. On a tiled window the press floats it at
+  its tile rectangle (owner decision: on press, not on first motion).
+  mod+right-drag resizes a floating window; the edge or corner comes
+  from the pointer's cell in a 3x3 grid over the window, the center cell
+  uses the bottom-right corner. Min/max sizes are respected.
+- Client xdg_toplevel.move is handled; on a tiled window it floats the
+  window first. xdg_toplevel.resize is handled for floating windows and
+  ignored for tiled ones. show_window_menu is ignored.
+- Keyboard move/resize on a tiled window floats it first.
+- mod+Tab / mod+Shift+Tab: hold-to-cycle. While mod is held, each press
+  steps through a frozen most-recently-used snapshot, focusing and
+  raising as it goes; releasing mod commits the choice.
+- Known limits: client fullscreen and maximize requests are not handled
+  (M5 snapping covers them); border hit zones for resizing come with
+  decorations.
+
 ## Keybinds
 
 - Until M6 there is one minimal hardcoded keybind table; M6 replaces it
@@ -91,6 +144,13 @@ change this file without the owner's approval.
   Super), Super on DRM.
 - Keys that trigger a keybind are not forwarded to clients.
 - mod+Return (spawn foot) exists in debug builds only.
+- Every mouse action has a keybind. Until M6 the table is:
+  mod+Return foot (debug), mod+Q close, mod+H/J/K/L focus,
+  mod+Shift+H/J/K/L swap, mod+Shift+E quit, mod+F toggle floating,
+  mod+Shift+F float all, mod+Shift+T tile all, mod+Ctrl+H/J/K/L move
+  40 px, mod+Ctrl+Shift+H/J/K/L resize 40 px (L wider, H narrower,
+  J taller, K shorter, top-left fixed), mod+Tab / mod+Shift+Tab cycle,
+  mod+Ctrl+D toggle default mode (debug).
 
 ## Protocol support and known limits
 
@@ -188,9 +248,22 @@ change this file without the owner's approval.
   libwayland 1.23, xkbcommon 1.7, libinput 1.28. Compatibility is proven by
   building in a `debian:trixie` container with the same pinned toolchain;
   report any library-version problem found there.
+- Release binary glibc floor: currently GLIBC_2.39 (`pidfd_spawnp`,
+  `pidfd_getpid` from Rust std process spawning); trixie ships 2.41. Do
+  not raise it silently: check `objdump -T` on the release binary every
+  milestone and report any change.
 - Dependency licenses are checked with `cargo deny check` (`deny.toml`).
   A dependency outside the allowed list is reported to the owner, never
   allowed on my own.
+
+## Screenshots and measurements
+
+- Screenshots capture only the nested sash-wm window, through the guard
+  (nested window on the active workspace, no fullscreen window there),
+  and every image is looked at before it is used. Never capture the
+  whole host screen.
+- Busy-client runs report a frame-interval histogram, not only render
+  time.
 
 ## Milestone routine
 

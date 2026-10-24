@@ -75,7 +75,7 @@ sash/
   - An automated test with a small wayland-client test client that connects, maps an xdg_toplevel, and checks for keyboard and pointer focus events. Running foot by hand is extra.
   - An automated hidden-window test: hide the host window, check that a `wl_display.sync` roundtrip is still served, unhide, and check that exactly one frame follows.
   - Frame-callback policy (CLAUDE.md): no frame callbacks to clients while the output is not presenting; requests are still served.
-- **M3 BSP tiling.** Done, pending approval. Design rules are in CLAUDE.md ("BSP tiling (M3)", "Keybinds"). Summary: one `Layout` trait. The BSP tree is a plain data structure that is independent of window mode, so M4 reuses it unchanged:
+- **M3 BSP tiling.** Done (tag `m3`). Design rules are in CLAUDE.md ("BSP tiling (M3)", "Keybinds"). Summary: one `Layout` trait. The BSP tree is a plain data structure that is independent of window mode, so M4 reuses it unchanged:
   - The tree holds every window on the monitor. Each window has a mode flag (tiled or floating).
   - Geometry is computed only over tiled leaves.
   - Focus moves and swaps use a minimal hardcoded keybind set.
@@ -97,9 +97,13 @@ sash/
   - Implementation notes:
     - A toplevel enters the tree on its initial commit, so its initial configure already carries the tile size. It is drawn from its first buffer. It leaves the tree on unmap or destroy.
     - Tiles on outputs too small to give every window a pixel can be 0 wide or high. They are configured as 1 (0 would mean "client chooses") and are not reachable by focus moves.
-  - Proposed for later (not implemented): resize transactions. Keep showing the old arrangement until every affected client has committed a buffer for its new configure, or a timeout (about 150 ms) passes; then switch in one frame. Clients that miss the timeout fall back to the clip rule. This removes the frame where windows show stale or partly empty content at their new tiles, at the cost of up to one timeout of latency.
+  - Resize transactions (owner decision: not now; revisit after M4 with the floating checklist; the ~150 ms timeout would be a constant, never a setting): Keep showing the old arrangement until every affected client has committed a buffer for its new configure, or a timeout (about 150 ms) passes; then switch in one frame. Clients that miss the timeout fall back to the clip rule. This removes the frame where windows show stale or partly empty content at their new tiles, at the cost of up to one timeout of latency.
   - Screenshots of three tiled foot windows, before and after a swap. Startup, frame time with 3 clients, layout time after a keybind, idle RAM and CPU.
-- **M4 Floating.**
+- **M4 Floating.** Rules are in CLAUDE.md ("Floating (M4)", "Keybinds"). Summary:
+  - Forced floating (dialogs, min == max), re-checked per commit; per-monitor default mode (tiled at start, debug toggle); float-all / tile-all; lossless toggling; placement (client size, center, cascade 32 px, wrap); floating above tiled, unclipped, 64 px visible per axis; z-order and click-to-focus; mod+drag move (floats tiled windows on press) and 3x3-grid resize; client move/resize requests; 40 px keyboard move/resize; hold-to-cycle mod+Tab.
+  - Measurements: frame time and a frame-interval histogram during a drag and a resize, pointer-event-to-frame latency, time of toggle / float-all / tile-all, idle RAM and CPU with 3 windows. Real pointer drags need uinput/ydotool privileges, so they are measured only where no extra privilege is needed.
+  - Deliverable: docs/floating-checklist.md, a manual checklist for how floating feels.
+  Original M4 notes:
   - **Modes and placement:**
     - Per-window tiled/floating state, behind the same `Layout` trait.
     - The existing per-monitor default mode decides how new windows start.
@@ -136,6 +140,10 @@ sash/
   - Proof: unit tests for snapping geometry, and frame time during a drag with snapping active.
 - **M6 Input.** Full built-in default keybind table, merging the M3/M4 minimal set and the M5 snap-zone keybinds. Click and keyboard focus, xkb keymap, pointer and keyboard grabs. Every mouse action has a keybind. Proof: tests plus a written checklist run.
 - **M7 DRM/KMS (later).** udev + libinput + libseat + GBM/EGL on a TTY. Starts with its own investigate-then-STOP pass.
+
+Proposals (no work until approved):
+- **Tiled resize by split ratio.** mod+right-drag on a tiled window and mod+Ctrl+Shift+H/J/K/L on a tiled window change the ratio of the nearest split on that side (40 px steps, constant); each split keeps its own ratio, still integer geometry. Fits best as a small milestone right after M5: it reuses M4's grabs and keyboard resize, and M6 then puts its keybinds into the full default table.
+- **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
 
 Roadmap (no work now), in the proposed order:
 1. **xdg popups.** Needed before any sash-ui app (menus, dropdowns) and by most existing apps.
