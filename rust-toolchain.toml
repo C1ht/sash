@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Exact pin. Update deliberately; see README.md "Updating the toolchain".
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
