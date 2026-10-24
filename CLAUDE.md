@@ -25,6 +25,17 @@ change this file without the owner's approval.
 - Exactly two window modes: **BSP tiling** and **floating**.
 - Both sit behind one layout trait.
 - Never add a third mode (no stacking/tabbed/monocle/scrolling, etc.).
+- Window state is tiled or floating, per window. Still exactly two
+  modes, one Layout trait.
+- The per-monitor default mode (tiled or floating) decides how new
+  windows start. It is the existing "per-monitor default mode" setting,
+  not a new one. Do not add other settings.
+- Bulk actions per monitor: float all, tile all. Each has a keybind.
+- Toggling is lossless: the BSP tree is kept while windows float, and
+  each window remembers its last floating rectangle. Float-all starts
+  from the current tiled rectangles; tile-all restores the tree.
+- Dialogs, transients (xdg parent), splash and fixed-size windows float
+  and center over their parent regardless of the default mode.
 
 ## Settings and configuration
 
