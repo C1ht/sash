@@ -183,7 +183,7 @@ change this file without the owner's approval.
   - The top zone is a maximized snap: a whole-output rectangle with the
     xdg maximized state, normal stacking, not ended by focus changes.
     Client set_maximized is the same. Only set_fullscreen gives the
-    fullscreen state.
+    fullscreen state. (Confirmed by the owner after M5.)
   - Maximize (client or mod+Up) on a tiled window keeps its leaf and
     tile; unmaximize returns it there. It never floats by maximizing.
   - mod+Left/Right on a tiled window floats it, then snaps. From a
@@ -208,6 +208,32 @@ change this file without the owner's approval.
   - Dragging a snapped window restores its pre-snap size on the first
     pointer motion, not on press.
 
+## Tiled resize (M6)
+
+- Resizing a tiled window changes the ratio of the split on the side
+  being resized. Keys: the floating resize keys (mod+Ctrl+Shift+H/J/K/L,
+  40 px per step) also resize tiled windows by moving the nearest split
+  in that direction. Mouse: mod+right-drag on a tiled window uses the 3x3
+  grid: an edge cell moves that edge's split, a corner moves both, the
+  center moves the bottom-right.
+- Ratios are exact fractions or fixed-point, never drifting floats.
+  Rectangles keep the exact-coverage rule. A tile is never smaller than
+  64 px on an axis (constant); if the output is too small for that, the
+  tiny-output rule applies.
+- Edges on the output boundary do nothing. Lossless toggling keeps
+  ratios.
+- Resize applies live while dragging; configures are batched per frame
+  (at most one per window per frame).
+
+## Debug-only tools
+
+- Offscreen capture (SIGUSR1, see Screenshots) and synthetic input (a
+  unix socket in $XDG_RUNTIME_DIR, mode 0600, feeding the same input
+  handlers as the backend) exist in debug builds only and are never
+  compiled into release builds; a check enforces this.
+- In release builds SIGUSR1 is ignored (SIG_IGN), not the default
+  action.
+
 ## Keybinds
 
 - Until M6 there is one minimal hardcoded keybind table; M6 replaces it
@@ -216,6 +242,10 @@ change this file without the owner's approval.
   Super), Super on DRM.
 - Keys that trigger a keybind are not forwarded to clients.
 - mod+Return (spawn foot) exists in debug builds only.
+- From M6 there is one data table (chord, action, description, modifier
+  set) in one module; docs/keybinds.md is generated from it and a test
+  fails if it is out of date or if two chords collide. No action is added
+  without asking.
 - Every mouse action has a keybind. Until M6 the table is:
   mod+Return foot (debug), mod+Q close, mod+H/J/K/L focus,
   mod+Shift+H/J/K/L swap, mod+Shift+E quit, mod+F toggle floating,

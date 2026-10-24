@@ -162,24 +162,39 @@ sash/
   - Every snap zone has a keybind.
   - Windows also snap to neighbouring windows.
   - Proof: unit tests for snapping geometry, and frame time during a drag with snapping active.
-- **M6 Input.** Full built-in default keybind table, merging the M3/M4 minimal set and the M5 snap-zone keybinds. Click and keyboard focus, xkb keymap, pointer and keyboard grabs. Every mouse action has a keybind. Proof: tests plus a written checklist run.
-- **M7 DRM/KMS (later).** udev + libinput + libseat + GBM/EGL on a TTY. Starts with its own investigate-then-STOP pass.
+- **M6 Tiled resize and the full keybind table.** Rules are in CLAUDE.md ("Tiled resize (M6)", "Debug-only tools", "Keybinds").
+  - Step 0, a separate commit first: debug-only synthetic input (unix socket, mode 0600, same handlers as the backend), never in release builds; used for scripted drag, resize and snap runs so frame times during real drags are measured. Release builds ignore SIGUSR1.
+  - Tiled resize: split ratios as exact fractions; keys and mod+right-drag move the split on the resized side; 64 px minimum tile; output-boundary edges do nothing; lossless toggling keeps ratios; live resize with configures batched per frame.
+  - "Identical tree" now also compares split ratios (exactly, as fractions).
+  - Full keybind table as data, docs/keybinds.md generated and checked by a test, duplicate-chord test.
+  - Tests: ratio math, property tests with tiled resizes (coverage, 64 px minimum), integration (keyboard and scripted mouse resize, output-boundary drag, lossless toggle and output resize keep ratios), edge cases (close during resize, hidden output during resize).
+  - Measure: frame time and interval histograms during a scripted floating drag, a snap drag with the overlay and a tiled resize; ratio update and rectangle recompute time; idle with 3 windows.
+- **M7 xdg popups.**
+- **M8 linux-dmabuf and cursor-shape.** Remeasure stale content during resizes with a heavier client (browser/Electron) once dmabuf exists, before deciding on resize transactions.
+- **M9 DRM/KMS with presentation-time.** udev + libinput + libseat + GBM/EGL on a TTY, wp_presentation for on-screen frame timing. Starts with its own investigate-then-STOP pass.
 
 Proposals (no work until approved):
 - **Tiled resize by split ratio.** mod+right-drag on a tiled window and mod+Ctrl+Shift+H/J/K/L on a tiled window change the ratio of the nearest split on that side (40 px steps, constant); each split keeps its own ratio, still integer geometry. Fits best as a small milestone right after M5: it reuses M4's grabs and keyboard resize, and M6 then puts its keybinds into the full default table.
 - **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
 
-Roadmap (no work now), in the proposed order:
-1. **xdg popups.** Needed before any sash-ui app (menus, dropdowns) and by most existing apps.
-2. **linux-dmabuf.** Before the DRM backend: GPU clients need it (kitty falls back to software GL today), and it is the buffer path the DRM backend scans out. Once it exists, remeasure stale content during resizes with a heavier client (browser/Electron) before deciding on resize transactions.
-3. **cursor-shape.** Before the DRM backend: on DRM, sash-wm draws the cursor itself (nested, the host draws it).
-4. **presentation-time (wp_presentation).** With the DRM backend, so on-screen frame timing can be measured (the nested backend cannot see the host's presentation; owner decision after M4: no pacing work nested).
-5. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
-6. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
-7. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
-8. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
-9. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
-Out of scope until asked: native settings protocol, decorations/effects, sash-ui.
+Roadmap after M9 (no work now), in order:
+1. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
+2. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
+3. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
+4. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
+5. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
+
+### Proposal: input settings on real hardware (owner decides; nothing implemented)
+
+On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.
+
+- **Option A: add an "input" group to the closed settings list.** Five entries: keyboard layout (a picker of xkb layouts and variants), key repeat (delay and rate as pickers or sliders), pointer speed (slider), natural scrolling (on/off), tap-to-click (on/off). Edited by the Settings app through the settings protocol.
+  - For: users with non-US layouts can type at all; touchpad users get the behaviour they expect; it matches every mainstream desktop.
+  - Against: five new settings. It needs per-device rules later (a mouse and a touchpad often want different speeds), and it needs a layout list that maps xkb data to plain names.
+- **Option B: fixed defaults, no settings.** The xkb layout comes from the system (Debian's /etc/default/keyboard, via the environment or localed), repeat 600 ms / 25 Hz (today's constants), libinput's default speed, natural scrolling off, tap-to-click on.
+  - For: no new settings, nothing to build in Settings; the system-wide keyboard config already exists on Debian.
+  - Against: no way to change anything from the desktop. Anyone whose preferences differ from the defaults (very common for scrolling direction and speed) has no recourse without editing system files, which contradicts "the compositor owns all settings" in spirit.
+- **Middle ground to consider:** B now, with a fixed list of exactly which values would become settings under A, so the decision can be revisited at M9 when real devices exist.
 
 ### Verification
 Every milestone report includes: real command output (build/clippy/test), the trixie container build result,
