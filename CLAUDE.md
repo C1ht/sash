@@ -129,6 +129,10 @@ change this file without the owner's approval.
   window first. xdg_toplevel.resize is handled for floating windows and
   ignored for tiled ones. show_window_menu is ignored.
 - Keyboard move/resize on a tiled window floats it first.
+- Swap works on tiled windows only: with a floating window focused it
+  does nothing, and floating windows are never swap candidates.
+- An output resize clamps floating windows with the same 64 px rule
+  (moved just enough, size kept).
 - mod+Tab / mod+Shift+Tab: hold-to-cycle. While mod is held, each press
   steps through a frozen most-recently-used snapshot, focusing and
   raising as it goes; releasing mod commits the choice.
