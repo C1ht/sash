@@ -9,8 +9,12 @@
 //! buffer) or is destroyed.
 //!
 //! Resize synchronisation: every changed window is configured in the same batch. Tiled
-//! windows are drawn at their tile origin and clipped to the tile; floating windows are
-//! drawn unclipped at their rectangle's origin.
+//! windows are drawn at their tile origin and clipped to the tile; floating, maximized
+//! and fullscreen windows are drawn unclipped.
+//!
+//! Drags: a move follows the pointer, snaps window edges to nearby edges (not with
+//! Shift held) and, when the pointer is in a snap zone, shows a preview and snaps the
+//! window on release. Pulling a snapped window out restores its pre-snap size.
 
 use std::{process::Command, time::Instant};
 
@@ -27,8 +31,8 @@ use smithay::{
 use crate::{
     keybinds::{Action, Cycle},
     layout::{
-        Direction, Edges, Mode, MonitorLayout, NewWindow, Rect, STEP, SizeLimits, WindowId,
-        resize_rect, resize_zone,
+        Direction, Edges, Layer, Mode, MonitorLayout, NewWindow, Presentation, Rect, STEP,
+        SizeLimits, WindowId, ZoneId, resize_rect, resize_zone, snap_to_edges,
     },
     state::Sash,
 };
@@ -36,9 +40,14 @@ use crate::{
 /// What was last sent to a client in a configure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Sent {
-    size: (i32, i32),
-    tiled: bool,
+    presentation: Presentation,
     resizing: bool,
+}
+
+impl Sent {
+    fn size(&self) -> (i32, i32) {
+        self.presentation.size.unwrap_or((0, 0))
+    }
 }
 
 /// A toplevel known to the compositor.
@@ -48,33 +57,39 @@ pub struct Managed {
     /// Whether the client has committed a buffer since entering the layout.
     pub mapped: bool,
     sent: Option<Sent>,
+    /// Send a configure even if nothing changed (a client request needs an answer).
+    reply_due: bool,
     /// When a configure with a new size was sent and not yet answered by a buffer of
     /// that size (stale-content measurement).
     resize_sent_at: Option<Instant>,
 }
 
-/// Where the pointer was pressed to start a drag and where it is now.
-#[derive(Clone, Copy, Debug)]
-pub struct Pointer {
-    pub pressed_at: Point<f64, Logical>,
-    pub now: Point<f64, Logical>,
-}
-
-/// An interactive move or resize in progress.
+/// An interactive move or resize.
 #[derive(Clone, Copy, Debug)]
 pub enum DragKind {
     Move,
     Resize(Edges),
 }
 
+/// A drag in progress.
+#[derive(Clone, Copy, Debug)]
+pub struct Drag {
+    pub window: WindowId,
+    pub kind: DragKind,
+    /// The window's rectangle and the pointer position the drag is measured from
+    /// (moved when a snapped window is pulled out of its zone).
+    from: Rect,
+    pressed_at: Point<f64, Logical>,
+    /// The snap zone the pointer is in (moves only).
+    zone: Option<ZoneId>,
+}
+
 pub struct Windows {
     pub layout: MonitorLayout,
     list: Vec<Managed>,
     next_id: u64,
-    /// The window being resized interactively and the edges that move.
-    resizing: Option<(WindowId, Edges)>,
-    /// The window a pointer grab is dragging.
-    pub dragging: Option<WindowId>,
+    /// The drag in progress.
+    pub drag: Option<Drag>,
     /// Buttons whose press started a drag or was mod+click; their release is not
     /// delivered either.
     pub swallowed_buttons: Vec<u32>,
@@ -88,8 +103,7 @@ impl Windows {
             layout: MonitorLayout::new(Rect::default()),
             list: Vec::new(),
             next_id: 1,
-            resizing: None,
-            dragging: None,
+            drag: None,
             swallowed_buttons: Vec::new(),
             input_pending_since: None,
         }
@@ -112,6 +126,18 @@ impl Windows {
 
     fn by_id_mut(&mut self, id: WindowId) -> Option<&mut Managed> {
         self.list.iter_mut().find(|m| m.id == id)
+    }
+
+    /// The edges an interactive resize of `id` moves, if one is in progress.
+    fn resizing(&self, id: WindowId) -> Option<Edges> {
+        match self.drag {
+            Some(Drag {
+                window,
+                kind: DragKind::Resize(edges),
+                ..
+            }) if window == id => Some(edges),
+            _ => None,
+        }
     }
 
     /// Marks that an input changed what should be on screen.
@@ -153,10 +179,11 @@ fn size_limits(surface: &WlSurface) -> SizeLimits {
 
 /// A window drawn on the output.
 pub struct Visible<'a> {
+    pub id: WindowId,
     pub window: &'a Window,
     pub rect: Rect,
     pub position: Point<i32, Logical>,
-    pub mode: Mode,
+    pub layer: Layer,
 }
 
 impl Sash {
@@ -169,6 +196,7 @@ impl Sash {
             window,
             mapped: false,
             sent: None,
+            reply_due: false,
             resize_sent_at: None,
         });
     }
@@ -246,7 +274,7 @@ impl Sash {
             return;
         };
         if let (Some(sent), Some(at)) = (managed.sent, managed.resize_sent_at)
-            && (size.w, size.h) == sent.size
+            && (size.w, size.h) == sent.size()
         {
             managed.resize_sent_at = None;
             tracing::debug!(
@@ -261,7 +289,13 @@ impl Sash {
     /// constraints). Once it has acked our latest configure, its committed geometry
     /// becomes the rectangle; during a resize the edges that do not move stay put.
     fn adopt_client_size(&mut self, id: WindowId, window: &Window) -> bool {
-        if self.windows.layout.mode(id) != Some(Mode::Floating) {
+        let layout = &self.windows.layout;
+        // Only plain floating windows: snapped, maximized and fullscreen sizes are ours.
+        if layout.mode(id) != Some(Mode::Floating)
+            || layout.snapped_zone(id).is_some()
+            || layout.is_maximized(id)
+            || layout.fullscreen() == Some(id)
+        {
             return false;
         }
         let (Some(rect), Some(sent)) = (
@@ -272,17 +306,14 @@ impl Sash {
         };
         let toplevel = window.toplevel().expect("only toplevels are tracked");
         let acked = toplevel.current_state().size;
-        if acked != Some(Size::from(sent.size)) {
+        if acked != Some(Size::from(sent.size())) {
             return false;
         }
         let actual = window.geometry().size;
         if (actual.w, actual.h) == (rect.w, rect.h) || actual.w <= 0 || actual.h <= 0 {
             return false;
         }
-        let edges = match self.windows.resizing {
-            Some((resizing, edges)) if resizing == id => edges,
-            _ => Edges::default(),
-        };
+        let edges = self.windows.resizing(id).unwrap_or_default();
         let x = if edges.left {
             rect.right() - actual.w
         } else {
@@ -309,13 +340,15 @@ impl Sash {
     }
 
     fn leave_layout(&mut self, id: WindowId) {
-        if self.dragged_window() == Some(id)
-            && let Some(pointer) = self.seat.get_pointer()
-        {
-            pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), 0);
-        }
-        if self.windows.resizing.is_some_and(|(w, _)| w == id) {
-            self.windows.resizing = None;
+        if self.dragged_window() == Some(id) {
+            // The window is going away: no snap on the way out.
+            if let Some(drag) = &mut self.windows.drag {
+                drag.zone = None;
+            }
+            if let Some(pointer) = self.seat.get_pointer() {
+                pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), 0);
+            }
+            self.windows.drag = None;
         }
         let Some(managed) = self.windows.by_id_mut(id) else {
             return;
@@ -341,17 +374,14 @@ impl Sash {
     pub fn arrange(&mut self) {
         let ids: Vec<WindowId> = self.windows.list.iter().map(|m| m.id).collect();
         for id in ids {
-            let Some(mode) = self.windows.layout.mode(id) else {
+            // The size is None (client chooses) for floating windows without a
+            // rectangle yet; tiles on tiny outputs can be 0 wide and are sent as 1.
+            let Some(presentation) = self.windows.layout.presentation(id) else {
                 continue;
             };
-            let rect = self.windows.layout.rect_of(id);
-            let resizing = self.windows.resizing.is_some_and(|(w, _)| w == id);
             let want = Sent {
-                // A zero size means "client chooses": used for floating windows that
-                // have no rectangle yet. Tiles on tiny outputs can be 0; send 1.
-                size: rect.map_or((0, 0), |r| (r.w.max(1), r.h.max(1))),
-                tiled: mode == Mode::Tiled,
-                resizing,
+                presentation,
+                resizing: self.windows.resizing(id).is_some(),
             };
             let managed = self.windows.by_id_mut(id).expect("listed");
             let toplevel = managed
@@ -359,25 +389,36 @@ impl Sash {
                 .toplevel()
                 .expect("only toplevels are tracked")
                 .clone();
-            if managed.sent != Some(want) || !toplevel.is_initial_configure_sent() {
-                if managed.mapped && managed.sent.map(|s| s.size) != Some(want.size) {
+            let reply = std::mem::take(&mut managed.reply_due);
+            if managed.sent != Some(want) || reply || !toplevel.is_initial_configure_sent() {
+                if managed.mapped && managed.sent.map(|s| s.size()) != Some(want.size()) {
                     managed.resize_sent_at.get_or_insert_with(Instant::now);
                 }
                 managed.sent = Some(want);
                 toplevel.with_pending_state(|state| {
-                    state.size = (want.size != (0, 0)).then(|| want.size.into());
-                    for tiled in TILED {
-                        if want.tiled {
-                            state.states.set(tiled);
-                        } else {
-                            state.states.unset(tiled);
-                        }
+                    state.size = presentation.size.map(Into::into);
+                    let tiled = presentation.tiled;
+                    for (on, tiled_state) in [tiled.left, tiled.right, tiled.top, tiled.bottom]
+                        .into_iter()
+                        .zip(TILED)
+                    {
+                        set_state(&mut state.states, tiled_state, on);
                     }
-                    if want.resizing {
-                        state.states.set(xdg_toplevel::State::Resizing);
-                    } else {
-                        state.states.unset(xdg_toplevel::State::Resizing);
-                    }
+                    set_state(
+                        &mut state.states,
+                        xdg_toplevel::State::Maximized,
+                        presentation.maximized,
+                    );
+                    set_state(
+                        &mut state.states,
+                        xdg_toplevel::State::Fullscreen,
+                        presentation.fullscreen,
+                    );
+                    set_state(
+                        &mut state.states,
+                        xdg_toplevel::State::Resizing,
+                        want.resizing,
+                    );
                 });
                 if toplevel.is_initial_configure_sent() {
                     toplevel.send_pending_configure();
@@ -387,6 +428,8 @@ impl Sash {
             }
             self.position(id);
         }
+        let backdrop = self.windows.layout.fullscreen_backdrop();
+        self.overlay.set_backdrop(backdrop);
         self.sync_keyboard_focus();
         self.request_redraw();
     }
@@ -397,7 +440,7 @@ impl Sash {
         let Some(managed) = self.windows.by_id(id).filter(|m| m.mapped) else {
             return;
         };
-        if let Some(rect) = self.windows.layout.rect_of(id) {
+        if let Some(rect) = self.windows.layout.shown_rect(id) {
             let window = managed.window.clone();
             self.space
                 .map_element(window.clone(), buffer_position(&window, rect), false);
@@ -421,11 +464,11 @@ impl Sash {
         }
     }
 
-    /// Focuses and raises a window (click or keyboard).
+    /// Focuses and raises a window (click or keyboard). Focusing another window ends
+    /// fullscreen, which needs configures.
     pub fn focus_window(&mut self, id: WindowId) {
         if self.windows.layout.focus(id) {
-            self.sync_keyboard_focus();
-            self.request_redraw();
+            self.arrange();
         }
     }
 
@@ -444,7 +487,7 @@ impl Sash {
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         let id = self.window_at(location)?;
         let managed = self.windows.by_id(id)?;
-        let rect = self.windows.layout.rect_of(id)?;
+        let rect = self.windows.layout.shown_rect(id)?;
         let window_pos = buffer_position(&managed.window, rect).to_f64();
         let (surface, pos_in_window) = managed
             .window
@@ -452,73 +495,165 @@ impl Sash {
         Some((surface, window_pos + pos_in_window.to_f64()))
     }
 
-    /// Mapped windows in drawing order, bottom first: tiled, then floating by stacking.
+    /// Mapped windows in drawing order, bottom first (see `MonitorLayout::stacking`).
     pub fn visible_windows(&self) -> Vec<Visible<'_>> {
-        let layout = &self.windows.layout;
-        layout
-            .tiled_rects()
+        self.windows
+            .layout
+            .stacking()
             .into_iter()
-            .chain(layout.floating_rects())
-            .filter_map(|(id, rect)| {
+            .filter_map(|(id, rect, layer)| {
                 let managed = self.windows.by_id(id).filter(|m| m.mapped)?;
                 Some(Visible {
+                    id,
                     window: &managed.window,
                     rect,
                     position: buffer_position(&managed.window, rect),
-                    mode: layout.mode(id)?,
+                    layer,
                 })
             })
             .collect()
     }
 
-    /// Starts moving or resizing `id` (mod+drag, or a client request). Moving a tiled
-    /// window floats it where it is; resizing only applies to floating windows.
-    /// Returns the rectangle the drag starts from.
-    pub fn begin_drag(&mut self, id: WindowId, kind: DragKind) -> Option<Rect> {
+    /// Starts moving or resizing `id` with the pointer pressed at `pressed_at` (mod+drag
+    /// or a client request). Moving a tiled window floats it where it is; resizing only
+    /// applies to floating windows. Returns false if the drag does not apply.
+    pub fn begin_drag(
+        &mut self,
+        id: WindowId,
+        kind: DragKind,
+        pressed_at: Point<f64, Logical>,
+    ) -> bool {
         match kind {
             DragKind::Move => {
                 self.windows.layout.float_in_place(id);
             }
-            DragKind::Resize(edges) => {
+            DragKind::Resize(_) => {
                 if self.windows.layout.mode(id) != Some(Mode::Floating) {
-                    return None;
+                    return false;
                 }
-                self.windows.resizing = Some((id, edges));
             }
         }
         self.windows.layout.focus(id);
-        let rect = self.windows.layout.rect_of(id);
+        let Some(from) = self.windows.layout.rect_of(id) else {
+            return false;
+        };
+        self.windows.drag = Some(Drag {
+            window: id,
+            kind,
+            from,
+            pressed_at,
+            zone: None,
+        });
         self.arrange();
-        rect
+        true
     }
 
-    /// Applies a drag: `start` was the window's rectangle when the pointer was pressed,
-    /// and the window follows the pointer's offset since then. Returns false if the
-    /// window is gone (the drag must end).
-    pub fn drag_to(&mut self, id: WindowId, kind: DragKind, start: Rect, pointer: Pointer) -> bool {
-        if !self.windows.layout.contains(id) {
+    /// The pointer moved to `now` during a drag. Returns false if the dragged window is
+    /// gone (the drag must end). `free` (Shift held) disables edge snapping.
+    pub fn drag_motion(&mut self, now: Point<f64, Logical>, free: bool) -> bool {
+        let Windows { layout, drag, .. } = &mut self.windows;
+        let Some(drag) = drag.as_mut() else {
+            return false;
+        };
+        let id = drag.window;
+        if !layout.contains(id) {
             return false;
         }
-        let dx = (pointer.now.x - pointer.pressed_at.x).round() as i32;
-        let dy = (pointer.now.y - pointer.pressed_at.y).round() as i32;
-        let rect = match kind {
-            DragKind::Move => Rect::new(start.x + dx, start.y + dy, start.w, start.h),
+        let (px, py) = (now.x.floor() as i32, now.y.floor() as i32);
+        let grabbed = (
+            drag.pressed_at.x.floor() as i32,
+            drag.pressed_at.y.floor() as i32,
+        );
+        // Pulling a snapped window out of its zone: pre-snap size, with the grab point
+        // under the pointer.
+        if matches!(drag.kind, DragKind::Move)
+            && now != drag.pressed_at
+            && let Some(rect) = layout.unsnap_for_drag(id, grabbed, (px, py))
+        {
+            drag.from = rect;
+            drag.pressed_at = now;
+        }
+        let dx = (now.x - drag.pressed_at.x).round() as i32;
+        let dy = (now.y - drag.pressed_at.y).round() as i32;
+        let from = drag.from;
+        let area = layout.area();
+        let others: Vec<Rect> = layout
+            .stacking()
+            .into_iter()
+            .filter(|(w, _, l)| *w != id && *l != Layer::Fullscreen)
+            .map(|(_, r, _)| r)
+            .collect();
+        let rect = match drag.kind {
+            DragKind::Move => {
+                let moved = Rect::new(from.x + dx, from.y + dy, from.w, from.h);
+                let fixed = layout.limits(id).is_fixed();
+                drag.zone = (!fixed)
+                    .then(|| layout.zones().at(area, px, py).map(|z| z.id))
+                    .flatten();
+                if free {
+                    moved
+                } else {
+                    snap_to_edges(moved, Edges::ALL, area, &others)
+                }
+            }
             DragKind::Resize(edges) => {
-                resize_rect(start, edges, dx, dy, self.windows.layout.limits(id))
+                let resized = resize_rect(from, edges, dx, dy, layout.limits(id));
+                if free {
+                    resized
+                } else {
+                    snap_to_edges(resized, edges, area, &others)
+                }
             }
         };
-        self.windows.layout.set_floating_rect(id, rect);
+        layout.set_floating_rect(id, rect);
+        let preview = drag.zone.and_then(|z| layout.zone_rect(z));
+        self.overlay.set_preview(preview);
         self.windows.note_input(Instant::now());
         self.arrange();
         true
     }
 
-    /// A drag ended.
-    pub fn end_drag(&mut self, id: WindowId) {
-        if self.windows.resizing.is_some_and(|(w, _)| w == id) {
-            self.windows.resizing = None;
-            self.arrange();
+    /// A drag ended: a move released in a zone snaps the window there.
+    pub fn end_drag(&mut self) {
+        let Some(drag) = self.windows.drag.take() else {
+            return;
+        };
+        if let (DragKind::Move, Some(zone)) = (drag.kind, drag.zone) {
+            self.windows.layout.snap(drag.window, zone);
         }
+        self.overlay.set_preview(None);
+        self.arrange();
+    }
+
+    /// The preview rectangle of the zone the current drag targets (benchmarks).
+    #[cfg(test)]
+    pub fn overlay_preview_for_bench(&self) -> Option<Rect> {
+        self.windows
+            .drag
+            .and_then(|d| d.zone)
+            .and_then(|z| self.windows.layout.zone_rect(z))
+    }
+
+    /// The window being dragged, if any.
+    pub fn dragged_window(&self) -> Option<WindowId> {
+        self.windows.drag.map(|d| d.window)
+    }
+
+    /// A client's set/unset_maximized or set/unset_fullscreen. The client always gets a
+    /// configure in reply, even if the request is refused.
+    pub fn client_state_request(&mut self, surface: &WlSurface, request: StateRequest) {
+        let Some(id) = self.windows.by_surface(surface).map(|m| m.id) else {
+            return;
+        };
+        let layout = &mut self.windows.layout;
+        match request {
+            StateRequest::Maximize(on) => layout.set_maximized(id, on),
+            StateRequest::Fullscreen(on) => layout.set_fullscreen(id, on),
+        };
+        if let Some(managed) = self.windows.by_id_mut(id) {
+            managed.reply_due = true;
+        }
+        self.arrange();
     }
 
     /// The edges a mod+right-drag starting at `location` resizes.
@@ -584,6 +719,13 @@ impl Sash {
                     self.arrange();
                 }
             }
+            Action::Snap(direction) => {
+                if let Some(id) = focused
+                    && self.windows.layout.snap_key(id, direction)
+                {
+                    self.arrange();
+                }
+            }
             Action::CycleNext => self.cycle(1),
             Action::CyclePrevious => self.cycle(-1),
             Action::ToggleDefaultMode => {
@@ -629,6 +771,7 @@ impl Sash {
     pub fn commit_cycle(&mut self) {
         if self.keybinds.cycle.take().is_some() {
             self.windows.layout.commit_focus();
+            self.arrange();
         }
     }
 
@@ -649,6 +792,25 @@ impl Sash {
             Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
             Err(err) => tracing::warn!(%err, "could not start foot"),
         }
+    }
+}
+
+/// A client request to change its window state.
+#[derive(Clone, Copy, Debug)]
+pub enum StateRequest {
+    Maximize(bool),
+    Fullscreen(bool),
+}
+
+fn set_state(
+    states: &mut smithay::wayland::shell::xdg::ToplevelStateSet,
+    state: xdg_toplevel::State,
+    on: bool,
+) {
+    if on {
+        states.set(state);
+    } else {
+        states.unset(state);
     }
 }
 

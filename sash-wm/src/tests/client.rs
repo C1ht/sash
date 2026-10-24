@@ -41,8 +41,13 @@ pub const WINDOW_SIZE: (i32, i32) = (100, 100);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ToplevelConfig {
     pub size: (i32, i32),
+    /// All four tiled states.
     pub tiled: bool,
+    /// The tiled states present: left, right, top, bottom.
+    pub tiled_edges: [bool; 4],
     pub resizing: bool,
+    pub maximized: bool,
+    pub fullscreen: bool,
 }
 
 #[derive(Default)]
@@ -81,6 +86,8 @@ pub struct TestWindow {
     pub toplevel: XdgToplevel,
     /// The size this client draws when the compositor lets it choose.
     pub preferred: (i32, i32),
+    /// Fill colour of its buffers, ARGB8888 (0: transparent).
+    pub color: u32,
 }
 
 pub struct TestClient {
@@ -153,6 +160,7 @@ impl TestClient {
             xdg_surface,
             toplevel,
             preferred: WINDOW_SIZE,
+            color: 0,
         }
     }
 
@@ -191,7 +199,7 @@ impl TestClient {
 
     pub fn attach_buffer(&mut self, window: &TestWindow) {
         let size = self.buffer_size(window);
-        let buffer = self.buffer(size);
+        let buffer = self.buffer(size, window.color);
         window.surface.attach(Some(&buffer), 0, 0);
         window.surface.damage_buffer(0, 0, size.0, size.1);
     }
@@ -244,7 +252,7 @@ impl TestClient {
     }
 
     /// An ARGB8888 shm buffer, backed by an unlinked file in XDG_RUNTIME_DIR.
-    fn buffer(&mut self, (width, height): (i32, i32)) -> WlBuffer {
+    fn buffer(&mut self, (width, height): (i32, i32), color: u32) -> WlBuffer {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let runtime_dir =
             PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"));
@@ -263,6 +271,14 @@ impl TestClient {
         let stride = width * 4;
         let size = stride * height;
         file.set_len(size as u64).expect("size shm file");
+        if color != 0 {
+            use std::io::Write;
+            let row: Vec<u8> = color.to_le_bytes().repeat(width as usize);
+            let mut writer = std::io::BufWriter::new(&file);
+            for _ in 0..height {
+                writer.write_all(&row).expect("fill shm file");
+            }
+        }
 
         let qh = self.qh();
         let pool =
@@ -442,7 +458,10 @@ impl Dispatch<XdgToplevel, ()> for Events {
                 let config = ToplevelConfig {
                     size: (width, height),
                     tiled: events.tiled,
+                    tiled_edges: [5, 6, 7, 8].map(|s| states.contains(&s)),
                     resizing: states.contains(&3),
+                    maximized: states.contains(&1),
+                    fullscreen: states.contains(&2),
                 };
                 events.configs.insert(toplevel.id(), config);
             }

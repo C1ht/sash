@@ -10,8 +10,10 @@
 use std::collections::BTreeMap;
 
 use super::{
-    BspTree, Direction, FloatingLayout, InsertHint, Layout, Mode, Rect, SizeLimits, WindowId,
+    BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, Mode, Rect, SizeLimits,
+    WindowId,
     geometry::pick_in_direction,
+    snap::{SnapStep, ZoneId, Zones, snap_step},
 };
 
 /// Keyboard move and resize step, in pixels.
@@ -26,6 +28,40 @@ struct WindowState {
     parent: Option<WindowId>,
     /// Where the window was the last time it floated.
     last_floating: Option<Rect>,
+    /// The zone the window is snapped to. Kept while tile-all has it tiled, so floating
+    /// again restores the zone.
+    snap: Option<Snapped>,
+    /// Maximized while tiled: drawn over the whole output, keeping its leaf and tile.
+    maximized_tiled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Snapped {
+    zone: ZoneId,
+    /// The floating rectangle before snapping.
+    restore: Rect,
+}
+
+/// How a window is drawn, bottom to top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    /// In its tile, clipped to it.
+    Tiled,
+    /// A maximized tiled window over the whole output.
+    Maximized,
+    Floating,
+    Fullscreen,
+}
+
+/// What a window's configure says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Presentation {
+    /// None: the client chooses (a floating window without a rectangle yet).
+    pub size: Option<(i32, i32)>,
+    /// The xdg tiled states, one per edge.
+    pub tiled: Edges,
+    pub maximized: bool,
+    pub fullscreen: bool,
 }
 
 impl WindowState {
@@ -56,6 +92,9 @@ pub struct MonitorLayout {
     focused: Option<WindowId>,
     /// Focus history, most recent last.
     history: Vec<WindowId>,
+    zones: Zones,
+    /// At most one fullscreen window per monitor.
+    fullscreen: Option<WindowId>,
 }
 
 impl MonitorLayout {
@@ -68,10 +107,11 @@ impl MonitorLayout {
             windows: BTreeMap::new(),
             focused: None,
             history: Vec::new(),
+            zones: Zones::default(),
+            fullscreen: None,
         }
     }
 
-    #[cfg(test)]
     pub fn area(&self) -> Rect {
         self.area
     }
@@ -81,6 +121,27 @@ impl MonitorLayout {
         self.area = area;
         self.tree.set_area(area);
         self.floating.set_area(area);
+        // Snapped windows follow their zone.
+        let snapped: Vec<(WindowId, ZoneId)> = self
+            .windows
+            .iter()
+            .filter(|(_, s)| s.mode() == Mode::Floating)
+            .filter_map(|(w, s)| s.snap.map(|snap| (*w, snap.zone)))
+            .collect();
+        for (window, zone) in snapped {
+            if let Some(rect) = self.zone_rect(zone) {
+                self.floating.set_rect(window, rect);
+            }
+        }
+    }
+
+    pub fn zones(&self) -> &Zones {
+        &self.zones
+    }
+
+    /// A zone's rectangle on this monitor.
+    pub fn zone_rect(&self, zone: ZoneId) -> Option<Rect> {
+        self.zones.get(zone).map(|z| z.rect(self.area))
     }
 
     pub fn default_mode(&self) -> Mode {
@@ -122,8 +183,16 @@ impl MonitorLayout {
     }
 
     pub fn set_limits(&mut self, window: WindowId, limits: SizeLimits) {
-        if let Some(state) = self.windows.get_mut(&window) {
-            state.limits = limits;
+        let Some(state) = self.windows.get_mut(&window) else {
+            return;
+        };
+        state.limits = limits;
+        // Fixed-size windows never snap or maximize.
+        if limits.is_fixed() {
+            state.maximized_tiled = false;
+            if state.snap.is_some() {
+                self.unsnap_restore(window);
+            }
         }
     }
 
@@ -138,6 +207,8 @@ impl MonitorLayout {
             limits: new.limits,
             parent: new.parent.filter(|p| self.contains(*p)),
             last_floating: None,
+            snap: None,
+            maximized_tiled: false,
         };
         self.tree
             .insert_with_mode(window, self.focused, state.mode());
@@ -150,7 +221,12 @@ impl MonitorLayout {
     /// cascaded. Returns the window's rectangle.
     pub fn place(&mut self, window: WindowId, size: (i32, i32)) -> Option<Rect> {
         let state = self.windows.get(&window)?;
-        if state.mode() == Mode::Floating && !self.floating.contains(window) {
+        if state.mode() == Mode::Floating
+            && !self.floating.contains(window)
+            && let Some(zone) = state.snap.and_then(|s| self.zone_rect(s.zone))
+        {
+            self.floating.insert_at(window, zone);
+        } else if state.mode() == Mode::Floating && !self.floating.contains(window) {
             let center_over = state.forced.then(|| {
                 state
                     .parent
@@ -187,6 +263,9 @@ impl MonitorLayout {
             .remove_returning_sibling(window)
             .unwrap_or_default();
         self.history.retain(|w| *w != window);
+        if self.fullscreen == Some(window) {
+            self.fullscreen = None;
+        }
         if self.focused == Some(window) {
             self.focused = None;
             let next = match state.mode() {
@@ -242,7 +321,11 @@ impl MonitorLayout {
     }
 
     /// Records the focused window as the most recent (the end of a mod+Tab cycle).
+    /// Focusing a window other than the fullscreen one ends fullscreen.
     pub fn commit_focus(&mut self) {
+        if self.fullscreen.is_some() && self.fullscreen != self.focused {
+            self.fullscreen = None;
+        }
         if let Some(window) = self.focused {
             self.history.retain(|w| *w != window);
             self.history.push(window);
@@ -273,15 +356,309 @@ impl MonitorLayout {
         self.floating.rects()
     }
 
-    /// The topmost window at a point: floating windows are above tiled ones.
+    /// The topmost window at a point. A fixed-size fullscreen window's backdrop
+    /// covers the rest of the output: points there hit nothing.
     pub fn window_at(&self, x: i32, y: i32) -> Option<WindowId> {
-        self.floating.window_at(x, y).or_else(|| {
-            self.tree
+        if self.fullscreen_backdrop().is_some_and(|b| b.contains(x, y)) {
+            let f = self.fullscreen?;
+            return self.shown_rect(f).filter(|r| r.contains(x, y)).map(|_| f);
+        }
+        self.stacking()
+            .into_iter()
+            .rev()
+            .find(|(_, r, _)| r.contains(x, y))
+            .map(|(w, _, _)| w)
+    }
+
+    /// Where the window is drawn: fullscreen and maximized windows cover the output
+    /// (a fixed-size fullscreen window is centered at its size), others are at their
+    /// tile or floating rectangle.
+    pub fn shown_rect(&self, window: WindowId) -> Option<Rect> {
+        let state = self.windows.get(&window)?;
+        if self.fullscreen == Some(window) {
+            let limits = state.limits;
+            return Some(if limits.is_fixed() {
+                let (w, h) = limits.min;
+                Rect::new(
+                    self.area.x + (self.area.w - w).div_euclid(2),
+                    self.area.y + (self.area.h - h).div_euclid(2),
+                    w,
+                    h,
+                )
+            } else {
+                self.area
+            });
+        }
+        if state.maximized_tiled && state.mode() == Mode::Tiled {
+            return Some(self.area);
+        }
+        self.rect_of(window)
+    }
+
+    /// Behind a fixed-size fullscreen window, an opaque backdrop covers the output.
+    pub fn fullscreen_backdrop(&self) -> Option<Rect> {
+        let f = self.fullscreen?;
+        self.windows.get(&f)?.limits.is_fixed().then_some(self.area)
+    }
+
+    /// Every placed window in drawing order, bottom first: tiled, maximized tiled
+    /// (focused last), floating by stacking order, then the fullscreen window.
+    pub fn stacking(&self) -> Vec<(WindowId, Rect, Layer)> {
+        let fullscreen = self.fullscreen;
+        let maximized = |w: &WindowId| self.windows.get(w).is_some_and(|s| s.maximized_tiled);
+        let mut out: Vec<(WindowId, Rect, Layer)> = self
+            .tree
+            .rects()
+            .into_iter()
+            .filter(|(w, _)| Some(*w) != fullscreen && !maximized(w))
+            .map(|(w, r)| (w, r, Layer::Tiled))
+            .collect();
+        let mut maxed: Vec<(WindowId, Rect)> = self
+            .tree
+            .rects()
+            .into_iter()
+            .filter(|(w, _)| Some(*w) != fullscreen && maximized(w))
+            .collect();
+        maxed.sort_by_key(|(w, _)| Some(*w) == self.focused);
+        out.extend(
+            maxed
+                .into_iter()
+                .map(|(w, _)| (w, self.area, Layer::Maximized)),
+        );
+        out.extend(
+            self.floating
                 .rects()
                 .into_iter()
-                .find(|(_, r)| r.contains(x, y))
-                .map(|(w, _)| w)
+                .filter(|(w, _)| Some(*w) != fullscreen)
+                .map(|(w, r)| (w, r, Layer::Floating)),
+        );
+        if let Some(f) = fullscreen
+            && let Some(rect) = self.shown_rect(f)
+        {
+            out.push((f, rect, Layer::Fullscreen));
+        }
+        out
+    }
+
+    pub fn fullscreen(&self) -> Option<WindowId> {
+        self.fullscreen
+    }
+
+    /// The zone a floating window is snapped to.
+    pub fn snapped_zone(&self, window: WindowId) -> Option<ZoneId> {
+        let state = self.windows.get(&window)?;
+        (state.mode() == Mode::Floating).then_some(state.snap?.zone)
+    }
+
+    /// Maximized: tiled and maximized, or snapped to a maximized zone.
+    pub fn is_maximized(&self, window: WindowId) -> bool {
+        let Some(state) = self.windows.get(&window) else {
+            return false;
+        };
+        (state.maximized_tiled && state.mode() == Mode::Tiled)
+            || self
+                .snapped_zone(window)
+                .and_then(|z| self.zones.get(z))
+                .is_some_and(|z| z.maximized)
+    }
+
+    /// What the window's configure should say.
+    pub fn presentation(&self, window: WindowId) -> Option<Presentation> {
+        let state = self.windows.get(&window)?;
+        let size = |r: Rect| Some((r.w.max(1), r.h.max(1)));
+        let plain = Presentation {
+            size: None,
+            tiled: Edges::default(),
+            maximized: false,
+            fullscreen: false,
+        };
+        if self.fullscreen == Some(window) {
+            return Some(Presentation {
+                size: size(self.area),
+                fullscreen: true,
+                ..plain
+            });
+        }
+        if self.is_maximized(window) {
+            return Some(Presentation {
+                size: size(self.area),
+                maximized: true,
+                ..plain
+            });
+        }
+        let rect = self.rect_of(window);
+        Some(match state.mode() {
+            Mode::Tiled => Presentation {
+                size: rect.and_then(size),
+                tiled: Edges::ALL,
+                ..plain
+            },
+            Mode::Floating => Presentation {
+                size: rect.and_then(size),
+                tiled: self
+                    .snapped_zone(window)
+                    .and_then(|z| self.zones.get(z))
+                    .map(|z| z.output_edges())
+                    .unwrap_or_default(),
+                ..plain
+            },
         })
+    }
+
+    /// Snaps a window to a zone. A tiled window floats first (its tile becomes the
+    /// pre-snap rectangle). Fixed-size windows never snap. Returns false if nothing
+    /// happened.
+    pub fn snap(&mut self, window: WindowId, zone: ZoneId) -> bool {
+        let Some(rect) = self.zone_rect(zone) else {
+            return false;
+        };
+        let Some(state) = self.windows.get(&window) else {
+            return false;
+        };
+        if state.limits.is_fixed() {
+            return false;
+        }
+        if state.mode() == Mode::Tiled {
+            self.float_in_place(window);
+        }
+        let Some(current) = self.floating.rect_of(window) else {
+            return false;
+        };
+        let state = self.windows.get_mut(&window).expect("checked above");
+        let restore = state.snap.map_or(current, |s| s.restore);
+        state.snap = Some(Snapped { zone, restore });
+        self.floating.set_rect(window, rect);
+        true
+    }
+
+    /// Unsnaps a window back to its pre-snap rectangle. Returns false if it was not
+    /// snapped.
+    pub fn unsnap_restore(&mut self, window: WindowId) -> bool {
+        if self.mode(window) != Some(Mode::Floating) {
+            return false;
+        }
+        let Some(snap) = self.windows.get_mut(&window).and_then(|s| s.snap.take()) else {
+            return false;
+        };
+        self.set_floating_rect(window, snap.restore);
+        true
+    }
+
+    /// A drag pulls a snapped window out of its zone: it takes its pre-snap size, and
+    /// the point where it was grabbed stays at the same relative position in the
+    /// window, now under the pointer. Returns the new rectangle, or None if the window
+    /// was not snapped.
+    pub fn unsnap_for_drag(
+        &mut self,
+        window: WindowId,
+        grabbed: (i32, i32),
+        pointer: (i32, i32),
+    ) -> Option<Rect> {
+        let snap = self
+            .snapped_zone(window)
+            .and(self.windows.get(&window)?.snap)?;
+        let current = self.floating.rect_of(window)?;
+        let (w, h) = (snap.restore.w, snap.restore.h);
+        let fraction = |pos: i32, start: i32, len: i32| (pos - start) as f64 / len.max(1) as f64;
+        let x = pointer.0 - (fraction(grabbed.0, current.x, current.w) * w as f64).round() as i32;
+        let y = pointer.1 - (fraction(grabbed.1, current.y, current.h) * h as f64).round() as i32;
+        self.set_floating_rect(window, Rect::new(x, y, w, h))
+    }
+
+    /// mod+arrow, by the state table (snap::snap_step). Maximize on a tiled window
+    /// keeps its leaf; other zones float a tiled window first.
+    pub fn snap_key(&mut self, window: WindowId, key: Direction) -> bool {
+        let Some(state) = self.windows.get(&window) else {
+            return false;
+        };
+        if state.limits.is_fixed() {
+            return false;
+        }
+        let tiled = state.mode() == Mode::Tiled;
+        let current = if tiled {
+            state
+                .maximized_tiled
+                .then(|| self.zones_maximized())
+                .flatten()
+        } else {
+            state.snap.map(|s| s.zone)
+        };
+        match snap_step(current, key) {
+            SnapStep::To(zone) => {
+                let maximized = self.zones.get(zone).is_some_and(|z| z.maximized);
+                if tiled && maximized {
+                    self.windows
+                        .get_mut(&window)
+                        .expect("checked")
+                        .maximized_tiled = true;
+                    true
+                } else {
+                    self.snap(window, zone)
+                }
+            }
+            SnapStep::Restore if tiled => {
+                let state = self.windows.get_mut(&window).expect("checked");
+                std::mem::replace(&mut state.maximized_tiled, false)
+            }
+            SnapStep::Restore => self.unsnap_restore(window),
+            SnapStep::Nothing => false,
+        }
+    }
+
+    /// The id of the maximized (whole-output) zone.
+    fn zones_maximized(&self) -> Option<ZoneId> {
+        [ZoneId::FULL]
+            .into_iter()
+            .find(|z| self.zones.get(*z).is_some_and(|z| z.maximized))
+    }
+
+    /// Client set_maximized / unset_maximized. A tiled window keeps its leaf; a
+    /// floating one snaps to the maximized zone. Fixed-size windows never maximize.
+    pub fn set_maximized(&mut self, window: WindowId, maximized: bool) -> bool {
+        let Some(state) = self.windows.get(&window) else {
+            return false;
+        };
+        let tiled = state.mode() == Mode::Tiled;
+        if maximized {
+            if state.limits.is_fixed() {
+                return false;
+            }
+            if tiled {
+                self.windows
+                    .get_mut(&window)
+                    .expect("checked")
+                    .maximized_tiled = true;
+                return true;
+            }
+            return self.zones_maximized().is_some_and(|z| self.snap(window, z));
+        }
+        if tiled {
+            let state = self.windows.get_mut(&window).expect("checked");
+            return std::mem::replace(&mut state.maximized_tiled, false);
+        }
+        if self.is_maximized(window) {
+            return self.unsnap_restore(window);
+        }
+        false
+    }
+
+    /// Client set_fullscreen / unset_fullscreen. One fullscreen window per monitor: a
+    /// new one replaces the old, which keeps its previous state. A window that goes
+    /// fullscreen gets focus.
+    pub fn set_fullscreen(&mut self, window: WindowId, fullscreen: bool) -> bool {
+        if !self.contains(window) {
+            return false;
+        }
+        if fullscreen {
+            self.fullscreen = Some(window);
+            self.focus(window);
+            true
+        } else if self.fullscreen == Some(window) {
+            self.fullscreen = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// The window in `direction` from `window`, among all windows on the monitor.
@@ -334,7 +711,15 @@ impl MonitorLayout {
         }
         match state.mode() {
             Mode::Tiled => {
-                let rect = state.last_floating.or_else(|| self.tree.rect_of(window));
+                // A remembered zone wins over the last floating rectangle.
+                let zone_rect = state.snap.and_then(|s| self.zone_rect(s.zone));
+                let rect = zone_rect
+                    .or(state.last_floating)
+                    .or_else(|| self.tree.rect_of(window));
+                self.windows
+                    .get_mut(&window)
+                    .expect("checked")
+                    .maximized_tiled = false;
                 self.set_own_mode(window, Mode::Floating);
                 if let Some(rect) = rect {
                     self.floating.insert_at(window, rect);
@@ -365,15 +750,27 @@ impl MonitorLayout {
         let Some(rect) = self.tree.rect_of(window) else {
             return false;
         };
+        if let Some(state) = self.windows.get_mut(&window) {
+            state.maximized_tiled = false;
+            state.snap = None;
+        }
         self.set_own_mode(window, Mode::Floating);
         self.floating.insert_at(window, rect);
         true
     }
 
-    /// mod+Shift+F: every tiled window floats at its current tile.
+    /// mod+Shift+F: every tiled window floats at its current tile, or in its zone if
+    /// it was snapped before tile-all.
     pub fn float_all(&mut self) {
         let tiles = self.tree.rects();
-        for (window, rect) in tiles {
+        for (window, tile) in tiles {
+            let state = self
+                .windows
+                .get_mut(&window)
+                .expect("every leaf is a window");
+            state.maximized_tiled = false;
+            let zone = state.snap.map(|s| s.zone);
+            let rect = zone.and_then(|z| self.zone_rect(z)).unwrap_or(tile);
             self.set_own_mode(window, Mode::Floating);
             self.floating.insert_at(window, rect);
         }
@@ -418,6 +815,11 @@ impl MonitorLayout {
         }
         match after {
             Mode::Floating => {
+                // Forced windows are centered: a zone remembered from before tile-all
+                // no longer applies.
+                if let Some(state) = self.windows.get_mut(&window) {
+                    state.snap = None;
+                }
                 let tile = self.tree.rect_of(window);
                 self.tree.set_mode(window, Mode::Floating);
                 if let Some(tile) = tile {
@@ -438,9 +840,14 @@ impl MonitorLayout {
     }
 
     /// Sets a floating window's rectangle (drag, resize, client-chosen size): the size
-    /// is clamped to the window's limits, the position by the visibility rule.
+    /// is clamped to the window's limits, the position by the visibility rule. A
+    /// snapped window stops being snapped.
     pub fn set_floating_rect(&mut self, window: WindowId, rect: Rect) -> Option<Rect> {
-        let limits = self.windows.get(&window)?.limits;
+        let state = self.windows.get_mut(&window)?;
+        if state.mode() == Mode::Floating {
+            state.snap = None;
+        }
+        let limits = state.limits;
         let (w, h) = limits.clamp((rect.w, rect.h));
         self.floating
             .set_rect(window, Rect::new(rect.x, rect.y, w, h))
@@ -509,6 +916,31 @@ impl MonitorLayout {
             Some(f) => assert!(self.contains(f), "focus on an unknown window"),
             None => assert!(self.windows.is_empty(), "windows exist but none is focused"),
         }
+        for (window, state) in &self.windows {
+            if let (Mode::Floating, Some(snap), Some(rect)) =
+                (state.mode(), state.snap, self.floating.rect_of(*window))
+            {
+                assert_eq!(
+                    Some(rect),
+                    self.zone_rect(snap.zone),
+                    "{window:?} is not in its zone"
+                );
+            }
+            if state.snap.is_some() || state.maximized_tiled {
+                assert!(
+                    !state.limits.is_fixed(),
+                    "fixed-size {window:?} is snapped or maximized"
+                );
+            }
+        }
+        if let Some(f) = self.fullscreen {
+            assert!(self.contains(f), "fullscreen window is unknown");
+        }
+        let drawn: Vec<WindowId> = self.stacking().iter().map(|(w, _, _)| *w).collect();
+        let mut unique = drawn.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), drawn.len(), "a window is drawn twice");
     }
 }
 
@@ -864,5 +1296,305 @@ mod tests {
         );
         big.move_by(id(1), 5000, 5000);
         big.check_invariants();
+    }
+
+    fn snapped(layout: &MonitorLayout, n: u64) -> Option<ZoneId> {
+        layout.snapped_zone(id(n))
+    }
+
+    #[test]
+    fn snapping_remembers_and_restores_the_pre_snap_rectangle() {
+        let mut layout = layout_with(2); // 1 | 2
+        layout.toggle(id(2));
+        layout.set_floating_rect(id(2), Rect::new(100, 120, 300, 200));
+        assert!(layout.snap(id(2), ZoneId::LEFT));
+        assert_eq!(rect(&layout, 2), Rect::new(0, 0, 400, 600));
+        // Moving between zones keeps the original pre-snap rectangle.
+        assert!(layout.snap(id(2), ZoneId::TOP_RIGHT));
+        assert_eq!(rect(&layout, 2), Rect::new(400, 0, 400, 300));
+        assert!(layout.unsnap_restore(id(2)));
+        assert_eq!(rect(&layout, 2), Rect::new(100, 120, 300, 200));
+        assert_eq!(snapped(&layout, 2), None);
+        assert!(!layout.unsnap_restore(id(2)), "not snapped any more");
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn snapping_a_tiled_window_floats_it_with_its_tile_as_pre_snap_rectangle() {
+        let mut layout = layout_with(2);
+        assert!(layout.snap(id(1), ZoneId::RIGHT));
+        assert_eq!(layout.mode(id(1)), Some(Mode::Floating));
+        assert_eq!(rect(&layout, 2), AREA, "the other window refills");
+        layout.unsnap_restore(id(1));
+        assert_eq!(
+            rect(&layout, 1),
+            Rect::new(0, 0, 400, 600),
+            "restored to where its tile was"
+        );
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn drag_out_restores_the_size_under_the_pointer() {
+        let mut layout = layout_with(1);
+        layout.toggle(id(1));
+        layout.set_floating_rect(id(1), Rect::new(200, 200, 200, 100));
+        layout.snap(id(1), ZoneId::LEFT); // (0, 0, 400, 600)
+        // Pointer at 25% across and 10% down the snapped window.
+        let r = layout
+            .unsnap_for_drag(id(1), (100, 60), (100, 60))
+            .expect("was snapped");
+        assert_eq!(r, Rect::new(50, 50, 200, 100), "pointer stays at 25% / 10%");
+        assert_eq!(snapped(&layout, 1), None);
+        assert_eq!(layout.unsnap_for_drag(id(1), (100, 60), (100, 60)), None);
+        // Grabbed at 25% / 10%, pointer already moved to (300, 300) on the first motion:
+        // the grab point keeps its relative position under the pointer.
+        layout.snap(id(1), ZoneId::LEFT);
+        let r = layout
+            .unsnap_for_drag(id(1), (100, 60), (300, 300))
+            .expect("was snapped");
+        assert_eq!(r, Rect::new(250, 290, 200, 100));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn snap_keys_follow_the_state_table() {
+        let mut layout = layout_with(2); // 1 | 2, focus 2
+        // Tiled: Up maximizes and keeps the leaf; Down restores the tile.
+        assert!(layout.snap_key(id(2), Direction::Up));
+        assert_eq!(layout.mode(id(2)), Some(Mode::Tiled));
+        assert!(layout.is_maximized(id(2)));
+        assert_eq!(layout.shown_rect(id(2)), Some(AREA));
+        assert_eq!(
+            rect(&layout, 1),
+            Rect::new(0, 0, 400, 600),
+            "the tile stays reserved"
+        );
+        assert!(layout.snap_key(id(2), Direction::Down));
+        assert!(!layout.is_maximized(id(2)));
+        assert_eq!(layout.shown_rect(id(2)), Some(Rect::new(400, 0, 400, 600)));
+        // Tiled + Left: floats and snaps to the left half.
+        assert!(layout.snap_key(id(2), Direction::Left));
+        assert_eq!(snapped(&layout, 2), Some(ZoneId::LEFT));
+        assert!(layout.snap_key(id(2), Direction::Left));
+        assert_eq!(snapped(&layout, 2), Some(ZoneId::BOTTOM_LEFT));
+        assert!(layout.snap_key(id(2), Direction::Up));
+        assert_eq!(snapped(&layout, 2), Some(ZoneId::TOP_LEFT));
+        assert!(layout.snap_key(id(2), Direction::Up));
+        assert_eq!(snapped(&layout, 2), Some(ZoneId::FULL));
+        assert!(layout.is_maximized(id(2)));
+        assert!(layout.snap_key(id(2), Direction::Down));
+        assert_eq!(snapped(&layout, 2), None);
+        assert_eq!(
+            rect(&layout, 2),
+            Rect::new(400, 0, 400, 600),
+            "pre-snap = its old tile"
+        );
+        assert!(
+            !layout.snap_key(id(2), Direction::Down),
+            "unsnapped: Down does nothing"
+        );
+        // Maximized tiled + Right: floats and snaps to the right half.
+        layout.toggle(id(2));
+        layout.snap_key(id(2), Direction::Up);
+        assert!(layout.snap_key(id(2), Direction::Right));
+        assert_eq!(snapped(&layout, 2), Some(ZoneId::RIGHT));
+        assert!(!layout.is_maximized(id(2)));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn tile_all_then_float_again_restores_the_zone_for_the_current_output() {
+        let mut layout = layout_with(2);
+        layout.snap(id(1), ZoneId::TOP_RIGHT);
+        layout.tile_all();
+        assert_eq!(layout.mode(id(1)), Some(Mode::Tiled));
+        layout.set_area(Rect::new(0, 0, 1000, 801));
+        layout.float_all();
+        assert_eq!(snapped(&layout, 1), Some(ZoneId::TOP_RIGHT));
+        assert_eq!(
+            rect(&layout, 1),
+            Rect::new(500, 0, 500, 400),
+            "recomputed for 1000x801"
+        );
+        // The same with mod+F.
+        layout.tile_all();
+        layout.toggle(id(1));
+        assert_eq!(rect(&layout, 1), Rect::new(500, 0, 500, 400));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn output_resize_recomputes_snapped_windows() {
+        let mut layout = layout_with(1);
+        layout.snap(id(1), ZoneId::BOTTOM_RIGHT);
+        layout.set_area(Rect::new(0, 0, 1001, 701));
+        assert_eq!(rect(&layout, 1), Rect::new(500, 350, 501, 351));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn manual_moves_and_resizes_unsnap_and_keep_the_rectangle() {
+        let mut layout = layout_with(1);
+        layout.snap(id(1), ZoneId::LEFT);
+        layout.move_by(id(1), STEP, 0);
+        assert_eq!(snapped(&layout, 1), None);
+        assert_eq!(rect(&layout, 1), Rect::new(40, 0, 400, 600));
+        layout.snap(id(1), ZoneId::RIGHT);
+        layout.resize_by(id(1), -STEP, 0);
+        assert_eq!(rect(&layout, 1), Rect::new(400, 0, 360, 600));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn fixed_size_windows_never_snap_or_maximize() {
+        let mut layout = MonitorLayout::new(AREA);
+        let fixed = NewWindow {
+            forced: true,
+            limits: SizeLimits {
+                min: (300, 200),
+                max: (300, 200),
+            },
+            ..Default::default()
+        };
+        layout.open(id(1), fixed);
+        layout.place(id(1), (300, 200));
+        assert!(!layout.snap(id(1), ZoneId::LEFT));
+        assert!(!layout.snap_key(id(1), Direction::Up));
+        assert!(!layout.set_maximized(id(1), true));
+        assert_eq!(rect(&layout, 1), Rect::new(250, 200, 300, 200));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn client_maximize_on_floating_and_tiled_windows() {
+        let mut layout = layout_with(2);
+        assert!(layout.set_maximized(id(1), true));
+        assert_eq!(
+            layout.mode(id(1)),
+            Some(Mode::Tiled),
+            "tiled windows keep their leaf"
+        );
+        assert_eq!(
+            layout.presentation(id(1)).map(|p| (p.size, p.maximized)),
+            Some((Some((800, 600)), true))
+        );
+        assert!(layout.set_maximized(id(1), false));
+        assert_eq!(
+            layout.presentation(id(1)).map(|p| (p.size, p.maximized)),
+            Some((Some((400, 600)), false))
+        );
+        layout.toggle(id(2));
+        layout.set_floating_rect(id(2), Rect::new(10, 20, 300, 200));
+        assert!(layout.set_maximized(id(2), true));
+        assert_eq!(snapped(&layout, 2), Some(ZoneId::FULL));
+        assert!(layout.set_maximized(id(2), false));
+        assert_eq!(rect(&layout, 2), Rect::new(10, 20, 300, 200));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn one_fullscreen_window_ends_on_focus_and_close() {
+        let mut layout = layout_with(3); // 1 | (2 / 3)
+        assert!(layout.set_fullscreen(id(2), true));
+        assert_eq!(layout.fullscreen(), Some(id(2)));
+        assert_eq!(
+            layout.stacking().last().map(|(w, r, l)| (*w, *r, *l)),
+            Some((id(2), AREA, Layer::Fullscreen))
+        );
+        assert_eq!(
+            rect(&layout, 2),
+            Rect::new(400, 0, 400, 300),
+            "keeps its leaf and tile"
+        );
+        assert_eq!(layout.window_at(10, 10), Some(id(2)), "above everything");
+        // A new fullscreen window replaces it.
+        layout.set_fullscreen(id(3), true);
+        assert_eq!(layout.fullscreen(), Some(id(3)));
+        // Previewing another window (mod+Tab) does not end it; committing does.
+        layout.preview_focus(id(1));
+        assert_eq!(layout.fullscreen(), Some(id(3)));
+        layout.commit_focus();
+        assert_eq!(layout.fullscreen(), None);
+        // Closing the fullscreen window restores the layout normally.
+        layout.set_fullscreen(id(1), true);
+        layout.close(id(1));
+        assert_eq!(layout.fullscreen(), None);
+        assert_eq!(rect(&layout, 2), Rect::new(0, 0, 800, 300));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn fixed_size_fullscreen_is_centered_over_a_backdrop() {
+        let mut layout = layout_with(1);
+        let fixed = NewWindow {
+            forced: true,
+            limits: SizeLimits {
+                min: (300, 200),
+                max: (300, 200),
+            },
+            ..Default::default()
+        };
+        layout.open(id(2), fixed);
+        layout.place(id(2), (300, 200));
+        assert!(layout.set_fullscreen(id(2), true));
+        assert_eq!(
+            layout.shown_rect(id(2)),
+            Some(Rect::new(250, 200, 300, 200))
+        );
+        assert_eq!(layout.fullscreen_backdrop(), Some(AREA));
+        assert_eq!(layout.window_at(300, 300), Some(id(2)));
+        assert_eq!(layout.window_at(10, 10), None, "the backdrop takes clicks");
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn snapping_on_a_tiny_output_keeps_the_rules() {
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 3, 2));
+        for i in 1..=3 {
+            layout.open(id(i), NewWindow::default());
+        }
+        for (i, zone) in [
+            (1, ZoneId::LEFT),
+            (2, ZoneId::BOTTOM_RIGHT),
+            (3, ZoneId::FULL),
+        ] {
+            assert!(layout.snap(id(i), zone));
+            layout.check_invariants();
+        }
+        layout.set_area(Rect::new(0, 0, 1, 1));
+        layout.check_invariants();
+    }
+
+    /// Timing of a zone lookup (every pointer motion of a drag) and of snapping and
+    /// restoring a window. Run in release: `cargo test --release -- --ignored bench_`.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_zone_lookup_and_snap() {
+        use std::{hint::black_box, time::Instant};
+        let layout = layout_with(3);
+        let area = layout.area();
+        let n = 1_000_000;
+        let start = Instant::now();
+        let mut hits = 0;
+        for i in 0..n {
+            let (x, y) = ((i * 7919) % area.w, (i * 104729) % area.h);
+            hits += black_box(layout.zones().at(area, x, y)).is_some() as u32;
+        }
+        let lookup = start.elapsed();
+        let mut layout = layout_with(3);
+        let rounds = 100_000;
+        let start = Instant::now();
+        for i in 0..rounds {
+            let zone = [ZoneId::LEFT, ZoneId::TOP_RIGHT, ZoneId::FULL][i % 3];
+            black_box(layout.snap(id(3), zone));
+            black_box(layout.unsnap_restore(id(3)));
+        }
+        let snap = start.elapsed();
+        println!(
+            "zone lookup: {:.1} ns/op ({hits} hits in {n}); snap + restore: {:.1} ns/op",
+            lookup.as_nanos() as f64 / n as f64,
+            snap.as_nanos() as f64 / rounds as f64
+        );
     }
 }

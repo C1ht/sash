@@ -18,6 +18,7 @@ use smithay::{
 
 use crate::{
     keybinds::{Keybinds, Modifier},
+    render::Overlay,
     windows::Windows,
 };
 
@@ -58,6 +59,8 @@ pub struct Sash {
     pub space: Space<Window>,
     pub output: Option<Output>,
     pub windows: Windows,
+    /// Snap preview and fullscreen backdrop.
+    pub overlay: Overlay,
     pub keybinds: Keybinds,
 
     /// Process start; the clock for frame callback timestamps and startup time.
@@ -91,6 +94,7 @@ impl Sash {
             space: Space::default(),
             output: None,
             windows: Windows::new(),
+            overlay: Overlay::new(),
             keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,

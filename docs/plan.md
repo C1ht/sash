@@ -137,7 +137,7 @@ sash/
   - Unit tests for placement geometry.
   - A written manual checklist for how floating feels.
   - Frame time measured during a window drag.
-- **M5 Snapping and fullscreen.** Rules are in CLAUDE.md ("Snapping and fullscreen (M5)"). Step 0, a separate commit first: debug-only offscreen capture (below), used for all screenshots from now on.
+- **M5 Snapping and fullscreen.** Done, pending approval. Manual checklist: docs/floating-checklist.md section 10. Rules are in CLAUDE.md ("Snapping and fullscreen (M5)"). Step 0, a separate commit first: debug-only offscreen capture (below), used for all screenshots from now on.
   - Constants (owner tunes after trying): corner trigger 64 px from two edges; edge trigger 8 px; edge-snap threshold 12 px; preview fill #0A84FF at 30% alpha, 2 px border at 80% alpha.
   - Maximize vs fullscreen: until layer-shell exists both fill the whole output. Once an exclusive zone exists (panel), maximize will fill the output minus exclusive zones, fullscreen still the whole output.
   - Keybind state table (mod+arrow), approved by the owner:

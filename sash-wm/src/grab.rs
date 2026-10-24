@@ -18,20 +18,13 @@ use smithay::{
     utils::{Logical, Point, Serial},
 };
 
-use crate::{
-    layout::{Rect, WindowId},
-    state::Sash,
-    windows::{DragKind, Pointer},
-};
+use crate::{layout::WindowId, state::Sash, windows::DragKind};
 
 type PointerFocus = Option<(<Sash as SeatHandler>::PointerFocus, Point<f64, Logical>)>;
 
+/// The drag state itself lives in `Windows::drag`; the grab feeds it pointer positions.
 pub struct WindowGrab {
     start: GrabStartData<Sash>,
-    window: WindowId,
-    kind: DragKind,
-    /// The window's rectangle when the drag started.
-    from: Rect,
 }
 
 impl PointerGrab<Sash> for WindowGrab {
@@ -44,11 +37,8 @@ impl PointerGrab<Sash> for WindowGrab {
     ) {
         // Clients see the pointer leave for the duration of the drag.
         handle.motion(data, None, event);
-        let pointer = Pointer {
-            pressed_at: self.start.location,
-            now: event.location,
-        };
-        if !data.drag_to(self.window, self.kind, self.from, pointer) {
+        let free = data.shift_held();
+        if !data.drag_motion(event.location, free) {
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }
@@ -164,8 +154,7 @@ impl PointerGrab<Sash> for WindowGrab {
     }
 
     fn unset(&mut self, data: &mut Sash) {
-        data.windows.dragging = None;
-        data.end_drag(self.window);
+        data.end_drag();
     }
 }
 
@@ -182,21 +171,8 @@ impl Sash {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        let Some(from) = self.begin_drag(window, kind) else {
-            return;
-        };
-        self.windows.dragging = Some(window);
-        let grab = WindowGrab {
-            start,
-            window,
-            kind,
-            from,
-        };
-        pointer.set_grab(self, grab, serial, Focus::Clear);
-    }
-
-    /// The window being dragged, if any.
-    pub fn dragged_window(&self) -> Option<WindowId> {
-        self.windows.dragging
+        if self.begin_drag(window, kind, start.location) {
+            pointer.set_grab(self, WindowGrab { start }, serial, Focus::Clear);
+        }
     }
 }

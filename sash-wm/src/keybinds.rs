@@ -44,6 +44,8 @@ pub enum Action {
     /// Resizes the focused window by STEP, top-left corner fixed: Right wider, Left
     /// narrower, Down taller, Up shorter.
     Resize(Direction),
+    /// mod+arrow: snap by the state table (layout::snap_step).
+    Snap(Direction),
     /// Steps through windows in most-recently-used order while the modifier is held.
     CycleNext,
     CyclePrevious,
@@ -106,6 +108,10 @@ const BINDINGS: &[Binding] = &[
     with(CTRL_SHIFT, Keysym::j, Action::Resize(Direction::Down)),
     with(CTRL_SHIFT, Keysym::k, Action::Resize(Direction::Up)),
     with(CTRL_SHIFT, Keysym::l, Action::Resize(Direction::Right)),
+    with(NONE, Keysym::Left, Action::Snap(Direction::Left)),
+    with(NONE, Keysym::Right, Action::Snap(Direction::Right)),
+    with(NONE, Keysym::Up, Action::Snap(Direction::Up)),
+    with(NONE, Keysym::Down, Action::Snap(Direction::Down)),
     with(NONE, Keysym::Tab, Action::CycleNext),
     with(SHIFT, Keysym::Tab, Action::CyclePrevious),
     with(CTRL, Keysym::d, Action::ToggleDefaultMode),
@@ -229,6 +235,15 @@ mod tests {
         assert_eq!(
             lookup(Modifier::Alt, &alt_shift, Some(Keysym::Tab)),
             Some(Action::CyclePrevious)
+        );
+        assert_eq!(
+            lookup(Modifier::Alt, &alt, Some(Keysym::Up)),
+            Some(Action::Snap(Direction::Up))
+        );
+        assert_eq!(
+            lookup(Modifier::Alt, &alt_shift, Some(Keysym::Up)),
+            None,
+            "no Shift+arrow binding"
         );
     }
 

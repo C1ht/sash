@@ -37,7 +37,8 @@ fn cfg(size: (i32, i32), tiled: bool) -> Option<ToplevelConfig> {
     Some(ToplevelConfig {
         size,
         tiled,
-        resizing: false,
+        tiled_edges: [tiled; 4],
+        ..Default::default()
     })
 }
 
@@ -315,8 +316,8 @@ fn client_resize_request_resizes_a_floating_window() {
             c.config(&w),
             Some(ToplevelConfig {
                 size: (700, 550),
-                tiled: false,
-                resizing: true
+                resizing: true,
+                ..Default::default()
             })
         );
         server.on_server(|h| h.button(BTN_LEFT, ButtonState::Released));
@@ -369,11 +370,14 @@ fn mod_drag_moves_and_resizes_without_reaching_clients() {
             h.pointer_to(270.0, 320.0);
             h.button(BTN_RIGHT, ButtonState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(30, 40, 440, 580)));
-            // Right-drag in the top-left cell moves the top-left corner.
+            // Right-drag in the top-left cell moves the top-left corner. Shift held:
+            // no edge snapping (x = 10 would otherwise snap to the output edge).
+            h.key(SHIFT, KeyState::Pressed);
             h.pointer_to(40.0, 50.0);
             h.button(BTN_RIGHT, ButtonState::Pressed);
             h.pointer_to(20.0, 60.0);
             h.button(BTN_RIGHT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(10, 50, 460, 570)));
             // mod+right-drag on a tiled window does nothing.
             h.pointer_to(700.0, 300.0);

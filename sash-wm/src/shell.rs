@@ -21,7 +21,7 @@ use smithay::{
             Client, DataInit, Dispatch, DisplayHandle, Resource,
             backend::ClientId,
             delegate_dispatch, delegate_global_dispatch,
-            protocol::{wl_seat::WlSeat, wl_surface::WlSurface},
+            protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
     utils::{Logical, Serial, Size},
@@ -35,7 +35,11 @@ use smithay::{
     },
 };
 
-use crate::{layout::Edges, state::Sash, windows::DragKind};
+use crate::{
+    layout::Edges,
+    state::Sash,
+    windows::{DragKind, StateRequest},
+};
 
 impl XdgShellHandler for Sash {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -62,6 +66,23 @@ impl XdgShellHandler for Sash {
         edges: xdg_toplevel::ResizeEdge,
     ) {
         self.client_drag(&surface, &seat, serial, DragKind::Resize(edges_from(edges)));
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        self.client_state_request(surface.wl_surface(), StateRequest::Maximize(true));
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        self.client_state_request(surface.wl_surface(), StateRequest::Maximize(false));
+    }
+
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
+        // One output so far: fullscreen is always on it.
+        self.client_state_request(surface.wl_surface(), StateRequest::Fullscreen(true));
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.client_state_request(surface.wl_surface(), StateRequest::Fullscreen(false));
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {

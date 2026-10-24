@@ -6,7 +6,9 @@
 
 use proptest::prelude::*;
 
-use super::{Direction, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId};
+use super::{
+    Direction, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId, monitor::Layer,
+};
 
 #[derive(Clone, Debug)]
 enum Op {
@@ -32,6 +34,15 @@ enum Op {
     SetForced(usize, bool, Option<usize>),
     SetArea(Rect),
     SetDefault(Mode),
+    Snap(usize, u16),
+    SnapKey(usize, Direction),
+    Unsnap(usize),
+    /// A drag pulls a snapped window out at this pointer position.
+    UnsnapDrag(usize, i32, i32),
+    Maximize(usize, bool),
+    Fullscreen(usize, bool),
+    /// mod+Tab: preview a window, then commit.
+    Cycle(usize),
 }
 
 fn direction() -> impl Strategy<Value = Direction> {
@@ -76,6 +87,13 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(i, f, p)| Op::SetForced(i, f, p)),
         1 => area().prop_map(Op::SetArea),
         1 => prop_oneof![Just(Mode::Tiled), Just(Mode::Floating)].prop_map(Op::SetDefault),
+        3 => (index, 0..8u16).prop_map(|(i, z)| Op::Snap(i, z)),
+        3 => (index, direction()).prop_map(|(i, d)| Op::SnapKey(i, d)),
+        1 => index.prop_map(Op::Unsnap),
+        1 => (index, -500..3000i32, -500..3000i32).prop_map(|(i, x, y)| Op::UnsnapDrag(i, x, y)),
+        2 => (index, any::<bool>()).prop_map(|(i, m)| Op::Maximize(i, m)),
+        2 => (index, any::<bool>()).prop_map(|(i, f)| Op::Fullscreen(i, f)),
+        1 => index.prop_map(Op::Cycle),
     ]
 }
 
@@ -191,7 +209,59 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
         }
         Op::SetArea(area) => layout.set_area(area),
         Op::SetDefault(mode) => layout.set_default_mode(mode),
+        Op::Snap(i, zone) => {
+            if let Some(w) = pick(layout, i)
+                && layout.snap(w, ZoneId(zone))
+            {
+                assert_eq!(layout.snapped_zone(w), Some(ZoneId(zone)));
+                assert_eq!(layout.rect_of(w), layout.zone_rect(ZoneId(zone)));
+            }
+        }
+        Op::SnapKey(i, d) => {
+            if let Some(w) = pick(layout, i) {
+                layout.snap_key(w, d);
+            }
+        }
+        Op::Unsnap(i) => {
+            if let Some(w) = pick(layout, i) {
+                layout.unsnap_restore(w);
+                assert_eq!(layout.snapped_zone(w), None);
+            }
+        }
+        Op::UnsnapDrag(i, x, y) => {
+            if let Some(w) = pick(layout, i) {
+                layout.unsnap_for_drag(w, (x, y), (y, x));
+            }
+        }
+        Op::Maximize(i, on) => {
+            if let Some(w) = pick(layout, i) {
+                layout.set_maximized(w, on);
+            }
+        }
+        Op::Fullscreen(i, on) => {
+            if let Some(w) = pick(layout, i) {
+                layout.set_fullscreen(w, on);
+                if on {
+                    assert_eq!(layout.fullscreen(), Some(w));
+                }
+            }
+        }
+        Op::Cycle(i) => {
+            if let Some(w) = pick(layout, i) {
+                layout.preview_focus(w);
+                layout.commit_focus();
+                if let Some(f) = layout.fullscreen() {
+                    assert_eq!(f, w, "committing focus elsewhere ends fullscreen");
+                }
+            }
+        }
     }
+    let fullscreen_layers = layout
+        .stacking()
+        .iter()
+        .filter(|(_, _, l)| *l == Layer::Fullscreen)
+        .count();
+    assert!(fullscreen_layers <= 1, "more than one fullscreen window");
 }
 
 proptest! {

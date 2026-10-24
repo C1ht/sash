@@ -112,3 +112,111 @@ That is roughly 1–3 frames of stale content per resize step.
 
 Notes:
 
+## 10. Snapping and fullscreen (M5)
+
+Setup as above (debug build, mod = Alt). The zones are: the top edge (whole output, maximized), the left and right edges (halves), and the four corners (quarters). There is no bottom zone.
+
+### Preview
+
+- [ ] **Shows.** Alt+left-drag a floating window and move the pointer to the left edge. A blue rectangle appears over the left half: 30% fill and a 2 px border, sharp corners, no animation.
+- [ ] **Placement.** The preview is drawn above all other windows but below the window you drag (the dragged window is not tinted).
+- [ ] **Hides.** It disappears when the pointer moves out of the zone, and when the drag ends.
+
+### Snapping by mouse: each of the seven zones
+
+- [ ] **Top edge.** The window fills the whole output and is told it is maximized; foot's title bar shows the "restore" button.
+- [ ] **Left edge.** Left half.
+- [ ] **Right edge.** Right half.
+- [ ] **Top-left corner.** Top-left quarter.
+- [ ] **Top-right corner.** Top-right quarter.
+- [ ] **Bottom-left corner.** Bottom-left quarter.
+- [ ] **Bottom-right corner.** Bottom-right quarter.
+- [ ] **Exact fit.** In each case the zone fits the output exactly, with no gap and no overlap with the other half or quarters.
+- [ ] **Corners win.** Within 64 px of two edges you get the corner, not the edge.
+- [ ] **Tiled window.** Alt+left-drag a tiled window into a zone. It floats and snaps, and its sibling fills its old tile.
+
+### Restore on drag-out
+
+- [ ] **Size.** Drag a snapped window away. It immediately takes its size from before snapping.
+- [ ] **Grab point.** The spot you grabbed stays under the pointer.
+- [ ] **Click without motion.** Alt+click on a snapped window without moving leaves it snapped.
+
+### Edge snapping and the Shift override
+
+- [ ] **Edges.** Drag a floating window near an output edge or near another window's edge. Within about 12 px it jumps to touch it.
+- [ ] **Overlap only.** Only windows that overlap on the other axis attract it.
+- [ ] **Resize.** The same happens for the dragged edges when resizing with Alt+right-drag.
+- [ ] **Shift.** Hold Shift while dragging: there is no edge snapping (the zones still work).
+- [ ] **Keyboard.** Keyboard moves (Alt+Ctrl+H/J/K/L) do not edge-snap.
+
+### Keybind transitions (Alt + arrow keys)
+
+Start from an unsnapped floating window. Check every cell of the table in docs/plan.md:
+
+- [ ] **Unsnapped.**
+  - Left → left half
+  - Right → right half
+  - Up → whole output (maximized)
+  - Down → nothing
+- [ ] **Left half.**
+  - Left → bottom-left
+  - Right → right half
+  - Up → top-left
+  - Down → restore
+- [ ] **Right half.**
+  - Left → left half
+  - Right → bottom-right
+  - Up → top-right
+  - Down → restore
+- [ ] **Top-left.**
+  - Left → nothing
+  - Right → top-right
+  - Up → whole output
+  - Down → left half
+- [ ] **Top-right.**
+  - Left → top-left
+  - Right → nothing
+  - Up → whole output
+  - Down → right half
+- [ ] **Bottom-left.**
+  - Left → nothing
+  - Right → bottom-right
+  - Up → top-left
+  - Down → left half
+- [ ] **Bottom-right.**
+  - Left → bottom-left
+  - Right → nothing
+  - Up → top-right
+  - Down → right half
+- [ ] **Whole output.**
+  - Left → left half
+  - Right → right half
+  - Up → nothing
+  - Down → restore
+- [ ] **Repeated Down.** Repeated Alt+Down always ends at the pre-snap rectangle.
+- [ ] **Tiled window, Up.** It covers the output but keeps its tile (the other tiles do not move). Alt+Down returns it to its tile.
+- [ ] **Tiled window, Left/Right.** It floats and snaps to the half.
+- [ ] **Manual edits.** Keyboard move or resize of a snapped window unsnaps it and continues from where it is.
+- [ ] **Keys stay with sash-wm.** None of these keys reach the app.
+
+### Fullscreen from a client
+
+- [ ] **Open.** `foot --fullscreen` (or a video player's fullscreen button) covers the whole output above everything, without a title bar.
+- [ ] **Leave.** Leaving fullscreen (the app's own control) returns the window to exactly where it was. A tiled one goes back to its tile, and the other tiles never moved.
+- [ ] **Replace.** A second window going fullscreen replaces the first, which returns to its previous state.
+- [ ] **Focus ends it.** Alt+H/J/K/L to another window, or a click when part of another window is visible, ends fullscreen.
+- [ ] **Alt+Tab.** Alt+Tab past it and back without releasing Alt does not end it; releasing on another window does.
+- [ ] **Close.** Closing a fullscreen window brings the layout back as it was.
+- [ ] **Fixed size.** A fixed-size window that asks for fullscreen sits centered over a black backdrop, if you have such an app.
+- [ ] **Output resize.** Resize the nested window while something is fullscreen. The fullscreen window follows the new size.
+
+### Tile-all round trip
+
+- [ ] **Snap.** Snap a window to a quarter.
+- [ ] **Tile all.** Alt+Shift+T: it returns to its tile.
+- [ ] **Resize the output.** Resize the nested sash-wm window.
+- [ ] **Float all.** Alt+Shift+F: the window goes back into the same quarter, recomputed for the new output size.
+- [ ] **Restore.** Alt+Down twice: half, then its rectangle from before it was snapped.
+
+Notes:
+

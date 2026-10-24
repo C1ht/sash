@@ -79,6 +79,14 @@ pub struct Edges {
 }
 
 impl Edges {
+    /// All four edges: a move.
+    pub const ALL: Edges = Edges {
+        left: true,
+        right: true,
+        top: true,
+        bottom: true,
+    };
+
     pub const BOTTOM_RIGHT: Edges = Edges {
         left: false,
         right: true,

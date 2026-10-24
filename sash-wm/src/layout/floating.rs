@@ -70,6 +70,7 @@ impl FloatingLayout {
     }
 
     /// The topmost window containing the point.
+    #[cfg(test)]
     pub fn window_at(&self, x: i32, y: i32) -> Option<WindowId> {
         self.stack
             .iter()

@@ -14,11 +14,13 @@ mod geometry;
 mod monitor;
 #[cfg(test)]
 mod proptests;
+mod snap;
 
 pub use bsp::BspTree;
 pub use floating::FloatingLayout;
 pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone};
-pub use monitor::{MonitorLayout, NewWindow, STEP};
+pub use monitor::{Layer, MonitorLayout, NewWindow, Presentation, STEP};
+pub use snap::{ZoneId, snap_to_edges};
 
 /// Identifies a window in a layout. Assigned by the compositor, never reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

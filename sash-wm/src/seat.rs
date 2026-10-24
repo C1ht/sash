@@ -96,6 +96,13 @@ impl Sash {
         }
     }
 
+    /// Whether Shift is held (disables edge snapping during a drag).
+    pub fn shift_held(&self) -> bool {
+        self.seat
+            .get_keyboard()
+            .is_some_and(|k| k.modifier_state().shift)
+    }
+
     /// Handles a pointer button. A plain press on a window focuses and raises it and is
     /// delivered. mod+left-drag moves and mod+right-drag resizes; mod+clicks are never
     /// delivered, nor are their releases.

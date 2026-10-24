@@ -4,7 +4,9 @@
 
 mod client;
 mod floating;
+mod gpu;
 mod harness;
+mod snapping;
 mod tiling;
 
 use std::{sync::mpsc, thread};

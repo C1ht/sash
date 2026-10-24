@@ -232,4 +232,8 @@ pub mod keys {
     pub const T: u32 = 20;
     pub const TAB: u32 = 15;
     pub const CTRL: u32 = 29;
+    pub const UP: u32 = 103;
+    pub const LEFT: u32 = 105;
+    pub const RIGHT: u32 = 106;
+    pub const DOWN: u32 = 108;
 }
