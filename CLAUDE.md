@@ -44,6 +44,21 @@ change this file without the owner's approval.
 - Clients (Settings app, shell, CLI) talk to the compositor through a
   native Sash protocol.
 - The settings list is closed. Do not add a setting without asking.
+  The complete list:
+  - appearance (dark / light / auto)
+  - accent
+  - transparency (default 60)
+  - effect toggles
+  - per-monitor default mode
+  - snap zones
+  - wallpaper
+  - keybinds
+  - monitors
+
+## Frame callbacks
+
+- No frame callbacks to clients while the output is not presenting
+  (for example a hidden nested window). Client requests are still served.
 
 ## UI
 
