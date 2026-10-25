@@ -264,7 +264,8 @@ change this file without the owner's approval.
   then resize, per axis; a flip that does not remove the constraint is
   reverted).
 - Rendering: a popup draws directly above its parent window in stacking
-  order and is not clipped to the parent's tile. A fullscreen window's
+  order (tiled windows: see the owner decisions below) and is not
+  clipped to the parent's tile. A fullscreen window's
   popups draw above it. Popups follow their parent when it moves,
   resizes, snaps or changes layout.
 - Input: pointer hit-testing finds the topmost surface including popups,
@@ -290,7 +291,14 @@ change this file without the owner's approval.
   - Parent changes (move, resize, snap, layout): reactive popups
     (set_reactive) are re-constrained to the output with a new
     configure; non-reactive popups keep their position relative to the
-    parent and follow it. An output resize re-constrains all popups.
+    parent and follow it.
+  - Output resize: reactive popups are re-constrained; non-reactive
+    popups are dismissed (popup_done). Smithay 0.7, following the
+    protocol, refuses a new configure for a non-reactive popup.
+  - Tiled windows have no z-order among themselves, so popups of tiled
+    windows are drawn and hit-tested above every tiled window, below
+    maximized, floating and fullscreen windows. Popups of other windows
+    are directly above their parent.
   - A popup whose parent toplevel is not mapped is dismissed at once
     (popup_done); it is never shown.
   - Smithay 0.7 does not expose a client's xdg_wm_base, so sash-wm
