@@ -409,6 +409,15 @@ change this file without the owner's approval.
   leave the device held.
 - Hotplug and monitor changes are out of scope, but unplugging must not
   crash; report what happens.
+- Owner approvals (M9 stage B): Smithay features backend_drm,
+  backend_gbm, backend_libinput, backend_udev, backend_session_libseat and
+  their crates (drm, drm-ffi, drm-sys, gbm, gbm-sys, input, input-sys,
+  libseat, libseat-sys, udev, libudev-sys, io-lifetimes, bytemuck_derive,
+  a second linux-raw-sys); trixie build packages libseat-dev,
+  libinput-dev, libudev-dev, libgbm-dev. The VM: the Debian 13 nocloud
+  cloud image (407 MB) run with QEMU/KVM as the owner's user (no sudo, no
+  libvirt, no window on the real display), and about 150 MB of runtime
+  packages installed by apt inside the guest.
 
 ## Protocol support and known limits
 
