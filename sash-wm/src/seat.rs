@@ -6,12 +6,12 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     delegate_seat,
     input::{
         Seat, SeatHandler, SeatState,
-        keyboard::{FilterResult, Keycode},
+        keyboard::{FilterResult, Keycode, Keysym},
         pointer::{AxisFrame, ButtonEvent, CursorImageStatus, GrabStartData, MotionEvent},
     },
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
@@ -27,6 +27,12 @@ use crate::{
 /// Linux input event codes (linux/input-event-codes.h).
 pub const BTN_LEFT: u32 = 0x110;
 pub const BTN_RIGHT: u32 = 0x111;
+
+/// A key press sash-wm keeps: a keybind, or a VT switch for the session.
+enum Intercepted {
+    Action(Action),
+    Vt(i32),
+}
 
 impl SeatHandler for Sash {
     type KeyboardFocus = WlSurface;
@@ -93,10 +99,20 @@ impl Sash {
             time_msec,
             |state, mods, key| match key_state {
                 KeyState::Pressed => {
+                    // Ctrl+Alt+F1..F12 (the keymap's VT switch keys) go to the session
+                    // first, so the keyboard can never be trapped (DRM backend only).
+                    let sym = key.modified_sym().raw();
+                    let first = Keysym::XF86_Switch_VT_1.raw();
+                    if state.vt_switch.is_some() && (first..first + 12).contains(&sym) {
+                        state.keybinds.swallowed.push(code);
+                        return FilterResult::Intercept(Some(Intercepted::Vt(
+                            (sym - first + 1) as i32,
+                        )));
+                    }
                     match keybinds::lookup(modifier, mods, key.raw_latin_sym_or_raw_current_sym()) {
                         Some(action) => {
                             state.keybinds.swallowed.push(code);
-                            FilterResult::Intercept(Some(action))
+                            FilterResult::Intercept(Some(Intercepted::Action(action)))
                         }
                         None => {
                             // A key press can justify a popup grab (keyboard menus).
@@ -119,8 +135,15 @@ impl Sash {
                 }
             },
         );
-        if let Some(action) = action.flatten() {
-            self.run_action(action);
+        match action.flatten() {
+            Some(Intercepted::Action(action)) => self.run_action(action),
+            Some(Intercepted::Vt(vt)) => {
+                if let Some(switch) = self.vt_switch.as_mut() {
+                    tracing::info!(vt, "switching VT");
+                    switch(vt);
+                }
+            }
+            None => {}
         }
         // Releasing the modifier ends a mod+Tab cycle.
         if self.keybinds.cycle.is_some() && !modifier.held(&keyboard.modifier_state()) {
@@ -247,6 +270,24 @@ impl Sash {
                 };
                 let location = event.position_transformed(area.size) + area.loc.to_f64();
                 self.pointer_moved_to(location, event.time_msec());
+            }
+            InputEvent::PointerMotion { event } => {
+                // Relative motion (libinput): moves the pointer, kept on the output.
+                let (Some(pointer), Some(output)) = (self.seat.get_pointer(), self.output.clone())
+                else {
+                    return;
+                };
+                let Some(area) = self.space.output_geometry(&output) else {
+                    return;
+                };
+                let moved = pointer.current_location() + event.delta();
+                let x = moved
+                    .x
+                    .clamp(area.loc.x as f64, (area.loc.x + area.size.w) as f64 - 1.0);
+                let y = moved
+                    .y
+                    .clamp(area.loc.y as f64, (area.loc.y + area.size.h) as f64 - 1.0);
+                self.pointer_moved_to((x, y).into(), event.time_msec());
             }
             InputEvent::PointerButton { event } => {
                 self.pointer_button(event.button_code(), event.state(), event.time_msec());

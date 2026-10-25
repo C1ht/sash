@@ -6,12 +6,11 @@
 //! holds redraws back until the host's frame callback for the previous frame
 //! arrives, so a hidden window draws nothing and clients get no frame callbacks.
 
-use std::{cell::RefCell, os::unix::fs::MetadataExt, rc::Rc, time::Instant};
+use std::{cell::RefCell, rc::Rc, time::Instant};
 
 use smithay::{
     backend::{
-        allocator::{Format, Fourcc},
-        egl::{EGLDevice, ffi::egl},
+        egl::ffi::egl,
         renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
@@ -84,32 +83,6 @@ fn disable_swap_wait(
     Ok(())
 }
 
-/// What the nested renderer can offer clients as dmabufs: its render node and the
-/// formats EGL can import, provided a texture exported as a dmabuf imports back
-/// (self-test). None means shm only.
-fn dmabuf_offer(renderer: &mut GlesRenderer) -> Option<(u64, Vec<Format>)> {
-    let device = EGLDevice::device_for_display(renderer.egl_context().display()).ok()?;
-    let node = device.render_device_path().ok()?;
-    let main_device = std::fs::metadata(&node).ok()?.rdev();
-    let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
-    let Some(test) =
-        dmabuf::export_texture(renderer, Fourcc::Abgr8888, (16, 16).into(), |_, _| true)
-    else {
-        tracing::warn!("dmabuf self-test: exporting a texture failed; shm only");
-        return None;
-    };
-    if let Err(err) = renderer.import_dmabuf(&test, None) {
-        tracing::warn!(%err, "dmabuf self-test: importing it back failed; shm only");
-        return None;
-    }
-    tracing::info!(
-        node = %node.display(),
-        formats = formats.len(),
-        "dmabuf self-test passed"
-    );
-    Some((main_device, formats))
-}
-
 pub fn start(
     event_loop: &EventLoop<'static, Server>,
     state: &mut Sash,
@@ -136,7 +109,7 @@ pub fn start(
         captures: 0,
     }));
 
-    let offer = dmabuf_offer(nested.borrow_mut().backend.renderer());
+    let offer = dmabuf::offer(nested.borrow_mut().backend.renderer());
     if let Some((main_device, formats)) = offer {
         let for_imports = nested.clone();
         state.enable_dmabuf(

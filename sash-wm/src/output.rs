@@ -35,6 +35,29 @@ pub fn create(state: &mut Sash, name: &str, size: Size<i32, Physical>) -> Output
     output
 }
 
+/// Creates the output for a real display (DRM): its connector name, physical size in
+/// millimetres and its one mode.
+pub fn create_physical(state: &mut Sash, name: &str, size_mm: (i32, i32), mode: Mode) -> Output {
+    let properties = PhysicalProperties {
+        size: size_mm.into(),
+        subpixel: Subpixel::Unknown,
+        make: "Unknown".into(),
+        model: name.into(),
+    };
+    let output = Output::new(name.into(), properties);
+    output.create_global::<Sash>(&state.display_handle);
+    output.change_current_state(
+        Some(mode),
+        Some(Transform::Normal),
+        Some(Scale::Integer(1)),
+        Some((0, 0).into()),
+    );
+    output.set_preferred(mode);
+    state.space.map_output(&output, (0, 0));
+    state.output = Some(output.clone());
+    output
+}
+
 /// Sets the output's only mode. Earlier modes are removed so clients see exactly one.
 pub fn set_size(output: &Output, size: Size<i32, Physical>) {
     let mode = Mode {

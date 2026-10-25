@@ -10,7 +10,8 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind, ExportMem, ImportAll, Offscreen, Renderer, Texture, damage::OutputDamageTracker,
+            Bind, ExportMem, ImportAll, ImportMem, Offscreen, Renderer, Texture,
+            damage::OutputDamageTracker,
         },
     },
     utils::{Buffer, Physical, Rectangle, Size, Transform},
@@ -29,8 +30,8 @@ pub fn write_png<R, T>(
     path: &Path,
 ) -> Result<(), Box<dyn Error>>
 where
-    R: Renderer + ImportAll + Offscreen<T> + Bind<T> + ExportMem,
-    R::TextureId: Texture + Clone + 'static,
+    R: Renderer + ImportAll + ImportMem + Offscreen<T> + Bind<T> + ExportMem,
+    R::TextureId: Texture + Send + Clone + 'static,
     R::Error: 'static,
 {
     let buffer_size = Size::<i32, Buffer>::from((size.w, size.h));

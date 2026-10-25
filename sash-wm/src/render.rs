@@ -7,16 +7,20 @@
 //! Shared by all backends.
 
 use smithay::{
+    backend::allocator::Fourcc,
     backend::renderer::{
-        ImportAll, Renderer, Texture,
+        ImportAll, ImportMem, Renderer, Texture,
         element::{
-            Kind, render_elements,
+            Kind,
+            memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
+            render_elements,
             solid::{SolidColorBuffer, SolidColorRenderElement},
             surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             utils::CropRenderElement,
         },
     },
-    utils::{Point, Rectangle, Scale},
+    input::pointer::CursorImageStatus,
+    utils::{Point, Rectangle, Scale, Transform},
 };
 
 use crate::{
@@ -36,10 +40,84 @@ const PREVIEW_BORDER: i32 = 2;
 const BACKDROP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 render_elements! {
-    pub OutputElement<R> where R: ImportAll;
+    pub OutputElement<R> where R: ImportAll + ImportMem;
     Tiled=CropRenderElement<WaylandSurfaceRenderElement<R>>,
     Window=WaylandSurfaceRenderElement<R>,
     Solid=SolidColorRenderElement,
+    Memory=MemoryRenderBufferRenderElement<R>,
+}
+
+/// Size of the built-in arrow cursor (drawn by the DRM backend for named shapes until
+/// cursor themes exist).
+const ARROW: (i32, i32) = (16, 24);
+
+/// The built-in arrow: a black outline, white inside, hotspot at its tip (0, 0).
+/// ARGB8888 pixels, generated rather than shipped as an image.
+pub fn arrow_pixels() -> Vec<u8> {
+    let (w, h) = ARROW;
+    // Inside the arrow: a head that widens one pixel per row and tapers back from row
+    // 10, and a stem going down and to the right from the head.
+    let inside = |x: i32, y: i32| {
+        let head = (0..16).contains(&y) && x >= 0 && x <= y.min(15 - (y - 10).max(0) * 2);
+        let stem_start = 4 + (y - 11) / 2;
+        let stem = (11..h).contains(&y) && (stem_start..stem_start + 3).contains(&x);
+        head || stem
+    };
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let edge = inside(x, y)
+                && [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                    .iter()
+                    .any(|(dx, dy)| !inside(x + dx, y + dy));
+            let argb: u32 = match (inside(x, y), edge) {
+                (true, true) => 0xff00_0000,
+                (true, false) => 0xffff_ffff,
+                _ => 0,
+            };
+            pixels.extend_from_slice(&argb.to_le_bytes());
+        }
+    }
+    pixels
+}
+
+/// The built-in arrow as a buffer the renderer can draw.
+pub fn arrow_buffer() -> MemoryRenderBuffer {
+    MemoryRenderBuffer::from_slice(
+        &arrow_pixels(),
+        Fourcc::Argb8888,
+        ARROW,
+        1,
+        Transform::Normal,
+        None,
+    )
+}
+
+/// The built-in arrow at the pointer, for a named cursor shape (DRM backend).
+pub fn arrow_element<R>(
+    state: &Sash,
+    renderer: &mut R,
+    arrow: &MemoryRenderBuffer,
+) -> Option<OutputElement<R>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Texture + Send + Clone + 'static,
+{
+    if !matches!(state.cursor.image(), CursorImageStatus::Named(_)) {
+        return None;
+    }
+    let location = state.seat.get_pointer()?.current_location();
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        (location.x, location.y),
+        arrow,
+        None,
+        None,
+        None,
+        Kind::Cursor,
+    )
+    .ok()
+    .map(OutputElement::Memory)
 }
 
 /// Compositor-drawn rectangles. The buffers persist so damage tracking sees them as the
@@ -144,8 +222,8 @@ impl Overlay {
 /// Not part of `output_elements`, so offscreen captures show no cursor.
 pub fn cursor_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Texture + Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Texture + Send + Clone + 'static,
 {
     let Some((surface, origin)) = state.cursor_surface() else {
         return Vec::new();
@@ -166,8 +244,8 @@ where
 /// (the first element is drawn on top).
 pub fn output_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Texture + Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Texture + Send + Clone + 'static,
 {
     let scale = Scale::from(scale);
     let dragged = state.dragged_window();
@@ -260,4 +338,37 @@ where
         elements.splice(0..0, preview);
     }
     elements
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_arrow_has_an_outline_and_its_tip_at_the_origin() {
+        let pixels = arrow_pixels();
+        let (w, h) = ARROW;
+        let at = |x: i32, y: i32| {
+            let i = ((y * w + x) * 4) as usize;
+            u32::from_le_bytes(pixels[i..i + 4].try_into().unwrap())
+        };
+        let mut picture = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                picture.push(match at(x, y) {
+                    0xff00_0000 => '#',
+                    0xffff_ffff => '.',
+                    _ => ' ',
+                });
+            }
+            picture.push('\n');
+        }
+        println!("{picture}");
+        assert_eq!(at(0, 0), 0xff00_0000, "the tip is the hotspot");
+        assert_eq!(at(w - 1, 0), 0, "transparent around it");
+        assert!(
+            pixels.chunks(4).any(|p| p == [0xff, 0xff, 0xff, 0xff]),
+            "white inside"
+        );
+    }
 }

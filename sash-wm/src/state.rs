@@ -12,7 +12,8 @@ use smithay::{
     },
     wayland::{
         compositor::CompositorState, cursor_shape::CursorShapeManagerState,
-        selection::data_device::DataDeviceState, shell::xdg::XdgShellState, shm::ShmState,
+        presentation::PresentationState, selection::data_device::DataDeviceState,
+        shell::xdg::XdgShellState, shm::ShmState,
     },
 };
 
@@ -79,6 +80,10 @@ pub struct Sash {
     /// Process start; the clock for frame callback timestamps and startup time.
     pub started: Instant,
     pub loop_signal: LoopSignal,
+    /// Switches to another VT through the session (DRM backend); None when nested.
+    pub vt_switch: Option<Box<dyn FnMut(i32)>>,
+    /// wp_presentation, advertised by the DRM backend (real on-screen times).
+    pub presentation: Option<PresentationState>,
     pub loop_handle: LoopHandle<'static, Server>,
     redraw: Ping,
 }
@@ -116,9 +121,17 @@ impl Sash {
             keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,
+            vt_switch: None,
+            presentation: None,
             loop_handle,
             redraw,
         }
+    }
+
+    /// Advertises wp_presentation with the monotonic clock (DRM backend).
+    pub fn enable_presentation(&mut self) {
+        // CLOCK_MONOTONIC is clock id 1.
+        self.presentation = Some(PresentationState::new::<Sash>(&self.display_handle, 1));
     }
 
     /// Asks the backend for a new frame. Requests made before the frame is drawn
@@ -142,3 +155,5 @@ impl Sash {
         self.space.refresh();
     }
 }
+
+smithay::delegate_presentation!(Sash);

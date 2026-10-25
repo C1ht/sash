@@ -13,14 +13,14 @@
 //! create_immed).
 //! Rendering needs nothing special: the renderer imports dmabufs like shm buffers.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, os::unix::fs::MetadataExt};
 
 use smithay::{
     backend::{
         allocator::{Buffer, Format, Fourcc, Modifier, dmabuf::Dmabuf},
-        egl::ffi::egl,
+        egl::{EGLDevice, ffi::egl},
         renderer::{
-            Offscreen,
+            ImportDma, Offscreen,
             gles::{GlesRenderer, GlesTexture},
         },
     },
@@ -250,6 +250,31 @@ impl Dispatch<ZwpLinuxBufferParamsV1, DmabufParamsData> for Sash {
             state, client, params, data,
         );
     }
+}
+
+/// What a renderer can offer clients as dmabufs: its render node and the formats EGL
+/// can import, provided a texture exported as a dmabuf imports back
+/// (self-test). None means shm only.
+pub fn offer(renderer: &mut GlesRenderer) -> Option<(u64, Vec<Format>)> {
+    let device = EGLDevice::device_for_display(renderer.egl_context().display()).ok()?;
+    let node = device.render_device_path().ok()?;
+    let main_device = std::fs::metadata(&node).ok()?.rdev();
+    let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
+    let Some(test) = export_texture(renderer, Fourcc::Abgr8888, (16, 16).into(), |_, _| true)
+    else {
+        tracing::warn!("dmabuf self-test: exporting a texture failed; shm only");
+        return None;
+    };
+    if let Err(err) = renderer.import_dmabuf(&test, None) {
+        tracing::warn!(%err, "dmabuf self-test: importing it back failed; shm only");
+        return None;
+    }
+    tracing::info!(
+        node = %node.display(),
+        formats = formats.len(),
+        "dmabuf self-test passed"
+    );
+    Some((main_device, formats))
 }
 
 /// Creates a new `size` texture of `format` cleared by `clear`, then

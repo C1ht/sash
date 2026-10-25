@@ -18,7 +18,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Modifier {
     Alt,
-    #[cfg_attr(not(test), expect(dead_code, reason = "the DRM backend arrives in M9"))]
     Super,
 }
 

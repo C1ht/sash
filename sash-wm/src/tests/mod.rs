@@ -291,3 +291,38 @@ fn close_request_removes_window_when_client_destroys_it() {
         h.mapped_windows() == 0 && h.unmapped_windows() == 0
     });
 }
+
+/// Ctrl+Alt+F1..F12 go to the session's VT switch before anything else and never reach
+/// a client (DRM backend; nested there is no switcher and the keys pass through).
+#[test]
+fn vt_switch_keys_go_to_the_session_first() {
+    use std::sync::{Arc, Mutex};
+
+    use harness::keys::{ALT, CTRL};
+    const F2: u32 = 60;
+    const F12: u32 = 88;
+
+    let mut harness = Harness::new();
+    let switched = Arc::new(Mutex::new(Vec::new()));
+    let record = switched.clone();
+    harness.server.state.vt_switch = Some(Box::new(move |vt| record.lock().unwrap().push(vt)));
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c = TestClient::connect(&socket);
+        let _w = c.map_window();
+        server.on_server(|h| {
+            h.chord(&[CTRL, ALT, F2]);
+            h.chord(&[CTRL, ALT, F12]);
+        });
+        c.roundtrip();
+        assert!(
+            !c.events.keys_pressed.contains(&F2),
+            "F2 reached the client"
+        );
+        assert!(
+            !c.events.keys_pressed.contains(&F12),
+            "F12 reached the client"
+        );
+    });
+    assert_eq!(*switched.lock().unwrap(), vec![2, 12]);
+}
