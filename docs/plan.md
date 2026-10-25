@@ -188,7 +188,15 @@ sash/
   - Remeasure stale content during resizes with a heavier client (browser) once dmabuf exists, before deciding on resize transactions.
   - Docs only: the M9 plan (docs/m9-plan.md), with safe testing on the owner's daily NVIDIA machine.
   - Investigation results: docs/m8-investigation.md. Limits (constants): 4 planes per dmabuf (Smithay's MAX_PLANES); at most 16384 x 16384.
-- **M9 DRM/KMS with presentation-time.** udev + libinput + libseat + GBM/EGL on a TTY, wp_presentation for on-screen frame timing. Starts with its own investigate-then-STOP pass.
+- **M8.1 Quarter snapping.** Rules are in CLAUDE.md ("Quarter snapping (M8.1)").
+  - First a report of what exists: the mod+arrow state table and how each quarter is reached by mouse and keyboard, with a test or screenshot for each.
+  - mod+Y / mod+U / mod+B / mod+N snap to the top-left / top-right / bottom-left / bottom-right quarter from any state except fullscreen (ignored); a tiled window floats first; the current quarter's chord does nothing; arrows unchanged; four new keybind table rows.
+  - Tests: unit (every chord from every state, exact rectangles on odd and tiny outputs, pre-snap restore), property (chords in the random sequences, M5 invariants), integration (chord on a tiled window with the configure size, from a half, restore with mod+Down, keys never reach clients). Checklist: a quarters section. Offscreen screenshots of all four quarters.
+- **M9 DRM/KMS with presentation-time.** Plan: docs/m9-plan.md. Rules: CLAUDE.md ("DRM/KMS backend, M9 stages A and B").
+  - Stage A (host, read-only): a probe in tools/ listing DRM devices, connectors, modes, planes and plane formats with queries only; no DRM master, no mode set.
+  - Stage B (VM only: QEMU/KVM, virtio-gpu, minimal Debian 13 guest, the release binary from the trixie container): Smithay's DRM/KMS path (libseat, udev, libinput, GBM/EGL, atomic modesetting on one connector at its preferred mode, page-flip pacing, presentation-time, hardware cursor with software fallback, VT switching via session pause/resume); modifier Super; mod+Shift+E; VT switches before anything else; debug-only `--exit-after <seconds>`; startup errors restore the display. Input per the owner's decision (fixed defaults, XKB_DEFAULT_* honoured). Hotplug out of scope; unplugging must not crash. Tests without GPU or session: mode selection, the pacing state machine, pause/resume sequences, input device add/remove with fakes; in the VM by script where possible. Measure in the VM (frame intervals under a drag, idle CPU and RAM); VM numbers do not predict NVIDIA hardware.
+  - Docs: docs/m9-stage-c.md, the exact checklist for the first run on the real machine.
+  - Stage C (first bare-metal run) only with the owner. Explicit sync (wp_linux_drm_syncobj_v1) is decided at that first bare-metal run (owner decision after M8).
 
 Proposals (no work until approved):
 - **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
@@ -211,6 +219,7 @@ On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itsel
   - For: no new settings, nothing to build in Settings; the system-wide keyboard config already exists on Debian.
   - Against: no way to change anything from the desktop. Anyone whose preferences differ from the defaults (very common for scrolling direction and speed) has no recourse without editing system files, which contradicts "the compositor owns all settings" in spirit.
 - **Middle ground to consider:** B now, with a fixed list of exactly which values would become settings under A, so the decision can be revisited at M9 when real devices exist.
+- **Owner decision (after M8): the middle ground.** Fixed defaults now; the keymap honours the XKB_DEFAULT_* environment variables and reads nothing from system configuration (not /etc/default/keyboard, not localed); the "input" group joins the closed settings list when the settings protocol is built. Recorded in CLAUDE.md ("Settings and configuration").
 
 ### Verification
 Every milestone report includes: real command output (build/clippy/test), the trixie container build result,

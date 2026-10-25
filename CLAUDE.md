@@ -358,6 +358,57 @@ change this file without the owner's approval.
     importable, after a startup self-test (a GL texture exported as a
     dmabuf and imported back). If the self-test fails, no dmabuf global.
   - Limits: 4 planes (Smithay's MAX_PLANES), at most 16384 x 16384.
+- Owner decisions (M8 review):
+  - The cursor resets to the arrow when the pointer moves to another
+    surface (or off every surface), until that client sets its own.
+  - Explicit sync is decided at the first bare-metal run (M9 stage C);
+    not built before.
+
+## Quarter snapping (M8.1)
+
+- Direct chords, from any state (tiled, floating, snapped): mod+Y
+  top-left quarter, mod+U top-right, mod+B bottom-left, mod+N
+  bottom-right. A fullscreen window ignores them. Checked against every
+  existing chord first; a clash stops the work and goes to the owner.
+- A chord on a tiled window floats it first, then snaps it, and
+  remembers the pre-snap rectangle as the other snaps do. The chord of
+  the quarter the window is already in does nothing. The mod+arrow
+  transitions stay exactly as they are.
+- Snap zones stay data; the closed settings list does not change. The
+  four chords are rows of the keybind table, so docs/keybinds.md and its
+  stale-doc and duplicate-chord tests cover them.
+
+## DRM/KMS backend, M9 stages A and B
+
+- Stages: A (host, read-only probe), B (VM only), C (first run on the
+  real machine, by the owner's checklist docs/m9-stage-c.md). Stage C is
+  not started without the owner.
+- Stage A: a probe in tools/ lists DRM devices, connectors, modes (and
+  the preferred one), planes and plane formats with queries only. It
+  never takes DRM master, sets a mode or touches Hyprland's session. If
+  it needs sudo or a group change, stop and ask.
+- Stage B runs only in a VM (QEMU/KVM, virtio-gpu, minimal Debian 13
+  guest); nothing runs on the real display. Ask before downloading an
+  image (state its size) or installing anything with sudo. The guest
+  runs the release binary built in the debian:trixie container.
+- Backend: Smithay's DRM/KMS path with its documented features; every
+  new crate and system package (host and trixie) is listed and approved
+  by the owner first. Pieces: libseat session (logind or seatd), udev,
+  libinput, GBM/EGL, atomic modesetting on one connector at its
+  preferred mode (no settings), page-flip pacing (render after the
+  previous flip completes, frame callbacks at presentation),
+  presentation-time, the cursor on the hardware plane with a software
+  fallback, VT switching through the session's pause and resume (stop
+  rendering and release the device on pause; restore everything on
+  resume).
+- The modifier constant is Super on DRM.
+- Safety: mod+Shift+E quits; Ctrl+Alt+F1..F12 are handled by the session
+  layer before anything else, so the keyboard can never be trapped. A
+  debug-only `--exit-after <seconds>` flag is an extra watchdog. Errors
+  at startup restore the display and exit with a message; no panic may
+  leave the device held.
+- Hotplug and monitor changes are out of scope, but unplugging must not
+  crash; report what happens.
 
 ## Protocol support and known limits
 
@@ -404,6 +455,15 @@ change this file without the owner's approval.
   - wallpaper
   - keybinds
   - monitors
+- Input (owner decision after M8, the "middle ground"): fixed defaults
+  for now. The keyboard keymap honours XKB_DEFAULT_LAYOUT,
+  XKB_DEFAULT_VARIANT, XKB_DEFAULT_OPTIONS and the other XKB_DEFAULT_*
+  variables; nothing is read from system configuration. Key repeat
+  600 ms / 25 Hz, libinput's default pointer speed, natural scrolling
+  off, tap-to-click on. An "input" group (keyboard layout, key repeat
+  delay and rate, pointer speed, natural scrolling, tap-to-click) joins
+  the closed settings list when the settings protocol is built; no
+  input setting exists before then.
 
 ## Frame callbacks
 
