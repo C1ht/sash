@@ -286,6 +286,16 @@ change this file without the owner's approval.
 - Output resize or hidden output: popups are re-constrained; a hidden
   output still serves requests and sends no frame callbacks.
 - No new settings.
+- Owner decisions (M7):
+  - Parent changes (move, resize, snap, layout): reactive popups
+    (set_reactive) are re-constrained to the output with a new
+    configure; non-reactive popups keep their position relative to the
+    parent and follow it. An output resize re-constrains all popups.
+  - A popup whose parent toplevel is not mapped is dismissed at once
+    (popup_done); it is never shown.
+  - Smithay 0.7 does not expose a client's xdg_wm_base, so sash-wm
+    dispatches xdg_wm_base itself (forwarding to Smithay) to record it
+    and post not_the_topmost_popup.
 
 ## Keybinds
 
