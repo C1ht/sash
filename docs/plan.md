@@ -169,7 +169,15 @@ sash/
   - Full keybind table as data, docs/keybinds.md generated and checked by a test, duplicate-chord test.
   - Tests: ratio math, property tests with tiled resizes (coverage, 64 px minimum), integration (keyboard and scripted mouse resize, output-boundary drag, lossless toggle and output resize keep ratios), edge cases (close during resize, hidden output during resize).
   - Measure: frame time and interval histograms during a scripted floating drag, a snap drag with the overlay and a tiled resize; ratio update and rectangle recompute time; idle with 3 windows.
-- **M7 xdg popups.**
+- **M7 xdg popups.** Rules are in CLAUDE.md ("Popups (M7)").
+  - xdg_popup and xdg_positioner (anchor, gravity, offset, size, slide/flip/resize per axis), reposition, nested popups, tooltips and grabbed popups, on tiled, floating, snapped and fullscreen windows. Smithay's documented popup support is used.
+  - Placement constrained to the output; popups draw directly above their parent, unclipped, follow it, and receive pointer input outside the parent's tile.
+  - Grabs: keyboard focus to the popup; a click outside dismisses the chain innermost first and is not delivered; focus returns to the parent. Every keybind and mod+drag start dismisses the target window's chain first, except keyboard resize and mod+right-drag resize (popups follow) and the debug default-mode toggle.
+  - Lifetime and errors per protocol: parent unmap or destroy dismisses; not_the_topmost_popup on out-of-order destroy; an invalid grab dismisses.
+  - Subsurfaces: investigate and report only (drawing and pointer input with a real client); build a fix only if it is a few lines.
+  - Tests: positioner math (every anchor/gravity, offsets, each adjustment alone and together, protocol order, popup larger than the output, reposition); property tests (inside the output when the adjustments allow it, deterministic, earlier invariants); headless integration (configure position, click-outside dismissal, nested dismissal order, following a moved/snapped/resized parent, parent unmap, out-of-order destroy, invalid grab serial, keybind dismissal, tooltip without focus, pointer input outside the tile, reposition); edge cases (parent unmapped, client disconnect with an open chain, hidden output, output resize, fixed-size parent at the output edge). A real client with menus: pavucontrol (installed).
+  - Manual checklist: a popups section in docs/floating-checklist.md.
+  - Measure with synthetic input: frame times and intervals with a popup chain open while the parent moves; popup placement and render cost; idle RAM and CPU with 3 windows and an open menu.
 - **M8 linux-dmabuf and cursor-shape.** Remeasure stale content during resizes with a heavier client (browser/Electron) once dmabuf exists, before deciding on resize transactions.
 - **M9 DRM/KMS with presentation-time.** udev + libinput + libseat + GBM/EGL on a TTY, wp_presentation for on-screen frame timing. Starts with its own investigate-then-STOP pass.
 

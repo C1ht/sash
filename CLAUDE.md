@@ -244,6 +244,48 @@ change this file without the owner's approval.
     per presented frame, with a 16 ms timer fallback while the output
     is not presenting. Keybind actions stay immediate.
   - Mouse bindings are rows of the same keybind table and doc.
+- Owner decisions (M6 review):
+  - Client xdg_toplevel.resize on tiled windows stays ignored.
+  - Mouse bindings ignore Shift: confirmed.
+  - GitHub Actions is blocked by account billing; ignore it. The local
+    debian:trixie container build is the compatibility check.
+
+## Popups (M7)
+
+- xdg_popup with xdg_positioner: anchor, gravity, offset, size and
+  constraint adjustments (slide, flip, resize in x and y), reposition
+  requests, nested popups, popups on tiled and floating windows,
+  tooltips (no grab) and grabbed popups (menus, dropdowns).
+- Smithay's documented popup support is used (positioner math,
+  PopupManager, popup grabs); sash-wm's own code is written from its own
+  understanding (originality rule).
+- Placement: relative to the parent surface, constrained to the output
+  area; the adjustments follow the protocol's order (flip, then slide,
+  then resize, per axis; a flip that does not remove the constraint is
+  reverted).
+- Rendering: a popup draws directly above its parent window in stacking
+  order and is not clipped to the parent's tile. A fullscreen window's
+  popups draw above it. Popups follow their parent when it moves,
+  resizes, snaps or changes layout.
+- Input: pointer hit-testing finds the topmost surface including popups,
+  also outside the parent's tile.
+- Grabs: a grabbed popup takes keyboard focus. A click outside the popup
+  chain dismisses the chain with popup_done, innermost (topmost) first
+  as the protocol requires; that click is not delivered to the window
+  underneath. Focus returns to the parent. Tooltips never take focus.
+- Keybinds and popups (owner decision): every keybind action and every
+  mod+drag start first dismisses the popup chain of the window it acts
+  on (the focused window; for mod+drag, the dragged window). Exceptions:
+  keyboard resize and mod+right-drag resize keep the popups open and
+  they follow the parent; the debug default-mode toggle changes nothing
+  on screen and dismisses nothing.
+- Lifetime: the parent unmapping or being destroyed dismisses its
+  popups. Destroying a popup that is not the topmost gives the protocol
+  error not_the_topmost_popup. An invalid grab serial, or a grab whose
+  parent is not the topmost popup, dismisses the popup per protocol.
+- Output resize or hidden output: popups are re-constrained; a hidden
+  output still serves requests and sends no frame callbacks.
+- No new settings.
 
 ## Keybinds
 
@@ -265,6 +307,7 @@ change this file without the owner's approval.
 
 ## Protocol support and known limits
 
+- xdg popups are supported from M7 (see "Popups (M7)").
 - `wl_data_device_manager` is a stub: advertised because some clients
   (foot) refuse to start without it. No clipboard or drag-and-drop
   logic yet.
