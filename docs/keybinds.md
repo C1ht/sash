@@ -33,6 +33,10 @@
 | mod+Right | mod | Snap: right half, then bottom-right | all |
 | mod+Up | mod | Snap: maximize, or the top quarter of a half | all |
 | mod+Down | mod | Snap: quarter to half, then restore | all |
+| mod+Y | mod | Snap to the top-left quarter (a tiled window floats first) | all |
+| mod+U | mod | Snap to the top-right quarter | all |
+| mod+B | mod | Snap to the bottom-left quarter | all |
+| mod+N | mod | Snap to the bottom-right quarter | all |
 | mod+Q | mod | Close the focused window | all |
 | mod+Shift+E | mod+Shift | Quit sash-wm | all |
 | mod+Return | mod | Start foot | debug only |

@@ -860,6 +860,13 @@ impl Sash {
                     self.arrange();
                 }
             }
+            Action::SnapQuarter(zone) => {
+                if let Some(id) = focused
+                    && self.windows.layout.snap_quarter(id, zone)
+                {
+                    self.arrange();
+                }
+            }
             Action::CycleNext => self.cycle(1),
             Action::CyclePrevious => self.cycle(-1),
             Action::ToggleDefaultMode => {

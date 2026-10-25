@@ -573,6 +573,24 @@ impl MonitorLayout {
         self.set_floating_rect(window, Rect::new(x, y, w, h))
     }
 
+    /// mod+Y/U/B/N: snaps straight to `zone` from any state (a tiled window floats
+    /// first; the pre-snap rectangle is kept as for other snaps). A fullscreen window
+    /// ignores it, and so does a window already in `zone`.
+    pub fn snap_quarter(&mut self, window: WindowId, zone: ZoneId) -> bool {
+        if self.fullscreen == Some(window) || self.snapped_zone(window) == Some(zone) {
+            return false;
+        }
+        let Some(state) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        if state.limits.is_fixed() || self.zones.get(zone).is_none() {
+            return false;
+        }
+        // A maximized tiled window leaves its maximize as it floats.
+        state.maximized_tiled = false;
+        self.snap(window, zone)
+    }
+
     /// mod+arrow, by the state table (snap::snap_step). Maximize on a tiled window
     /// keeps its leaf; other zones float a tiled window first.
     pub fn snap_key(&mut self, window: WindowId, key: Direction) -> bool {
@@ -1735,5 +1753,168 @@ mod tests {
                 rects.as_nanos() as f64 / rounds as f64
             );
         }
+    }
+
+    const QUARTERS: [ZoneId; 4] = [
+        ZoneId::TOP_LEFT,
+        ZoneId::TOP_RIGHT,
+        ZoneId::BOTTOM_LEFT,
+        ZoneId::BOTTOM_RIGHT,
+    ];
+
+    /// The starting states a quarter chord can meet, on window 2 of 1 | 2.
+    #[derive(Clone, Copy, Debug)]
+    enum Start {
+        Tiled,
+        MaximizedTiled,
+        Floating,
+        Snapped(ZoneId),
+        Fullscreen,
+    }
+
+    fn starts() -> Vec<Start> {
+        let mut starts = vec![
+            Start::Tiled,
+            Start::MaximizedTiled,
+            Start::Floating,
+            Start::Fullscreen,
+        ];
+        for zone in [
+            ZoneId::FULL,
+            ZoneId::LEFT,
+            ZoneId::RIGHT,
+            ZoneId::TOP_LEFT,
+            ZoneId::TOP_RIGHT,
+            ZoneId::BOTTOM_LEFT,
+            ZoneId::BOTTOM_RIGHT,
+        ] {
+            starts.push(Start::Snapped(zone));
+        }
+        starts
+    }
+
+    fn layout_in(area: Rect, start: Start) -> MonitorLayout {
+        let mut layout = MonitorLayout::new(area);
+        layout.open(id(1), NewWindow::default());
+        layout.open(id(2), NewWindow::default());
+        match start {
+            Start::Tiled => {}
+            Start::MaximizedTiled => assert!(layout.set_maximized(id(2), true)),
+            Start::Floating => {
+                layout.toggle(id(2));
+            }
+            Start::Snapped(zone) => assert!(layout.snap(id(2), zone)),
+            Start::Fullscreen => assert!(layout.set_fullscreen(id(2), true)),
+        }
+        layout
+    }
+
+    #[test]
+    fn quarter_chords_from_every_state() {
+        for area in [
+            Rect::new(0, 0, 800, 600),
+            Rect::new(0, 0, 801, 601),
+            Rect::new(0, 0, 3, 2),
+        ] {
+            for start in starts() {
+                for zone in QUARTERS {
+                    let mut layout = layout_in(area, start);
+                    let before = layout.rect_of(id(2));
+                    let changed = layout.snap_quarter(id(2), zone);
+                    let case = format!("{area:?} {start:?} {zone:?}");
+                    match start {
+                        Start::Fullscreen => {
+                            assert!(!changed, "{case}: fullscreen ignores it");
+                            assert_eq!(layout.fullscreen(), Some(id(2)), "{case}");
+                        }
+                        Start::Snapped(z) if z == zone => {
+                            assert!(!changed, "{case}: already there");
+                            assert_eq!(layout.rect_of(id(2)), before, "{case}");
+                        }
+                        _ => {
+                            assert!(changed, "{case}");
+                            assert_eq!(layout.mode(id(2)), Some(Mode::Floating), "{case}");
+                            assert_eq!(layout.snapped_zone(id(2)), Some(zone), "{case}");
+                            assert_eq!(layout.rect_of(id(2)), layout.zone_rect(zone), "{case}");
+                            assert!(!layout.is_maximized(id(2)), "{case}");
+                        }
+                    }
+                    layout.check_invariants();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_four_quarters_cover_the_output_exactly() {
+        for area in [
+            Rect::new(0, 0, 800, 600),
+            Rect::new(0, 0, 801, 601),
+            Rect::new(0, 0, 3, 2),
+            Rect::new(0, 0, 1, 1),
+        ] {
+            let layout = MonitorLayout::new(area);
+            let rects: Vec<Rect> = QUARTERS
+                .iter()
+                .map(|z| layout.zone_rect(*z).expect("default zone"))
+                .collect();
+            let total: i64 = rects.iter().map(|r| r.w as i64 * r.h as i64).sum();
+            assert_eq!(total, area.w as i64 * area.h as i64, "{area:?}");
+            for (i, a) in rects.iter().enumerate() {
+                assert!(a.x >= 0 && a.y >= 0 && a.right() <= area.w && a.bottom() <= area.h);
+                for b in &rects[i + 1..] {
+                    let overlap =
+                        a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
+                    assert!(!overlap, "{area:?}: {a:?} {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quarter_chords_keep_the_pre_snap_rectangle() {
+        // From a floating rectangle.
+        let mut layout = layout_in(AREA, Start::Floating);
+        let start = Rect::new(120, 80, 300, 200);
+        layout.set_floating_rect(id(2), start);
+        assert!(layout.snap_quarter(id(2), ZoneId::TOP_RIGHT));
+        assert!(layout.snap_quarter(id(2), ZoneId::BOTTOM_LEFT));
+        assert!(layout.unsnap_restore(id(2)));
+        assert_eq!(layout.rect_of(id(2)), Some(start));
+        // From a half: the rectangle before the half, not the half.
+        layout.set_floating_rect(id(2), start);
+        assert!(layout.snap_key(id(2), Direction::Left));
+        assert!(layout.snap_quarter(id(2), ZoneId::BOTTOM_RIGHT));
+        assert!(layout.snap_key(id(2), Direction::Down)); // quarter -> right half
+        assert!(layout.snap_key(id(2), Direction::Down)); // restore
+        assert_eq!(layout.rect_of(id(2)), Some(start));
+        // From a tiled window: its tile.
+        let mut layout = layout_in(AREA, Start::Tiled);
+        let tile = layout.rect_of(id(2)).expect("tile");
+        assert!(layout.snap_quarter(id(2), ZoneId::TOP_LEFT));
+        assert!(layout.unsnap_restore(id(2)));
+        assert_eq!(layout.rect_of(id(2)), Some(tile));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn fixed_size_windows_ignore_quarter_chords() {
+        let mut layout = MonitorLayout::new(AREA);
+        layout.open(
+            id(1),
+            NewWindow {
+                limits: SizeLimits {
+                    min: (200, 100),
+                    max: (200, 100),
+                },
+                ..NewWindow::default()
+            },
+        );
+        layout.place(id(1), (200, 100));
+        let before = layout.rect_of(id(1));
+        for zone in QUARTERS {
+            assert!(!layout.snap_quarter(id(1), zone));
+        }
+        assert_eq!(layout.rect_of(id(1)), before);
     }
 }

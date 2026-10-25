@@ -271,4 +271,8 @@ pub mod keys {
     pub const LEFT: u32 = 105;
     pub const RIGHT: u32 = 106;
     pub const DOWN: u32 = 108;
+    pub const Y: u32 = 21;
+    pub const U: u32 = 22;
+    pub const B: u32 = 48;
+    pub const N: u32 = 49;
 }

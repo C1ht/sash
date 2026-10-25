@@ -399,3 +399,194 @@ fn snapping_on_a_tiny_output() {
         c2.roundtrip();
     });
 }
+
+/// The four quarters as they could be reached before M8.1: by mouse (drop in the
+/// corner zone) and by keyboard (two mod+arrow steps). mod+Down twice restores.
+#[test]
+fn each_quarter_by_mouse_and_by_arrow_keys() {
+    let quarters = [
+        (
+            ZoneId::TOP_LEFT,
+            (2.0, 2.0),
+            [LEFT, UP],
+            Rect::new(0, 0, 400, 300),
+        ),
+        (
+            ZoneId::TOP_RIGHT,
+            (797.0, 2.0),
+            [RIGHT, UP],
+            Rect::new(400, 0, 400, 300),
+        ),
+        (
+            ZoneId::BOTTOM_LEFT,
+            (2.0, 597.0),
+            [LEFT, LEFT],
+            Rect::new(0, 300, 400, 300),
+        ),
+        (
+            ZoneId::BOTTOM_RIGHT,
+            (797.0, 597.0),
+            [RIGHT, RIGHT],
+            Rect::new(400, 300, 400, 300),
+        ),
+    ];
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let (mut c, w) = one_floating(&socket, &server);
+        for (zone, corner, keys, rect) in quarters {
+            server.on_server(move |h| {
+                // Mouse: grab the middle of the window, drop in the corner.
+                h.key(ALT, KeyState::Pressed);
+                h.pointer_to(250.0, 200.0);
+                h.button(BTN_LEFT, ButtonState::Pressed);
+                h.pointer_to(corner.0, corner.1);
+                assert_eq!(h.server.state.overlay.preview(), Some(rect));
+                h.button(BTN_LEFT, ButtonState::Released);
+                h.key(ALT, KeyState::Released);
+                assert_eq!((zone_of(h, 1), h.rect_of(1)), (Some(zone), Some(rect)));
+                h.chord(&[ALT, DOWN]);
+                h.chord(&[ALT, DOWN]);
+                // The pre-snap rectangle is where the drag had moved the window.
+                let restored = h.rect_of(1).expect("placed");
+                assert_eq!((restored.w, restored.h), (300, 200), "restored size");
+                let start = Rect::new(100, 100, 300, 200);
+                h.server
+                    .state
+                    .windows
+                    .layout
+                    .set_floating_rect(WindowId(1), start);
+                // Keyboard: two arrow steps.
+                for key in keys {
+                    h.chord(&[ALT, key]);
+                }
+                assert_eq!((zone_of(h, 1), h.rect_of(1)), (Some(zone), Some(rect)));
+                h.chord(&[ALT, DOWN]);
+                h.chord(&[ALT, DOWN]);
+                assert_eq!(
+                    h.rect_of(1),
+                    Some(Rect::new(100, 100, 300, 200)),
+                    "restored"
+                );
+            });
+            c.roundtrip();
+            assert_eq!(c.config(&w).map(|c| c.size), Some((300, 200)));
+        }
+    });
+}
+
+/// mod+Y / mod+U / mod+B / mod+N (M8.1).
+mod quarter_chords {
+    use super::*;
+    use crate::tests::harness::keys::{B, N, U, Y};
+
+    #[test]
+    fn a_chord_floats_and_snaps_a_tiled_window() {
+        let mut harness = Harness::new();
+        let socket = harness.socket_path();
+        harness.run_with_remote(move |server| {
+            let mut c1 = TestClient::connect(&socket);
+            let w1 = c1.map_window();
+            let mut c2 = TestClient::connect(&socket);
+            let w2 = c2.map_window(); // 1 | 2, window 2 focused
+            server.on_server(|h| {
+                h.chord(&[ALT, N]);
+                assert_eq!(h.mode_of(2), Some(crate::layout::Mode::Floating));
+                assert_eq!(zone_of(h, 2), Some(ZoneId::BOTTOM_RIGHT));
+                assert_eq!(h.rect_of(2), Some(Rect::new(400, 300, 400, 300)));
+                assert_eq!(h.rect_of(1), Some(AREA), "the sibling takes the space");
+            });
+            c1.roundtrip();
+            c2.roundtrip();
+            let config = c2.config(&w2).expect("configured");
+            assert_eq!(config.size, (400, 300));
+            assert_eq!(
+                config.tiled_edges,
+                [false, true, false, true],
+                "right and bottom"
+            );
+            assert_eq!(c1.config(&w1).map(|c| c.size), Some((800, 600)));
+            // The same chord again does nothing.
+            let configures = c2.events.configures;
+            server.on_server(|h| h.chord(&[ALT, N]));
+            c2.roundtrip();
+            assert_eq!(c2.events.configures, configures, "already in that quarter");
+            // Restore: mod+Down to the right half, then back to its old tile.
+            server.on_server(|h| {
+                h.chord(&[ALT, DOWN]);
+                assert_eq!(zone_of(h, 2), Some(ZoneId::RIGHT));
+                h.chord(&[ALT, DOWN]);
+                assert_eq!(zone_of(h, 2), None);
+                assert_eq!(
+                    h.rect_of(2),
+                    Some(Rect::new(400, 0, 400, 600)),
+                    "its old tile"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn chords_from_a_half_and_restore_with_mod_down() {
+        let mut harness = Harness::new();
+        let socket = harness.socket_path();
+        harness.run_with_remote(move |server| {
+            let (mut c, w) = one_floating(&socket, &server);
+            server.on_server(|h| {
+                h.chord(&[ALT, LEFT]);
+                assert_eq!(zone_of(h, 1), Some(ZoneId::LEFT));
+                h.chord(&[ALT, U]);
+                assert_eq!(zone_of(h, 1), Some(ZoneId::TOP_RIGHT));
+                assert_eq!(h.rect_of(1), Some(Rect::new(400, 0, 400, 300)));
+                h.chord(&[ALT, Y]);
+                assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 300)));
+                h.chord(&[ALT, B]);
+                assert_eq!(h.rect_of(1), Some(Rect::new(0, 300, 400, 300)));
+                // Quarter -> half -> the rectangle from before any snap.
+                h.chord(&[ALT, DOWN]);
+                assert_eq!(zone_of(h, 1), Some(ZoneId::LEFT));
+                h.chord(&[ALT, DOWN]);
+                assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 300, 200)));
+            });
+            c.roundtrip();
+            assert_eq!(c.config(&w).map(|c| c.size), Some((300, 200)));
+            for key in [Y, U, B, N] {
+                assert!(
+                    !c.events.keys_pressed.contains(&key),
+                    "key {key} reached the client"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_fullscreen_window_ignores_the_chords() {
+        let mut harness = Harness::new();
+        let socket = harness.socket_path();
+        harness.run_with_remote(move |server| {
+            let mut c = TestClient::connect(&socket);
+            let w = c.map_window();
+            w.toplevel.set_fullscreen(None);
+            c.roundtrip();
+            c.ack_and_commit(&w);
+            server.on_server(|h| {
+                for key in [Y, U, B, N] {
+                    h.chord(&[ALT, key]);
+                }
+                assert_eq!(
+                    h.server.state.windows.layout.fullscreen(),
+                    Some(WindowId(1))
+                );
+                assert_eq!(zone_of(h, 1), None);
+            });
+            c.roundtrip();
+            assert!(c.config(&w).expect("configured").fullscreen);
+            for key in [Y, U, B, N] {
+                assert!(
+                    !c.events.keys_pressed.contains(&key),
+                    "key {key} reached the client"
+                );
+            }
+        });
+    }
+}

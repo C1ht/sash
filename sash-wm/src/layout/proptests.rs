@@ -37,6 +37,8 @@ enum Op {
     SetDefault(Mode),
     Snap(usize, u16),
     SnapKey(usize, Direction),
+    /// mod+Y/U/B/N: one of the four quarters.
+    SnapQuarter(usize, u8),
     Unsnap(usize),
     /// A drag pulls a snapped window out at this pointer position.
     UnsnapDrag(usize, i32, i32),
@@ -113,6 +115,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => prop_oneof![Just(Mode::Tiled), Just(Mode::Floating)].prop_map(Op::SetDefault),
         3 => (index, 0..8u16).prop_map(|(i, z)| Op::Snap(i, z)),
         3 => (index, direction()).prop_map(|(i, d)| Op::SnapKey(i, d)),
+        3 => (index, 0..4u8).prop_map(|(i, q)| Op::SnapQuarter(i, q)),
         1 => index.prop_map(Op::Unsnap),
         1 => (index, -500..3000i32, -500..3000i32).prop_map(|(i, x, y)| Op::UnsnapDrag(i, x, y)),
         2 => (index, any::<bool>()).prop_map(|(i, m)| Op::Maximize(i, m)),
@@ -270,6 +273,29 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
         Op::SnapKey(i, d) => {
             if let Some(w) = pick(layout, i) {
                 layout.snap_key(w, d);
+            }
+        }
+        Op::SnapQuarter(i, q) => {
+            if let Some(w) = pick(layout, i) {
+                let zone = [
+                    ZoneId::TOP_LEFT,
+                    ZoneId::TOP_RIGHT,
+                    ZoneId::BOTTOM_LEFT,
+                    ZoneId::BOTTOM_RIGHT,
+                ][q as usize];
+                let fullscreen = layout.fullscreen() == Some(w);
+                let fixed = layout.limits(w).is_fixed();
+                // A floating window that has no rectangle yet (no first buffer).
+                let unplaced = layout.rect_of(w).is_none();
+                if layout.snap_quarter(w, zone) {
+                    assert_eq!(layout.snapped_zone(w), Some(zone));
+                    assert_eq!(layout.rect_of(w), layout.zone_rect(zone));
+                } else {
+                    assert!(
+                        fullscreen || fixed || unplaced || layout.snapped_zone(w) == Some(zone),
+                        "a quarter chord did nothing for no reason"
+                    );
+                }
             }
         }
         Op::Unsnap(i) => {

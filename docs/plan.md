@@ -188,7 +188,7 @@ sash/
   - Remeasure stale content during resizes with a heavier client (browser) once dmabuf exists, before deciding on resize transactions.
   - Docs only: the M9 plan (docs/m9-plan.md), with safe testing on the owner's daily NVIDIA machine.
   - Investigation results: docs/m8-investigation.md. Limits (constants): 4 planes per dmabuf (Smithay's MAX_PLANES); at most 16384 x 16384.
-- **M8.1 Quarter snapping.** Rules are in CLAUDE.md ("Quarter snapping (M8.1)").
+- **M8.1 Quarter snapping.** Done, pending approval. Manual checklist: docs/floating-checklist.md section 14. Rules are in CLAUDE.md ("Quarter snapping (M8.1)").
   - First a report of what exists: the mod+arrow state table and how each quarter is reached by mouse and keyboard, with a test or screenshot for each.
   - mod+Y / mod+U / mod+B / mod+N snap to the top-left / top-right / bottom-left / bottom-right quarter from any state except fullscreen (ignored); a tiled window floats first; the current quarter's chord does nothing; arrows unchanged; four new keybind table rows.
   - Tests: unit (every chord from every state, exact rectangles on odd and tiny outputs, pre-snap restore), property (chords in the random sequences, M5 invariants), integration (chord on a tiled window with the configure size, from a half, restore with mod+Down, keys never reach clients). Checklist: a quarters section. Offscreen screenshots of all four quarters.

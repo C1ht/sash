@@ -323,3 +323,18 @@ If you see flicker or stale frames, note which app and what you did: that is the
 - [ ] **Cursor surfaces.** An older app that sets its own cursor image (not a shape) shows that image at the pointer, with its hot spot where you click, and moves smoothly with the pointer.
 
 Notes:
+
+## 14. Quarter chords (M8.1)
+
+Setup as above (debug build, mod = Alt). Open two windows (foot).
+
+- [ ] **Each quarter.** On the focused window: Alt+Y top-left, Alt+U top-right, Alt+B bottom-left, Alt+N bottom-right. The window fills exactly that quarter of the output, with no gap at the edges or the middle.
+- [ ] **From tiled.** On a tiled window, a chord floats it and snaps it; its neighbour fills the freed space.
+- [ ] **From a half or the whole output.** Alt+Left, then Alt+U: the window goes straight to the top-right quarter. Same from Alt+Up (whole output).
+- [ ] **Same quarter.** Pressing the chord of the quarter the window is already in changes nothing (no flicker).
+- [ ] **Restore.** Alt+Down twice goes back through the half to the rectangle the window had before it was first snapped (for a tiled window: its tile size and position, floating).
+- [ ] **Arrows unchanged.** The mod+arrow transitions still behave as in section 10.
+- [ ] **Fullscreen.** A fullscreen window (`foot --fullscreen`) ignores all four chords.
+- [ ] **Keys stay with sash-wm.** None of Y, U, B, N reaches the app when pressed with Alt.
+
+Notes:

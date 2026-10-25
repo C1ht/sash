@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use smithay::input::keyboard::{Keycode, Keysym, ModifiersState};
 
 use crate::{
-    layout::{Direction, WindowId},
+    layout::{Direction, WindowId, ZoneId},
     seat::{BTN_LEFT, BTN_RIGHT},
 };
 
@@ -50,6 +50,8 @@ pub enum Action {
     Resize(Direction),
     /// mod+arrow: snap by the state table (layout::snap_step).
     Snap(Direction),
+    /// mod+Y/U/B/N: snap straight to a quarter zone, from any state but fullscreen.
+    SnapQuarter(ZoneId),
     /// Steps through windows in most-recently-used order while the modifier is held.
     CycleNext,
     CyclePrevious,
@@ -328,6 +330,30 @@ pub const TABLE: &[Binding] = &[
         Keysym::Down,
         Action::Snap(Down),
         "Snap: quarter to half, then restore",
+    ),
+    key(
+        Mod,
+        Keysym::y,
+        Action::SnapQuarter(ZoneId::TOP_LEFT),
+        "Snap to the top-left quarter (a tiled window floats first)",
+    ),
+    key(
+        Mod,
+        Keysym::u,
+        Action::SnapQuarter(ZoneId::TOP_RIGHT),
+        "Snap to the top-right quarter",
+    ),
+    key(
+        Mod,
+        Keysym::b,
+        Action::SnapQuarter(ZoneId::BOTTOM_LEFT),
+        "Snap to the bottom-left quarter",
+    ),
+    key(
+        Mod,
+        Keysym::n,
+        Action::SnapQuarter(ZoneId::BOTTOM_RIGHT),
+        "Snap to the bottom-right quarter",
     ),
     key(
         Mod,
