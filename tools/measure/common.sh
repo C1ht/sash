@@ -9,7 +9,7 @@
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # The measurement build: optimized, with debug assertions on, so the debug-only
 # synthetic input and offscreen capture exist. See `build_measure`.
-MEASURE_BIN="$ROOT/target/measure/release/sash-wm"
+MEASURE_BIN=${SASH_BIN:-"$ROOT/target/measure/release/sash-wm"}
 PIDS=()
 
 build_measure() {

@@ -362,6 +362,11 @@ change this file without the owner's approval.
 ## Protocol support and known limits
 
 - xdg popups are supported from M7 (see "Popups (M7)").
+- zwp_linux_dmabuf_v1 (version 5) and wp_cursor_shape_manager_v1 from M8.
+  Smithay 0.7 renumbers dmabuf planes and checks neither a format's plane
+  count nor the modifier, so sash-wm pre-checks zwp_linux_buffer_params_v1
+  creates (incomplete, invalid_format) before Smithay sees them. No explicit
+  sync (wp_linux_drm_syncobj_v1).
 - `wl_data_device_manager` is a stub: advertised because some clients
   (foot) refuse to start without it. No clipboard or drag-and-drop
   logic yet.

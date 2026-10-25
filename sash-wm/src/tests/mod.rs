@@ -3,6 +3,7 @@
 //! End-to-end tests: a real wayland-client talks to sash-wm over a socket.
 
 mod client;
+mod dmabuf;
 mod floating;
 mod gpu;
 mod harness;

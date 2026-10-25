@@ -3,7 +3,7 @@
 use std::{ffi::OsString, time::Instant};
 
 use smithay::{
-    desktop::{Space, Window},
+    desktop::{Space, Window, utils::send_frames_surface_tree},
     input::{Seat, SeatState, keyboard::XkbConfig},
     output::Output,
     reexports::{
@@ -11,12 +11,14 @@ use smithay::{
         wayland_server::DisplayHandle,
     },
     wayland::{
-        compositor::CompositorState, selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState, shm::ShmState,
+        compositor::CompositorState, cursor_shape::CursorShapeManagerState,
+        selection::data_device::DataDeviceState, shell::xdg::XdgShellState, shm::ShmState,
     },
 };
 
 use crate::{
+    cursor::Cursor,
+    dmabuf::Dmabufs,
     keybinds::{Keybinds, Modifier},
     popups::Popups,
     render::Overlay,
@@ -34,6 +36,11 @@ pub struct Protocols {
     pub xdg_shell: XdgShellState,
     pub data_device: DataDeviceState,
     pub seat: SeatState<Sash>,
+    #[expect(
+        dead_code,
+        reason = "the global lives on the display; this keeps its id"
+    )]
+    pub cursor_shape: CursorShapeManagerState,
 }
 
 impl Protocols {
@@ -45,6 +52,7 @@ impl Protocols {
             xdg_shell: XdgShellState::new::<Sash>(display),
             data_device: DataDeviceState::new::<Sash>(display),
             seat: SeatState::new(),
+            cursor_shape: CursorShapeManagerState::new::<Sash>(display),
         }
     }
 }
@@ -62,6 +70,8 @@ pub struct Sash {
     pub output: Option<Output>,
     pub windows: Windows,
     pub popups: Popups,
+    pub dmabufs: Dmabufs,
+    pub cursor: Cursor,
     /// Snap preview and fullscreen backdrop.
     pub overlay: Overlay,
     pub keybinds: Keybinds,
@@ -100,6 +110,8 @@ impl Sash {
             output: None,
             windows: Windows::new(),
             popups: Popups::default(),
+            dmabufs: Dmabufs::default(),
+            cursor: Cursor::default(),
             overlay: Overlay::new(),
             keybinds: Keybinds::new(modifier, socket_name),
             started,
@@ -123,6 +135,9 @@ impl Sash {
         let time = self.started.elapsed();
         for window in self.space.elements() {
             window.send_frame(output, time, None, |_, _| Some(output.clone()));
+        }
+        if let Some((surface, _)) = self.cursor_surface() {
+            send_frames_surface_tree(&surface, output, time, None, |_, _| Some(output.clone()));
         }
         self.space.refresh();
     }

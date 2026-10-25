@@ -30,6 +30,15 @@ use wayland_client::{
         wl_surface::WlSurface,
     },
 };
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{
+    zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+    zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
+    zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{Anchor, ConstraintAdjustment, Gravity, XdgPositioner},
@@ -61,6 +70,8 @@ pub struct Events {
     shm: Option<WlShm>,
     wm_base: Option<XdgWmBase>,
     subcompositor: Option<WlSubcompositor>,
+    dmabuf: Option<ZwpLinuxDmabufV1>,
+    cursor_shape: Option<WpCursorShapeManagerV1>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     pub configure_serial: Option<u32>,
@@ -75,6 +86,8 @@ pub struct Events {
     /// Evdev codes of wl_keyboard.key presses received.
     pub keys_pressed: Vec<u32>,
     pub pointer_entered: bool,
+    /// Serial of the last wl_pointer.enter (for set_cursor and cursor shapes).
+    pub pointer_enter_serial: Option<u32>,
     pub frames_done: u32,
     pub close_requested: bool,
     /// Per window: last configure (by xdg_toplevel) and its serial (by xdg_surface).
@@ -94,6 +107,12 @@ pub struct Events {
     pub popups_done: Vec<ObjectId>,
     /// Tokens of xdg_popup.repositioned events.
     pub repositioned: Vec<u32>,
+    /// Buffers from zwp_linux_buffer_params_v1.created, and failed events.
+    pub dmabufs_created: Vec<WlBuffer>,
+    pub dmabufs_failed: u32,
+    /// main_device of the default dmabuf feedback.
+    pub dmabuf_main_device: Option<u64>,
+    pub dmabuf_feedback_done: bool,
 }
 
 /// What a test popup asks for (an xdg_positioner).
@@ -143,6 +162,8 @@ pub struct TestClient {
     pub conn: Connection,
     queue: EventQueue<Events>,
     pub events: Events,
+    /// Window and popup buffers are dmabufs instead of wl_shm.
+    pub dmabuf_buffers: bool,
 }
 
 impl TestClient {
@@ -155,13 +176,14 @@ impl TestClient {
             conn,
             queue,
             events: Events::default(),
+            dmabuf_buffers: false,
         };
         client.roundtrip(); // globals
         client.roundtrip(); // seat capabilities
         client
     }
 
-    fn qh(&self) -> QueueHandle<Events> {
+    pub fn qh(&self) -> QueueHandle<Events> {
         self.queue.handle()
     }
 
@@ -237,6 +259,15 @@ impl TestClient {
     pub fn ack_and_commit_size(&mut self, window: &TestWindow, size: (i32, i32)) {
         let serial = self.events.serials[&window.xdg_surface.id()];
         window.xdg_surface.ack_configure(serial);
+        let buffer = self.buffer(size, window.color);
+        window.surface.attach(Some(&buffer), 0, 0);
+        window.surface.damage_buffer(0, 0, size.0, size.1);
+        window.surface.commit();
+        self.roundtrip();
+    }
+
+    /// Commits a buffer of its own size without acking anything.
+    pub fn commit_size(&mut self, window: &TestWindow, size: (i32, i32)) {
         let buffer = self.buffer(size, window.color);
         window.surface.attach(Some(&buffer), 0, 0);
         window.surface.damage_buffer(0, 0, size.0, size.1);
@@ -427,6 +458,78 @@ impl TestClient {
         (surface, subsurface)
     }
 
+    /// Sets a named cursor shape with `serial` (normally the pointer's enter serial).
+    pub fn set_cursor_shape(&mut self, serial: u32, shape: Shape) {
+        let manager = self
+            .events
+            .cursor_shape
+            .as_ref()
+            .expect("cursor shape manager");
+        let pointer = self.events.pointer.as_ref().expect("wl_pointer");
+        let device = manager.get_pointer(pointer, &self.qh(), ());
+        device.set_shape(serial, shape);
+        device.destroy();
+        self.roundtrip();
+    }
+
+    /// Sets a cursor surface of `size` with `hotspot`, using the pointer's enter serial.
+    pub fn set_cursor_surface(&mut self, size: (i32, i32), hotspot: (i32, i32)) -> WlSurface {
+        let qh = self.qh();
+        let surface = self
+            .events
+            .compositor
+            .as_ref()
+            .expect("wl_compositor")
+            .create_surface(&qh, ());
+        let buffer = self.buffer(size, 0xffff_ffff);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, size.0, size.1);
+        surface.commit();
+        let serial = self.events.pointer_enter_serial.expect("pointer entered");
+        let pointer = self.events.pointer.as_ref().expect("wl_pointer");
+        pointer.set_cursor(serial, Some(&surface), hotspot.0, hotspot.1);
+        self.roundtrip();
+        surface
+    }
+
+    /// A wl_buffer for a real one-plane dmabuf (create_immed; GPU tests, debug builds).
+    #[cfg(debug_assertions)]
+    pub fn dmabuf_buffer(&mut self, plane: &DmabufPlane) -> WlBuffer {
+        let params = self.dmabuf_params();
+        params.add(
+            plane.fd.as_fd(),
+            0,
+            plane.offset,
+            plane.stride,
+            (plane.modifier >> 32) as u32,
+            plane.modifier as u32,
+        );
+        let buffer = params.create_immed(
+            plane.size.0,
+            plane.size.1,
+            plane.fourcc,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            &self.qh(),
+            (),
+        );
+        params.destroy();
+        self.roundtrip();
+        buffer
+    }
+
+    /// New zwp_linux_buffer_params_v1.
+    pub fn dmabuf_params(&self) -> ZwpLinuxBufferParamsV1 {
+        let dmabuf = self.events.dmabuf.as_ref().expect("zwp_linux_dmabuf_v1");
+        dmabuf.create_params(&self.qh(), ())
+    }
+
+    /// Requests the default feedback and waits for its done event.
+    pub fn dmabuf_default_feedback(&mut self) {
+        let dmabuf = self.events.dmabuf.as_ref().expect("zwp_linux_dmabuf_v1");
+        let _feedback = dmabuf.get_default_feedback(&self.qh(), ());
+        self.dispatch_until("dmabuf feedback", |e| e.dmabuf_feedback_done);
+    }
+
     /// Requests a frame callback on the popup and commits.
     pub fn popup_frame_request(&mut self, popup: &TestPopup) {
         popup.surface.frame(&self.qh(), ());
@@ -450,25 +553,27 @@ impl TestClient {
     }
 
     /// An ARGB8888 shm buffer, backed by an unlinked file in XDG_RUNTIME_DIR.
+    /// A buffer for a window or popup: wl_shm, or a (fake) LINEAR ARGB8888 dmabuf when
+    /// `dmabuf_buffers` is set.
     fn buffer(&mut self, (width, height): (i32, i32), color: u32) -> WlBuffer {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let runtime_dir =
-            PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"));
-        let path = runtime_dir.join(format!(
-            "sash-wm-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .expect("shm file");
-        std::fs::remove_file(&path).expect("unlink shm file");
+        if self.dmabuf_buffers {
+            let file = buffer_file((width * 4 * height) as u64);
+            let params = self.dmabuf_params();
+            params.add(file.as_fd(), 0, 0, (width * 4) as u32, 0, 0);
+            let buffer = params.create_immed(
+                width,
+                height,
+                DrmFourcc::ARGB8888,
+                zwp_linux_buffer_params_v1::Flags::empty(),
+                &self.qh(),
+                (),
+            );
+            params.destroy();
+            return buffer;
+        }
         let stride = width * 4;
         let size = stride * height;
-        file.set_len(size as u64).expect("size shm file");
+        let file = buffer_file(size as u64);
         if color != 0 {
             use std::io::Write;
             let row: Vec<u8> = color.to_le_bytes().repeat(width as usize);
@@ -490,6 +595,49 @@ impl TestClient {
         pool.destroy();
         buffer
     }
+}
+
+/// An unlinked file of `size` bytes in XDG_RUNTIME_DIR, for shm pools and fake dmabuf
+/// planes (headless tests never read their content).
+pub fn buffer_file(size: u64) -> std::fs::File {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let runtime_dir = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"));
+    let path = runtime_dir.join(format!(
+        "sash-wm-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .expect("buffer file");
+    std::fs::remove_file(&path).expect("unlink buffer file");
+    file.set_len(size).expect("size buffer file");
+    file
+}
+
+/// A one-plane dmabuf made on the server side (GPU tests), handed to a client.
+#[cfg(debug_assertions)]
+pub struct DmabufPlane {
+    pub fd: std::os::fd::OwnedFd,
+    pub offset: u32,
+    pub stride: u32,
+    pub modifier: u64,
+    pub fourcc: u32,
+    pub size: (i32, i32),
+}
+
+/// DRM fourcc codes used by the tests.
+pub struct DrmFourcc;
+
+impl DrmFourcc {
+    pub const ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
+    pub const XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+    pub const NV12: u32 = u32::from_le_bytes(*b"NV12");
+    /// Not in the fake format table.
+    pub const RGB565: u32 = u32::from_le_bytes(*b"RG16");
 }
 
 impl Dispatch<WlRegistry, ()> for Events {
@@ -515,6 +663,12 @@ impl Dispatch<WlRegistry, ()> for Events {
             }
             "wl_shm" => events.shm = Some(registry.bind(name, 1, qh, ())),
             "wl_subcompositor" => events.subcompositor = Some(registry.bind(name, 1, qh, ())),
+            "wp_cursor_shape_manager_v1" => {
+                events.cursor_shape = Some(registry.bind(name, 1, qh, ()))
+            }
+            "zwp_linux_dmabuf_v1" => {
+                events.dmabuf = Some(registry.bind(name, version.min(5), qh, ()))
+            }
             "xdg_wm_base" => events.wm_base = Some(registry.bind(name, version.min(3), qh, ())),
             "wl_seat" => {
                 events.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ()));
@@ -586,7 +740,10 @@ impl Dispatch<WlPointer, ()> for Events {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { surface, .. } => {
+            wl_pointer::Event::Enter {
+                surface, serial, ..
+            } => {
+                events.pointer_enter_serial = Some(serial);
                 events.pointer_entered = true;
                 events.pointer_focus = Some(surface.id());
             }
@@ -723,6 +880,52 @@ impl Dispatch<XdgPopup, ()> for Events {
     }
 }
 
+impl Dispatch<ZwpLinuxBufferParamsV1, ()> for Events {
+    fn event(
+        events: &mut Self,
+        _: &ZwpLinuxBufferParamsV1,
+        event: zwp_linux_buffer_params_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_buffer_params_v1::Event::Created { buffer } => {
+                events.dmabufs_created.push(buffer)
+            }
+            zwp_linux_buffer_params_v1::Event::Failed => events.dmabufs_failed += 1,
+            _ => {}
+        }
+    }
+
+    wayland_client::event_created_child!(Events, ZwpLinuxBufferParamsV1, [
+        zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (WlBuffer, ()),
+    ]);
+}
+
+impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Events {
+    fn event(
+        events: &mut Self,
+        _: &ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                let bytes: [u8; 8] = device.as_slice().try_into().expect("dev_t");
+                events.dmabuf_main_device = Some(u64::from_ne_bytes(bytes));
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::Done => events.dmabuf_feedback_done = true,
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Events: ignore ZwpLinuxDmabufV1);
+delegate_noop!(Events: WpCursorShapeManagerV1);
+delegate_noop!(Events: WpCursorShapeDeviceV1);
 delegate_noop!(Events: XdgPositioner);
 delegate_noop!(Events: WlSubcompositor);
 delegate_noop!(Events: WlSubsurface);

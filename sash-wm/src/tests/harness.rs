@@ -13,7 +13,10 @@ use std::{
 };
 
 use smithay::{
-    backend::input::{ButtonState, KeyState},
+    backend::{
+        allocator::{Format, Fourcc, Modifier as DrmModifier},
+        input::{ButtonState, KeyState},
+    },
     input::keyboard::Keycode,
     output::Output,
     reexports::calloop::{EventLoop, ping},
@@ -28,6 +31,20 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The dmabuf main device the harness advertises: 226:128 (a render node's numbers).
+pub const FAKE_MAIN_DEVICE: u64 = (226 << 8) | 128;
+
+/// The harness's dmabuf format table: no GPU behind it, every buffer "imports".
+fn fake_dmabuf_formats() -> Vec<Format> {
+    [Fourcc::Argb8888, Fourcc::Xrgb8888, Fourcc::Nv12]
+        .into_iter()
+        .map(|code| Format {
+            code,
+            modifier: DrmModifier::Linear,
+        })
+        .collect()
+}
+
 pub struct Harness {
     event_loop: EventLoop<'static, Server>,
     pub server: Server,
@@ -41,7 +58,14 @@ pub struct Harness {
 }
 
 impl Harness {
+    /// A harness advertising the fake dmabuf format table.
     pub fn new() -> Self {
+        Self::with_dmabuf_formats(fake_dmabuf_formats())
+    }
+
+    /// A harness advertising `formats` as dmabufs (every buffer "imports"; a GPU test
+    /// imports for real when it renders).
+    pub fn with_dmabuf_formats(formats: Vec<Format>) -> Self {
         let event_loop = EventLoop::try_new().expect("event loop");
         let (redraw, redraw_requests) = ping::make_ping().expect("ping");
         let mut server =
@@ -53,6 +77,9 @@ impl Harness {
             .handle()
             .insert_source(redraw_requests, move |_, _, _| flag.set(true))
             .expect("redraw source");
+        server
+            .state
+            .enable_dmabuf(FAKE_MAIN_DEVICE, formats, Box::new(|_| true));
         let output = output::create(&mut server.state, "headless", (800, 600).into());
         server.state.set_layout_area((800, 600).into());
 

@@ -4,7 +4,9 @@ mod backend;
 #[cfg(debug_assertions)]
 mod capture;
 mod clients;
+mod cursor;
 mod data_device;
+mod dmabuf;
 mod grab;
 mod keybinds;
 mod layout;

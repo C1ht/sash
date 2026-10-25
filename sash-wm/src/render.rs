@@ -140,6 +140,28 @@ impl Overlay {
     }
 }
 
+/// The cursor surface sash-wm draws, if the cursor is one: on top of everything.
+/// Not part of `output_elements`, so offscreen captures show no cursor.
+pub fn cursor_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Texture + Clone + 'static,
+{
+    let Some((surface, origin)) = state.cursor_surface() else {
+        return Vec::new();
+    };
+    let scale = Scale::from(scale);
+    let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+        renderer,
+        &surface,
+        origin.to_physical_precise_round(scale),
+        scale,
+        1.0,
+        Kind::Cursor,
+    );
+    surfaces.into_iter().map(OutputElement::Window).collect()
+}
+
 /// Render elements for the output at the origin with the given scale, front to back
 /// (the first element is drawn on top).
 pub fn output_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>

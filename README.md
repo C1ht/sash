@@ -58,7 +58,9 @@ SIGUSR1.
   measurement binary (optimized, debug assertions on) with
   `source tools/measure/common.sh && build_measure`, then run
   `tools/measure/run-drags.sh <log>` (drags on three foot windows),
-  `tools/measure/run-popup.sh <log> <capture dir>` (pavucontrol menu while dragging) or
+  `tools/measure/run-popup.sh <log> <capture dir>` (pavucontrol menu while dragging),
+  `tools/measure/run-resize.sh <log> <steps> <client...>` (configure to first buffer at
+  the new size, keyboard resizes) or
   `tools/measure/idle.sh <log> <windows> <seconds>` (idle CPU and memory, release
   build). Each prints frame-time and frame-interval statistics from the log.
 - `tools/similarity/`: the per-milestone similarity check against Smithay's examples.

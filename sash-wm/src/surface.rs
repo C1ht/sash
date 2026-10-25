@@ -41,6 +41,8 @@ impl CompositorHandler for Sash {
         let root = root_of(surface);
         if compositor::get_role(&root) == Some(XDG_POPUP_ROLE) {
             self.popup_committed(&root);
+        } else if self.cursor.is_surface(&root) {
+            self.request_redraw();
         } else {
             self.root_committed(&root);
         }

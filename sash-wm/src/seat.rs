@@ -10,9 +10,9 @@ use smithay::{
     },
     delegate_seat,
     input::{
-        SeatHandler, SeatState,
+        Seat, SeatHandler, SeatState,
         keyboard::{FilterResult, Keycode},
-        pointer::{AxisFrame, ButtonEvent, GrabStartData, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, CursorImageStatus, GrabStartData, MotionEvent},
     },
     reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     utils::{Logical, Point, SERIAL_COUNTER},
@@ -36,6 +36,10 @@ impl SeatHandler for Sash {
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.protocols.seat
     }
+
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.set_cursor(image);
+    }
 }
 
 delegate_seat!(Sash);
@@ -55,6 +59,7 @@ impl Sash {
         {
             focus = None;
         }
+        let previous = pointer.current_focus();
         let motion = MotionEvent {
             location,
             serial: SERIAL_COUNTER.next_serial(),
@@ -62,6 +67,13 @@ impl Sash {
         };
         pointer.motion(self, focus, &motion);
         pointer.frame(self);
+        if pointer.current_focus() != previous {
+            self.pointer_focus_changed();
+        }
+        // A cursor sash-wm draws follows the pointer.
+        if self.cursor_surface().is_some() {
+            self.request_redraw();
+        }
     }
 
     /// Handles a key press or release: runs a keybind, or forwards it to the focused

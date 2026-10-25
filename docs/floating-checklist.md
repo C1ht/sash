@@ -293,3 +293,33 @@ Setup as above (debug build, mod = Alt). Use an app with menus, for example `pav
 - [ ] **Output resize.** Resize the nested sash-wm window with a menu open: most menus (non-reactive) close; menus the app marks reactive stay and are moved onto the output.
 
 Notes:
+
+## 13. GPU buffers (linux-dmabuf) and cursors (M8)
+
+Setup as above (debug build, mod = Alt). sash-wm's log should show `dmabuf self-test passed` at start. Start GL apps with a throwaway config, for example `XDG_CONFIG_HOME=$(mktemp -d) WAYLAND_DISPLAY=<socket> kitty --config NONE`; for Firefox use a new empty profile (`firefox --new-instance --no-remote --profile $(mktemp -d)`).
+
+### GPU rendering
+
+- [ ] **kitty.** Opens without `MESA-EGL` warnings in its output (it renders on the NVIDIA GPU, not in software). Typing and scrolling look normal.
+- [ ] **Firefox.** A page with animation (CSS or video) plays smoothly, at the same speed as on the host.
+- [ ] **pavucontrol** and other GTK 4 apps look the same as before; menus open normally.
+- [ ] **foot** still works (it never uses the GPU; nothing changes for it).
+
+### Flicker and stale frames (no explicit sync yet)
+
+Watch closely for each GPU app above:
+
+- [ ] **No flicker:** no frame shows old or half-drawn content while typing, scrolling or animating.
+- [ ] **No tearing or garbage** when the window is resized (Alt+right-drag, Alt+Ctrl+Shift+H/J/K/L) or when it is tiled next to others.
+- [ ] **Popups and tiles:** a GPU app's menus, tiled clipping, floating, snapping and the snap preview behave exactly as with foot.
+
+If you see flicker or stale frames, note which app and what you did: that is the case explicit sync (wp_linux_drm_syncobj_v1) would fix.
+
+### Cursors
+
+- [ ] **Shapes.** Over foot's text the cursor becomes the text cursor (I-beam); over pavucontrol's buttons it is the arrow; resize borders of a client (if it draws them) show resize cursors.
+- [ ] **Reset.** Moving from foot to another window or to empty space gives the arrow back at once.
+- [ ] **Hidden.** An app that hides the cursor (a video player in fullscreen, or kitty while typing if configured) hides it over sash-wm.
+- [ ] **Cursor surfaces.** An older app that sets its own cursor image (not a shape) shows that image at the pointer, with its hot spot where you click, and moves smoothly with the pointer.
+
+Notes:

@@ -6,14 +6,16 @@
 //! holds redraws back until the host's frame callback for the previous frame
 //! arrives, so a hidden window draws nothing and clients get no frame callbacks.
 
-use std::{cell::RefCell, rc::Rc, time::Instant};
+use std::{cell::RefCell, os::unix::fs::MetadataExt, rc::Rc, time::Instant};
 
 use smithay::{
     backend::{
-        egl::ffi::egl,
-        renderer::{damage::OutputDamageTracker, gles::GlesRenderer},
+        allocator::{Format, Fourcc},
+        egl::{EGLDevice, ffi::egl},
+        renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
+    input::pointer::CursorImageStatus,
     output::Output,
     reexports::{
         calloop::{EventLoop, ping::PingSource},
@@ -22,7 +24,7 @@ use smithay::{
     utils::{Physical, Size, Transform},
 };
 
-use crate::{keybinds::Modifier, output, render, server::Server, state::Sash};
+use crate::{dmabuf, keybinds::Modifier, output, render, server::Server, state::Sash};
 
 /// Keybind modifier when nested: the host compositor usually captures Super.
 pub const MODIFIER: Modifier = Modifier::Alt;
@@ -40,6 +42,9 @@ struct Nested {
     output: Output,
     damage: OutputDamageTracker,
     counters: Counters,
+    /// The cursor last applied to the host window: its generation, and whether it
+    /// was a live cursor surface (a dying one falls back to the arrow).
+    cursor_applied: Option<(u64, bool)>,
     /// Number of offscreen captures written (debug builds).
     #[cfg(debug_assertions)]
     captures: u32,
@@ -79,6 +84,32 @@ fn disable_swap_wait(
     Ok(())
 }
 
+/// What the nested renderer can offer clients as dmabufs: its render node and the
+/// formats EGL can import, provided a texture exported as a dmabuf imports back
+/// (self-test). None means shm only.
+fn dmabuf_offer(renderer: &mut GlesRenderer) -> Option<(u64, Vec<Format>)> {
+    let device = EGLDevice::device_for_display(renderer.egl_context().display()).ok()?;
+    let node = device.render_device_path().ok()?;
+    let main_device = std::fs::metadata(&node).ok()?.rdev();
+    let formats: Vec<Format> = renderer.dmabuf_formats().into_iter().collect();
+    let Some(test) =
+        dmabuf::export_texture(renderer, Fourcc::Abgr8888, (16, 16).into(), |_, _| true)
+    else {
+        tracing::warn!("dmabuf self-test: exporting a texture failed; shm only");
+        return None;
+    };
+    if let Err(err) = renderer.import_dmabuf(&test, None) {
+        tracing::warn!(%err, "dmabuf self-test: importing it back failed; shm only");
+        return None;
+    }
+    tracing::info!(
+        node = %node.display(),
+        formats = formats.len(),
+        "dmabuf self-test passed"
+    );
+    Some((main_device, formats))
+}
+
 pub fn start(
     event_loop: &EventLoop<'static, Server>,
     state: &mut Sash,
@@ -100,9 +131,27 @@ pub fn start(
         damage: damage_tracker(size),
         backend,
         counters: Counters::default(),
+        cursor_applied: None,
         #[cfg(debug_assertions)]
         captures: 0,
     }));
+
+    let offer = dmabuf_offer(nested.borrow_mut().backend.renderer());
+    if let Some((main_device, formats)) = offer {
+        let for_imports = nested.clone();
+        state.enable_dmabuf(
+            main_device,
+            formats,
+            Box::new(move |buffer| {
+                let mut nested = for_imports.borrow_mut();
+                nested
+                    .backend
+                    .renderer()
+                    .import_dmabuf(buffer, None)
+                    .is_ok()
+            }),
+        );
+    }
 
     let handle = event_loop.handle();
     let for_redraws = nested.clone();
@@ -205,12 +254,38 @@ impl Nested {
         }
     }
 
+    /// Shows the cursor clients asked for on the host window: a named shape, or no
+    /// host cursor while it is hidden or a surface sash-wm draws itself.
+    fn apply_cursor(&mut self, state: &Sash) {
+        let image = state.cursor.image();
+        let applied = (
+            state.cursor.generation(),
+            matches!(image, CursorImageStatus::Surface(_)),
+        );
+        if self.cursor_applied == Some(applied) {
+            return;
+        }
+        self.cursor_applied = Some(applied);
+        let window = self.backend.window();
+        match image {
+            CursorImageStatus::Named(icon) => {
+                window.set_cursor(icon);
+                window.set_cursor_visible(true);
+            }
+            CursorImageStatus::Hidden | CursorImageStatus::Surface(_) => {
+                window.set_cursor_visible(false)
+            }
+        }
+    }
+
     fn render(&mut self, state: &Sash) -> Result<FrameTimes, Box<dyn std::error::Error>> {
+        self.apply_cursor(state);
         let start = Instant::now();
         let age = self.backend.buffer_age().unwrap_or(0);
         let damage = {
             let (renderer, mut framebuffer) = self.backend.bind()?;
-            let elements = render::output_elements(state, renderer, 1.0);
+            let mut elements = render::cursor_elements(state, renderer, 1.0);
+            elements.extend(render::output_elements(state, renderer, 1.0));
             let result = self.damage.render_output(
                 renderer,
                 &mut framebuffer,
