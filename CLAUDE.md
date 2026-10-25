@@ -327,6 +327,28 @@ change this file without the owner's approval.
   (delivered). Shift is ignored when matching pointer rows, because
   Shift during a drag turns edge snapping off.
 
+## linux-dmabuf and cursor-shape (M8)
+
+- Investigate first (docs-only commit, report), then build.
+- zwp_linux_dmabuf_v1 at the highest version Smithay 0.7.0 supports,
+  with feedback derived from what the renderer can import. Only formats
+  and modifiers verified to import are advertised.
+- A client buffer is imported when it is attached. Failures give the
+  zwp_linux_buffer_params_v1 protocol errors or the failed event, as the
+  protocol says; never a panic. Limits (planes, size) are constants,
+  listed in docs/plan.md.
+- dmabuf buffers render through the same paths as shm buffers: tile
+  clipping, floating, popups and snap previews all still work.
+- Frame callbacks and buffer release follow the protocol: a buffer is
+  released when it is no longer used for presentation.
+- wp_cursor_shape_manager_v1 is implemented. In the nested backend the
+  shape is applied to the host window's cursor through winit. Client
+  cursor surfaces keep working. Cursor position and visibility rules
+  stay as they are. No settings.
+- No explicit sync (wp_linux_drm_syncobj_v1) without the owner's
+  approval after the investigation.
+- M9 (DRM/KMS) is planned in docs only during M8; no M9 code.
+
 ## Protocol support and known limits
 
 - xdg popups are supported from M7 (see "Popups (M7)").
