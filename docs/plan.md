@@ -186,7 +186,8 @@ sash/
   - Tests: headless params errors with a fake format table (duplicate plane, missing plane, bad dimensions, unsupported format, modifier mismatch, create before all planes, destroy after create_immed; the server survives, a new client connects); ignored GPU tests importing a real dmabuf and sampling pixels through the capture path; property tests mixing dmabuf and shm windows and popups; edge cases (disconnect with a dmabuf attached, destroyed before commit, resize with different buffer sizes, a dmabuf popup, cursor shape without pointer focus).
   - By hand (throwaway profiles): kitty and foot on the GPU, Firefox with a local animated page (no network), pavucontrol. Compare with M7: drag frame times and intervals, stale content (configure to first buffer at the new size) for foot, pavucontrol and Firefox, idle RAM and CPU. Manual checklist: a dmabuf section in docs/floating-checklist.md.
   - Remeasure stale content during resizes with a heavier client (browser) once dmabuf exists, before deciding on resize transactions.
-  - Docs only: the M9 plan (below), with safe testing on the owner's daily NVIDIA machine.
+  - Docs only: the M9 plan (docs/m9-plan.md), with safe testing on the owner's daily NVIDIA machine.
+  - Investigation results: docs/m8-investigation.md. Limits (constants): 4 planes per dmabuf (Smithay's MAX_PLANES); at most 16384 x 16384.
 - **M9 DRM/KMS with presentation-time.** udev + libinput + libseat + GBM/EGL on a TTY, wp_presentation for on-screen frame timing. Starts with its own investigate-then-STOP pass.
 
 Proposals (no work until approved):

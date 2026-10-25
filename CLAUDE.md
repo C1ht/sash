@@ -348,6 +348,16 @@ change this file without the owner's approval.
 - No explicit sync (wp_linux_drm_syncobj_v1) without the owner's
   approval after the investigation.
 - M9 (DRM/KMS) is planned in docs only during M8; no M9 code.
+- Investigation: docs/m8-investigation.md. M9 plan: docs/m9-plan.md.
+- Owner decisions (M8):
+  - Client cursor surfaces (wl_pointer.set_cursor) are drawn by sash-wm
+    at the pointer, hotspot respected, with the host cursor hidden while
+    one is set; named shapes (cursor-shape) go to the host cursor through
+    winit; the hidden state hides it. The DRM backend reuses this.
+  - "Verified to import": the formats and modifiers EGL reports as
+    importable, after a startup self-test (a GL texture exported as a
+    dmabuf and imported back). If the self-test fails, no dmabuf global.
+  - Limits: 4 planes (Smithay's MAX_PLANES), at most 16384 x 16384.
 
 ## Protocol support and known limits
 
