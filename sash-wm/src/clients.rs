@@ -2,11 +2,15 @@
 
 //! Accepting client connections and the data kept per client.
 
-use std::{ffi::OsString, sync::Arc};
+use std::{
+    ffi::OsString,
+    sync::{Arc, Mutex},
+};
 
 use smithay::{
     reexports::{
         calloop::EventLoop,
+        wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
         wayland_server::backend::{ClientData, ClientId, DisconnectReason},
     },
     wayland::{compositor::CompositorClientState, socket::ListeningSocketSource},
@@ -17,6 +21,23 @@ use crate::server::Server;
 #[derive(Default)]
 pub struct ClientState {
     pub compositor: CompositorClientState,
+    /// The client's xdg_wm_base, for protocol errors Smithay 0.7 cannot send itself
+    /// (recorded from its requests, see `shell.rs`).
+    xdg_wm_base: Mutex<Option<XdgWmBase>>,
+}
+
+impl ClientState {
+    pub fn xdg_wm_base(&self) -> Option<XdgWmBase> {
+        self.xdg_wm_base.lock().ok()?.clone()
+    }
+
+    pub fn note_xdg_wm_base(&self, wm_base: &XdgWmBase) {
+        if let Ok(mut slot) = self.xdg_wm_base.lock()
+            && slot.is_none()
+        {
+            *slot = Some(wm_base.clone());
+        }
+    }
 }
 
 impl ClientData for ClientState {

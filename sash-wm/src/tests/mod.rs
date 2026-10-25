@@ -6,6 +6,7 @@ mod client;
 mod floating;
 mod gpu;
 mod harness;
+mod popups;
 mod snapping;
 mod tiled_resize;
 mod tiling;

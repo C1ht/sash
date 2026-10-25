@@ -70,7 +70,7 @@ sash/
   - The EGL swap interval is set to 0 in the nested backend. Smithay leaves it at 1, which gave 30 fps and blocked the event loop for about 17 ms per frame.
   - Negative xdg_toplevel min/max sizes are rejected before Smithay sees them. Smithay 0.7 panics on them in debug builds.
   - Smithay 0.7 does not expose a toplevel's xdg_surface. So a buffer before ack_configure gets `not_constructed` (not `unconfigured_buffer`), and an invalid window geometry is ignored and logged instead of answered with `xdg_surface.invalid_size`.
-  - Popups are not handled yet; `new_popup` is a no-op.
+  - Popups were not handled until M7.
   Proof:
   - An automated test with a small wayland-client test client that connects, maps an xdg_toplevel, and checks for keyboard and pointer focus events. Running foot by hand is extra.
   - An automated hidden-window test: hide the host window, check that a `wl_display.sync` roundtrip is still served, unhide, and check that exactly one frame follows.
@@ -169,12 +169,12 @@ sash/
   - Full keybind table as data, docs/keybinds.md generated and checked by a test, duplicate-chord test.
   - Tests: ratio math, property tests with tiled resizes (coverage, 64 px minimum), integration (keyboard and scripted mouse resize, output-boundary drag, lossless toggle and output resize keep ratios), edge cases (close during resize, hidden output during resize).
   - Measure: frame time and interval histograms during a scripted floating drag, a snap drag with the overlay and a tiled resize; ratio update and rectangle recompute time; idle with 3 windows.
-- **M7 xdg popups.** Rules are in CLAUDE.md ("Popups (M7)").
+- **M7 xdg popups.** Done, pending approval. Manual checklist: docs/floating-checklist.md section 12. Rules and owner decisions are in CLAUDE.md ("Popups (M7)").
   - xdg_popup and xdg_positioner (anchor, gravity, offset, size, slide/flip/resize per axis), reposition, nested popups, tooltips and grabbed popups, on tiled, floating, snapped and fullscreen windows. Smithay's documented popup support is used.
-  - Placement constrained to the output; popups draw directly above their parent, unclipped, follow it, and receive pointer input outside the parent's tile.
+  - Placement constrained to the output; popups draw directly above their parent (popups of tiled windows above every tile), unclipped, follow it, and receive pointer input outside the parent's tile. Reactive popups are re-constrained when the parent or output changes; on an output resize non-reactive popups are dismissed.
   - Grabs: keyboard focus to the popup; a click outside dismisses the chain innermost first and is not delivered; focus returns to the parent. Every keybind and mod+drag start dismisses the target window's chain first, except keyboard resize and mod+right-drag resize (popups follow) and the debug default-mode toggle.
   - Lifetime and errors per protocol: parent unmap or destroy dismisses; not_the_topmost_popup on out-of-order destroy; an invalid grab dismisses.
-  - Subsurfaces: investigate and report only (drawing and pointer input with a real client); build a fix only if it is a few lines.
+  - Subsurfaces: investigate and report only (drawing and pointer input with a real client); build a fix only if it is a few lines. Result: drawn and routed already (Firefox renders through a subsurface; a headless test covers pointer input on subsurfaces of windows and popups); no fix needed.
   - Tests: positioner math (every anchor/gravity, offsets, each adjustment alone and together, protocol order, popup larger than the output, reposition); property tests (inside the output when the adjustments allow it, deterministic, earlier invariants); headless integration (configure position, click-outside dismissal, nested dismissal order, following a moved/snapped/resized parent, parent unmap, out-of-order destroy, invalid grab serial, keybind dismissal, tooltip without focus, pointer input outside the tile, reposition); edge cases (parent unmapped, client disconnect with an open chain, hidden output, output resize, fixed-size parent at the output edge). A real client with menus: pavucontrol (installed).
   - Manual checklist: a popups section in docs/floating-checklist.md.
   - Measure with synthetic input: frame times and intervals with a popup chain open while the parent moves; popup placement and render cost; idle RAM and CPU with 3 windows and an open menu.

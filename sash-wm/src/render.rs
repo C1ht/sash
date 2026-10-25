@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! What to draw for an output. Tiled windows at their tile, clipped to it; maximized,
-//! floating and fullscreen windows unclipped above them; the snap preview just below
+//! floating and fullscreen windows unclipped above them; each window's popups directly
+//! above it, unclipped; the snap preview just below
 //! the dragged window; an opaque backdrop behind a fixed-size fullscreen window.
 //! Shared by all backends.
 
@@ -9,9 +10,9 @@ use smithay::{
     backend::renderer::{
         ImportAll, Renderer, Texture,
         element::{
-            AsRenderElements, Kind, render_elements,
+            Kind, render_elements,
             solid::{SolidColorBuffer, SolidColorRenderElement},
-            surface::WaylandSurfaceRenderElement,
+            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             utils::CropRenderElement,
         },
     },
@@ -20,7 +21,9 @@ use smithay::{
 
 use crate::{
     layout::{Layer, Rect},
+    popups::popups_of,
     state::Sash,
+    windows::Visible,
 };
 
 /// Background where no window is.
@@ -148,13 +151,49 @@ where
     let dragged = state.dragged_window();
     let mut elements = Vec::new();
     let mut preview_drawn = false;
-    for visible in state.visible_windows().into_iter().rev() {
-        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = visible.window.render_elements(
-            renderer,
-            visible.position.to_physical_precise_round(scale),
-            scale,
-            1.0,
-        );
+    let visible_windows = state.visible_windows();
+    let popup_elements = |renderer: &mut R, visible: &Visible<'_>| {
+        let mut out = Vec::new();
+        for (popup, origin) in popups_of(visible.window, visible.rect) {
+            let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+                renderer,
+                popup.wl_surface(),
+                origin.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
+            out.extend(surfaces.into_iter().map(OutputElement::Window));
+        }
+        out
+    };
+    // Popups go directly above their window, never clipped to its tile; tiled windows
+    // have no order among themselves, so their popups go above all of them.
+    let mut tiled_popups_drawn = false;
+    for visible in visible_windows.iter().rev() {
+        if visible.layer != Layer::Tiled {
+            elements.extend(popup_elements(renderer, visible));
+        } else if !tiled_popups_drawn {
+            tiled_popups_drawn = true;
+            for tiled in visible_windows
+                .iter()
+                .rev()
+                .filter(|v| v.layer == Layer::Tiled)
+            {
+                elements.extend(popup_elements(renderer, tiled));
+            }
+        }
+        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = match visible.window.toplevel() {
+            Some(toplevel) => render_elements_from_surface_tree(
+                renderer,
+                toplevel.wl_surface(),
+                visible.position.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            ),
+            None => Vec::new(),
+        };
         match visible.layer {
             Layer::Tiled => {
                 let r = visible.rect;

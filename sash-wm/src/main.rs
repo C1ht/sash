@@ -9,6 +9,7 @@ mod grab;
 mod keybinds;
 mod layout;
 mod output;
+mod popups;
 mod render;
 pub mod seat;
 mod server;

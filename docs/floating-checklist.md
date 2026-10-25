@@ -258,3 +258,38 @@ Setup as above, default mode tiled. Open three windows: 1 | (2 / 3). All keybind
 - [ ] **Client resize.** Dragging a tiled window's own border (apps with client-side borders) does nothing; tiled resize is Alt+right-drag only.
 
 Notes:
+
+## 12. Popups (M7)
+
+Setup as above (debug build, mod = Alt). Use an app with menus, for example `pavucontrol` (its "Show:" dropdown at the bottom and its tooltips) or a GTK or Qt app with a menu bar. Start it with `WAYLAND_DISPLAY=<socket> pavucontrol`.
+
+### Menus
+
+- [ ] **Open and close.** Click a dropdown or menu button. The menu appears next to it, with no flicker, and takes the keyboard (arrow keys move the highlight). Choosing an item closes it.
+- [ ] **Nested submenu.** In an app with submenus, hover an entry with an arrow. The submenu opens beside it. Both stay open while you move between them.
+- [ ] **Click outside.** With a menu open, click elsewhere (on the same window or another one). The whole menu chain closes, innermost first, and that click does nothing else: no button is pressed, no window is focused.
+- [ ] **Escape.** Escape closes the menu (the app does this) and the keyboard goes back to the window.
+- [ ] **Tooltip.** Hover a control with a tooltip. The tooltip appears and never takes the keyboard: typing still goes to the window.
+
+### Placement near each output edge
+
+- [ ] **Bottom.** A dropdown near the bottom edge opens above its button (flipped) or slides up; it is never cut off by the output edge.
+- [ ] **Right.** A menu near the right edge slides or flips to the left.
+- [ ] **Left and top.** Same near the left and top edges.
+
+### Popups from each kind of window
+
+- [ ] **Tiled.** A menu from a tiled window can extend over the neighbouring tile; it is drawn on top and can be clicked there.
+- [ ] **Floating.** A menu from a floating window can extend beyond the window.
+- [ ] **Snapped.** Same for a snapped (half or quarter) window.
+- [ ] **Fullscreen.** A menu from a fullscreen window is drawn above it.
+- [ ] **Window being dragged.** A tooltip shown while you move a window with its own title bar moves with the window.
+
+### Keybinds and popups
+
+- [ ] **Keybinds close menus.** With a menu open, Alt+H/J/K/L, Alt+Tab, Alt+F, Alt+arrow, Alt+Ctrl+H/J/K/L and Alt+Q each close the menu first, then do their action.
+- [ ] **Resize keeps them.** With a menu open, Alt+Ctrl+Shift+H/J/K/L or Alt+right-drag resizes the window and the menu stays open and follows.
+- [ ] **Alt+left-drag** on the window closes the menu and moves the window.
+- [ ] **Output resize.** Resize the nested sash-wm window with a menu open: most menus (non-reactive) close; menus the app marks reactive stay and are moved onto the output.
+
+Notes:

@@ -25,10 +25,14 @@ use wayland_client::{
         wl_seat::{self, WlSeat},
         wl_shm::{self, WlShm},
         wl_shm_pool::WlShmPool,
+        wl_subcompositor::WlSubcompositor,
+        wl_subsurface::WlSubsurface,
         wl_surface::WlSurface,
     },
 };
 use wayland_protocols::xdg::shell::client::{
+    xdg_popup::{self, XdgPopup},
+    xdg_positioner::{Anchor, ConstraintAdjustment, Gravity, XdgPositioner},
     xdg_surface::{self, XdgSurface},
     xdg_toplevel::{self, XdgToplevel},
     xdg_wm_base::{self, XdgWmBase},
@@ -56,6 +60,7 @@ pub struct Events {
     seat: Option<WlSeat>,
     shm: Option<WlShm>,
     wm_base: Option<XdgWmBase>,
+    subcompositor: Option<WlSubcompositor>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     pub configure_serial: Option<u32>,
@@ -78,6 +83,50 @@ pub struct Events {
     /// Serial of the last wl_pointer.button press, and all buttons pressed.
     pub button_serial: Option<u32>,
     pub buttons_pressed: Vec<u32>,
+    /// The surface each button press went to.
+    pub button_surfaces: Vec<ObjectId>,
+    /// The surfaces with keyboard and pointer focus now.
+    pub keyboard_focus: Option<ObjectId>,
+    pub pointer_focus: Option<ObjectId>,
+    /// Per popup: the last xdg_popup.configure (x, y, width, height).
+    popup_configs: HashMap<ObjectId, (i32, i32, i32, i32)>,
+    /// Popups that got popup_done, in order.
+    pub popups_done: Vec<ObjectId>,
+    /// Tokens of xdg_popup.repositioned events.
+    pub repositioned: Vec<u32>,
+}
+
+/// What a test popup asks for (an xdg_positioner).
+#[derive(Clone, Copy, Debug)]
+pub struct PopupSpec {
+    pub size: (i32, i32),
+    pub anchor_rect: (i32, i32, i32, i32),
+    pub anchor: Anchor,
+    pub gravity: Gravity,
+    pub adjust: ConstraintAdjustment,
+    pub offset: (i32, i32),
+    pub reactive: bool,
+}
+
+impl Default for PopupSpec {
+    /// A 50x40 menu below a 10x10 anchor at (10, 10), sliding to stay on the output.
+    fn default() -> Self {
+        Self {
+            size: (50, 40),
+            anchor_rect: (10, 10, 10, 10),
+            anchor: Anchor::BottomLeft,
+            gravity: Gravity::BottomRight,
+            adjust: ConstraintAdjustment::SlideX | ConstraintAdjustment::SlideY,
+            offset: (0, 0),
+            reactive: false,
+        }
+    }
+}
+
+pub struct TestPopup {
+    pub surface: WlSurface,
+    pub xdg_surface: XdgSurface,
+    pub popup: XdgPopup,
 }
 
 pub struct TestWindow {
@@ -263,6 +312,143 @@ impl TestClient {
         self.conn.flush().expect("flush");
     }
 
+    fn positioner(&self, spec: PopupSpec) -> XdgPositioner {
+        let wm_base = self.events.wm_base.as_ref().expect("xdg_wm_base");
+        let positioner = wm_base.create_positioner(&self.qh(), ());
+        positioner.set_size(spec.size.0, spec.size.1);
+        let (x, y, w, h) = spec.anchor_rect;
+        positioner.set_anchor_rect(x, y, w, h);
+        positioner.set_anchor(spec.anchor);
+        positioner.set_gravity(spec.gravity);
+        positioner.set_constraint_adjustment(spec.adjust);
+        positioner.set_offset(spec.offset.0, spec.offset.1);
+        if spec.reactive {
+            positioner.set_reactive();
+        }
+        positioner
+    }
+
+    /// Creates a popup on `parent` (a toplevel's or popup's xdg_surface), grabs with
+    /// `grab` as the serial if given, and sends the initial commit.
+    pub fn create_popup(
+        &mut self,
+        parent: &XdgSurface,
+        spec: PopupSpec,
+        grab: Option<u32>,
+    ) -> TestPopup {
+        let qh = self.qh();
+        let positioner = self.positioner(spec);
+        let surface = self
+            .events
+            .compositor
+            .as_ref()
+            .expect("wl_compositor")
+            .create_surface(&qh, ());
+        let wm_base = self.events.wm_base.as_ref().expect("xdg_wm_base");
+        let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
+        let popup = xdg_surface.get_popup(Some(parent), &positioner, &qh, ());
+        positioner.destroy();
+        if let Some(serial) = grab {
+            popup.grab(self.events.seat.as_ref().expect("wl_seat"), serial);
+        }
+        surface.commit();
+        self.roundtrip();
+        TestPopup {
+            surface,
+            xdg_surface,
+            popup,
+        }
+    }
+
+    /// Creates a popup, waits for its configure, acks it and commits a buffer of the
+    /// configured size.
+    pub fn open_popup(
+        &mut self,
+        parent: &XdgSurface,
+        spec: PopupSpec,
+        grab: Option<u32>,
+    ) -> TestPopup {
+        let popup = self.create_popup(parent, spec, grab);
+        let id = popup.xdg_surface.id();
+        self.dispatch_until("popup configure", |e| e.serials.contains_key(&id));
+        self.ack_and_commit_popup(&popup);
+        popup
+    }
+
+    pub fn ack_and_commit_popup(&mut self, popup: &TestPopup) {
+        let serial = self.events.serials[&popup.xdg_surface.id()];
+        popup.xdg_surface.ack_configure(serial);
+        let (_, _, w, h) = self.popup_config(popup).expect("popup configured");
+        let buffer = self.buffer((w, h), 0xff20_8020);
+        popup.surface.attach(Some(&buffer), 0, 0);
+        popup.surface.damage_buffer(0, 0, w, h);
+        popup.surface.commit();
+        self.roundtrip();
+    }
+
+    /// The last xdg_popup.configure: position relative to the parent, and size.
+    pub fn popup_config(&self, popup: &TestPopup) -> Option<(i32, i32, i32, i32)> {
+        self.events.popup_configs.get(&popup.popup.id()).copied()
+    }
+
+    pub fn popup_done(&self, popup: &TestPopup) -> bool {
+        self.events.popups_done.contains(&popup.popup.id())
+    }
+
+    /// Adds a desynchronized subsurface of `size` at `position` on `parent`, with a
+    /// buffer (and so the default, infinite input region), and commits the parent.
+    pub fn add_subsurface(
+        &mut self,
+        parent: &WlSurface,
+        position: (i32, i32),
+        size: (i32, i32),
+    ) -> (WlSurface, WlSubsurface) {
+        let qh = self.qh();
+        let surface = self
+            .events
+            .compositor
+            .as_ref()
+            .expect("wl_compositor")
+            .create_surface(&qh, ());
+        let subsurface = self
+            .events
+            .subcompositor
+            .as_ref()
+            .expect("wl_subcompositor")
+            .get_subsurface(&surface, parent, &qh, ());
+        subsurface.set_position(position.0, position.1);
+        subsurface.set_desync();
+        let buffer = self.buffer(size, 0xff80_2020);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, size.0, size.1);
+        surface.commit();
+        parent.commit();
+        self.roundtrip();
+        (surface, subsurface)
+    }
+
+    /// Requests a frame callback on the popup and commits.
+    pub fn popup_frame_request(&mut self, popup: &TestPopup) {
+        popup.surface.frame(&self.qh(), ());
+        popup.surface.commit();
+        self.roundtrip();
+    }
+
+    pub fn reposition(&mut self, popup: &TestPopup, spec: PopupSpec, token: u32) {
+        let positioner = self.positioner(spec);
+        popup.popup.reposition(&positioner, token);
+        positioner.destroy();
+        self.roundtrip();
+    }
+
+    /// Destroys a popup's objects (xdg_popup first, as the protocol asks).
+    pub fn destroy_popup(&mut self, popup: TestPopup) {
+        popup.popup.destroy();
+        popup.xdg_surface.destroy();
+        popup.surface.destroy();
+        let _ = self.try_roundtrip();
+    }
+
     /// An ARGB8888 shm buffer, backed by an unlinked file in XDG_RUNTIME_DIR.
     fn buffer(&mut self, (width, height): (i32, i32), color: u32) -> WlBuffer {
         static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -328,6 +514,7 @@ impl Dispatch<WlRegistry, ()> for Events {
                 events.compositor = Some(registry.bind(name, version.min(4), qh, ()))
             }
             "wl_shm" => events.shm = Some(registry.bind(name, 1, qh, ())),
+            "wl_subcompositor" => events.subcompositor = Some(registry.bind(name, 1, qh, ())),
             "xdg_wm_base" => events.wm_base = Some(registry.bind(name, version.min(3), qh, ())),
             "wl_seat" => {
                 events.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ()));
@@ -370,11 +557,15 @@ impl Dispatch<WlKeyboard, ()> for Events {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_keyboard::Event::Enter { .. } => {
+            wl_keyboard::Event::Enter { surface, .. } => {
                 events.keyboard_entered = true;
                 events.has_keyboard_focus = true;
+                events.keyboard_focus = Some(surface.id());
             }
-            wl_keyboard::Event::Leave { .. } => events.has_keyboard_focus = false,
+            wl_keyboard::Event::Leave { .. } => {
+                events.has_keyboard_focus = false;
+                events.keyboard_focus = None;
+            }
             wl_keyboard::Event::Key {
                 key,
                 state: WEnum::Value(wl_keyboard::KeyState::Pressed),
@@ -395,7 +586,11 @@ impl Dispatch<WlPointer, ()> for Events {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { .. } => events.pointer_entered = true,
+            wl_pointer::Event::Enter { surface, .. } => {
+                events.pointer_entered = true;
+                events.pointer_focus = Some(surface.id());
+            }
+            wl_pointer::Event::Leave { .. } => events.pointer_focus = None,
             wl_pointer::Event::Button {
                 serial,
                 button,
@@ -404,6 +599,9 @@ impl Dispatch<WlPointer, ()> for Events {
             } => {
                 events.button_serial = Some(serial);
                 events.buttons_pressed.push(button);
+                if let Some(focus) = events.pointer_focus.clone() {
+                    events.button_surfaces.push(focus);
+                }
             }
             _ => {}
         }
@@ -498,6 +696,36 @@ impl Dispatch<WlCallback, ()> for Events {
     }
 }
 
+impl Dispatch<XdgPopup, ()> for Events {
+    fn event(
+        events: &mut Self,
+        popup: &XdgPopup,
+        event: xdg_popup::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_popup::Event::Configure {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                events
+                    .popup_configs
+                    .insert(popup.id(), (x, y, width, height));
+            }
+            xdg_popup::Event::PopupDone => events.popups_done.push(popup.id()),
+            xdg_popup::Event::Repositioned { token } => events.repositioned.push(token),
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Events: XdgPositioner);
+delegate_noop!(Events: WlSubcompositor);
+delegate_noop!(Events: WlSubsurface);
 delegate_noop!(Events: WlCompositor);
 delegate_noop!(Events: WlShmPool);
 delegate_noop!(Events: ignore WlShm);

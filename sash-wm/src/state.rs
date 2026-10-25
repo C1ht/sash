@@ -18,6 +18,7 @@ use smithay::{
 
 use crate::{
     keybinds::{Keybinds, Modifier},
+    popups::Popups,
     render::Overlay,
     server::Server,
     windows::Windows,
@@ -60,6 +61,7 @@ pub struct Sash {
     pub space: Space<Window>,
     pub output: Option<Output>,
     pub windows: Windows,
+    pub popups: Popups,
     /// Snap preview and fullscreen backdrop.
     pub overlay: Overlay,
     pub keybinds: Keybinds,
@@ -97,6 +99,7 @@ impl Sash {
             space: Space::default(),
             output: None,
             windows: Windows::new(),
+            popups: Popups::default(),
             overlay: Overlay::new(),
             keybinds: Keybinds::new(modifier, socket_name),
             started,

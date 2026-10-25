@@ -12,6 +12,7 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{self, CompositorClientState, CompositorHandler, CompositorState},
+        shell::xdg::XDG_POPUP_ROLE,
         shm::{ShmHandler, ShmState},
     },
 };
@@ -35,8 +36,14 @@ impl CompositorHandler for Sash {
             return;
         }
         on_commit_buffer_handler::<Self>(surface);
+        self.popups.manager.commit(surface);
 
-        self.root_committed(&root_of(surface));
+        let root = root_of(surface);
+        if compositor::get_role(&root) == Some(XDG_POPUP_ROLE) {
+            self.popup_committed(&root);
+        } else {
+            self.root_committed(&root);
+        }
     }
 }
 

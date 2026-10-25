@@ -15,7 +15,7 @@ use smithay::{
             xdg_positioner::XdgPositioner,
             xdg_surface::XdgSurface,
             xdg_toplevel::{self, XdgToplevel},
-            xdg_wm_base::XdgWmBase,
+            xdg_wm_base::{self, XdgWmBase},
         },
         wayland_server::{
             Client, DataInit, Dispatch, DisplayHandle, Resource,
@@ -36,6 +36,7 @@ use smithay::{
 };
 
 use crate::{
+    clients::ClientState,
     layout::{Edges, Mode},
     state::Sash,
     windows::{DragKind, StateRequest},
@@ -85,28 +86,66 @@ impl XdgShellHandler for Sash {
         self.client_state_request(surface.wl_surface(), StateRequest::Fullscreen(false));
     }
 
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {
-        tracing::debug!("popup ignored: popups are not supported yet");
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        Sash::new_popup(self, surface, positioner);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, serial: Serial) {
+        self.grab_popup(surface, serial);
+    }
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
+        self.reposition_popup(surface, positioner, token);
+    }
+
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        Sash::popup_destroyed(self, &surface);
     }
 }
 
-// Everything except xdg_toplevel goes straight to Smithay (what `delegate_xdg_shell!`
-// would do); xdg_toplevel requests are checked first, see below.
+// Everything except xdg_wm_base and xdg_toplevel goes straight to Smithay (what
+// `delegate_xdg_shell!` would do); those two are handled first, see below.
 delegate_global_dispatch!(Sash: [XdgWmBase: ()] => XdgShellState);
-delegate_dispatch!(Sash: [XdgWmBase: XdgWmBaseUserData] => XdgShellState);
 delegate_dispatch!(Sash: [XdgPositioner: XdgPositionerUserData] => XdgShellState);
 delegate_dispatch!(Sash: [XdgPopup: XdgShellSurfaceUserData] => XdgShellState);
 delegate_dispatch!(Sash: [XdgSurface: XdgSurfaceUserData] => XdgShellState);
+
+/// Records the client's xdg_wm_base (Smithay 0.7 does not expose it; sash-wm needs
+/// it to post not_the_topmost_popup), then lets Smithay handle the request.
+impl Dispatch<XdgWmBase, XdgWmBaseUserData> for Sash {
+    fn request(
+        state: &mut Self,
+        client: &Client,
+        wm_base: &XdgWmBase,
+        request: xdg_wm_base::Request,
+        data: &XdgWmBaseUserData,
+        display: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let Some(client_state) = client.get_data::<ClientState>() {
+            client_state.note_xdg_wm_base(wm_base);
+        }
+        <XdgShellState as Dispatch<XdgWmBase, XdgWmBaseUserData, Self>>::request(
+            state, client, wm_base, request, data, display, data_init,
+        );
+    }
+
+    fn destroyed(
+        state: &mut Self,
+        client: ClientId,
+        wm_base: &XdgWmBase,
+        data: &XdgWmBaseUserData,
+    ) {
+        <XdgShellState as Dispatch<XdgWmBase, XdgWmBaseUserData, Self>>::destroyed(
+            state, client, wm_base, data,
+        );
+    }
+}
 
 /// Rejects negative min/max sizes with `xdg_toplevel.invalid_size` before Smithay sees
 /// them: Smithay 0.7 stores them in a `Size`, which panics on negative values in debug

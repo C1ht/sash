@@ -14,7 +14,7 @@ use smithay::{
         keyboard::{FilterResult, Keycode},
         pointer::{AxisFrame, ButtonEvent, GrabStartData, MotionEvent},
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
@@ -46,7 +46,15 @@ impl Sash {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        let focus = self.surface_at(location);
+        let mut focus = self.surface_at(location);
+        // While a popup chain is grabbed, other clients get no pointer events.
+        if let Some(root) = self.popups.grab_root()
+            && focus
+                .as_ref()
+                .is_some_and(|(surface, _)| !surface.id().same_client_as(&root.id()))
+        {
+            focus = None;
+        }
         let motion = MotionEvent {
             location,
             serial: SERIAL_COUNTER.next_serial(),
@@ -63,11 +71,13 @@ impl Sash {
             return;
         };
         let modifier = self.keybinds.modifier;
+        let serial = SERIAL_COUNTER.next_serial();
+        let focus = keyboard.current_focus();
         let action = keyboard.input(
             self,
             code,
             key_state,
-            SERIAL_COUNTER.next_serial(),
+            serial,
             time_msec,
             |state, mods, key| match key_state {
                 KeyState::Pressed => {
@@ -76,7 +86,13 @@ impl Sash {
                             state.keybinds.swallowed.push(code);
                             FilterResult::Intercept(Some(action))
                         }
-                        None => FilterResult::Forward,
+                        None => {
+                            // A key press can justify a popup grab (keyboard menus).
+                            if let Some(focus) = &focus {
+                                state.popups.note_key_press(serial, focus.clone());
+                            }
+                            FilterResult::Forward
+                        }
                     }
                 }
                 KeyState::Released => {
@@ -109,7 +125,9 @@ impl Sash {
 
     /// Handles a pointer button. A plain press on a window focuses and raises it and is
     /// delivered. mod+left-drag moves and mod+right-drag resizes; mod+clicks are never
-    /// delivered, nor are their releases.
+    /// delivered, nor are their releases. While a popup chain is grabbed, a press
+    /// outside it dismisses it and is not delivered; a mod+click dismisses it too,
+    /// except a resize of its own window.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time_msec: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
@@ -125,10 +143,24 @@ impl Sash {
                     .unwrap_or_default();
                 let modifier = self.keybinds.modifier;
                 let under = self.window_at(location);
+                let grab_window = self
+                    .popups
+                    .grab_root()
+                    .and_then(|root| self.windows.by_surface(&root).map(|m| m.id));
                 if modifier.held(&mods) {
                     // Every mod+click is kept from clients, bound or not.
                     self.windows.swallowed_buttons.push(button);
-                    let kind = match keybinds::lookup_button(modifier, &mods, button) {
+                    let action = keybinds::lookup_button(modifier, &mods, button);
+                    // A resize keeps the window's popups (they follow it); any other
+                    // mod+click dismisses them, and a grabbed chain elsewhere.
+                    let resize = action == Some(Action::ResizeDrag);
+                    if !(resize && grab_window.is_some() && grab_window == under) {
+                        self.dismiss_grab();
+                    }
+                    if !resize && let Some(window) = under {
+                        self.dismiss_popups(window);
+                    }
+                    let kind = match action {
                         Some(Action::MoveDrag) => Some(DragKind::Move),
                         Some(Action::ResizeDrag) => under
                             .and_then(|w| self.resize_edges_at(w, location))
@@ -145,10 +177,25 @@ impl Sash {
                     }
                     return;
                 }
-                if keybinds::lookup_button(modifier, &mods, button) == Some(Action::ClickFocus)
+                if grab_window.is_some() {
+                    let in_chain = self
+                        .surface_at(location)
+                        .is_some_and(|(surface, _)| self.popups.in_grab_chain(&surface));
+                    if !in_chain {
+                        // Outside the grabbed chain: dismiss it; the click is not
+                        // delivered, nor its release.
+                        self.dismiss_grab();
+                        self.windows.swallowed_buttons.push(button);
+                        return;
+                    }
+                } else if keybinds::lookup_button(modifier, &mods, button)
+                    == Some(Action::ClickFocus)
                     && let Some(window) = under
                 {
                     self.focus_window(window);
+                }
+                if let Some(focus) = pointer.current_focus() {
+                    self.popups.note_button_press(serial, focus);
                 }
             }
             ButtonState::Released => {

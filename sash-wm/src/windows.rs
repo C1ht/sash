@@ -22,7 +22,7 @@ use std::{
 };
 
 use smithay::{
-    desktop::{Window, WindowSurfaceType},
+    desktop::{Window, WindowSurfaceType, utils::under_from_surface_tree},
     reexports::{
         calloop::timer::{TimeoutAction, Timer},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -38,6 +38,7 @@ use crate::{
         Direction, Edges, Layer, Mode, MonitorLayout, NewWindow, Presentation, Rect, STEP,
         SizeLimits, TiledResize, WindowId, ZoneId, resize_rect, resize_zone, snap_to_edges,
     },
+    popups::popups_of,
     state::Sash,
 };
 
@@ -124,7 +125,6 @@ impl Windows {
         }
     }
 
-    #[cfg(test)]
     pub fn all(&self) -> impl Iterator<Item = &Managed> {
         self.list.iter()
     }
@@ -192,6 +192,9 @@ fn size_limits(surface: &WlSurface) -> SizeLimits {
         }
     })
 }
+
+/// A surface under the pointer and the global position of its origin.
+type SurfaceHit = (WlSurface, Point<f64, Logical>);
 
 /// A window drawn on the output.
 pub struct Visible<'a> {
@@ -356,6 +359,7 @@ impl Sash {
     }
 
     fn leave_layout(&mut self, id: WindowId) {
+        self.dismiss_popups(id);
         if self.dragged_window() == Some(id) {
             // The window is going away: no snap on the way out.
             if let Some(drag) = &mut self.windows.drag {
@@ -378,11 +382,15 @@ impl Sash {
     }
 
     /// Sets the area the layout covers (the output, logical pixels) and re-arranges.
+    /// A real size change also re-constrains or dismisses popups.
     pub fn set_layout_area(&mut self, size: Size<i32, Logical>) {
-        self.windows
-            .layout
-            .set_area(Rect::new(0, 0, size.w, size.h));
+        let area = Rect::new(0, 0, size.w, size.h);
+        let changed = self.windows.layout.area() != area;
+        self.windows.layout.set_area(area);
         self.arrange();
+        if changed {
+            self.reconstrain_popups(true);
+        }
     }
 
     /// Applies the layout: configures every window whose size or state changed (one
@@ -446,6 +454,7 @@ impl Sash {
         }
         let backdrop = self.windows.layout.fullscreen_backdrop();
         self.overlay.set_backdrop(backdrop);
+        self.reconstrain_popups(false);
         self.sync_keyboard_focus();
         self.request_redraw();
     }
@@ -463,15 +472,18 @@ impl Sash {
         }
     }
 
-    /// Gives keyboard focus to the layout's focused window if it is mapped, else to nothing.
+    /// Gives keyboard focus to the layout's focused window if it is mapped, else to
+    /// nothing. While that window has a grabbed popup chain, its topmost popup gets
+    /// it; a grab on any other window ends.
     pub fn sync_keyboard_focus(&mut self) {
-        let target = self
+        let focused = self
             .windows
             .layout
             .focused()
             .and_then(|id| self.windows.by_id(id))
             .filter(|m| m.mapped)
             .and_then(|m| m.window.toplevel().map(|t| t.wl_surface().clone()));
+        let target = self.popup_focus(focused.as_ref()).or(focused);
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
@@ -488,27 +500,77 @@ impl Sash {
         }
     }
 
-    /// The mapped window at a global position: floating windows above tiled ones.
+    /// The mapped window at a global position, counting its popups: floating windows
+    /// above tiled ones.
     pub fn window_at(&self, location: Point<f64, Logical>) -> Option<WindowId> {
-        let (x, y) = (location.x.floor() as i32, location.y.floor() as i32);
-        let id = self.windows.layout.window_at(x, y)?;
-        self.windows.by_id(id).filter(|m| m.mapped).map(|m| m.id)
+        self.hit(location).map(|(id, _)| id)
     }
 
-    /// The surface at a global position and the global position of its origin. Tiled
-    /// windows can only be hit inside their tile.
-    pub fn surface_at(
-        &self,
-        location: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let id = self.window_at(location)?;
-        let managed = self.windows.by_id(id)?;
-        let rect = self.windows.layout.shown_rect(id)?;
-        let window_pos = buffer_position(&managed.window, rect).to_f64();
-        let (surface, pos_in_window) = managed
-            .window
-            .surface_under(location - window_pos, WindowSurfaceType::ALL)?;
-        Some((surface, window_pos + pos_in_window.to_f64()))
+    /// The surface at a global position and the global position of its origin.
+    pub fn surface_at(&self, location: Point<f64, Logical>) -> Option<SurfaceHit> {
+        self.hit(location).and_then(|(_, surface)| surface)
+    }
+
+    /// What is at a global position, top first: a window's popups (anywhere, drawn
+    /// directly above it; those of tiled windows above every tiled window), then the
+    /// window itself (tiled windows only inside their tile). Returns the window and
+    /// the surface under the point with its origin.
+    fn hit(&self, location: Point<f64, Logical>) -> Option<(WindowId, Option<SurfaceHit>)> {
+        let (x, y) = (location.x.floor() as i32, location.y.floor() as i32);
+        let layout = &self.windows.layout;
+        let target = layout.window_at(x, y);
+        let backdrop = layout
+            .fullscreen_backdrop()
+            .is_some_and(|b| b.contains(x, y));
+        let visible_windows = self.visible_windows();
+        let popup_hit = |visible: &Visible<'_>| {
+            popups_of(visible.window, visible.rect)
+                .into_iter()
+                .find_map(|(popup, origin)| {
+                    under_from_surface_tree(
+                        popup.wl_surface(),
+                        location,
+                        origin,
+                        WindowSurfaceType::ALL,
+                    )
+                    .map(|(surface, at)| (visible.id, Some((surface, at.to_f64()))))
+                })
+        };
+        // Popups of tiled windows are above every tiled window (see render.rs).
+        let mut tiled_popups_checked = false;
+        for visible in visible_windows.iter().rev() {
+            let popups = if visible.layer != Layer::Tiled {
+                popup_hit(visible)
+            } else if !tiled_popups_checked {
+                tiled_popups_checked = true;
+                visible_windows
+                    .iter()
+                    .rev()
+                    .filter(|v| v.layer == Layer::Tiled)
+                    .find_map(popup_hit)
+            } else {
+                None
+            };
+            if popups.is_some() {
+                return popups;
+            }
+            if Some(visible.id) == target {
+                let origin = visible.position.to_f64();
+                let surface = visible
+                    .window
+                    .surface_under(
+                        location - origin,
+                        WindowSurfaceType::TOPLEVEL | WindowSurfaceType::SUBSURFACE,
+                    )
+                    .map(|(surface, at)| (surface, origin + at.to_f64()));
+                return Some((visible.id, surface));
+            }
+            // The backdrop of a fixed-size fullscreen window hides everything below.
+            if backdrop && visible.layer == Layer::Fullscreen {
+                return None;
+            }
+        }
+        None
     }
 
     /// Mapped windows in drawing order, bottom first (see `MonitorLayout::stacking`).
@@ -735,6 +797,13 @@ impl Sash {
     pub fn run_action(&mut self, action: Action) {
         let start = Instant::now();
         let focused = self.windows.layout.focused();
+        // Every action first dismisses the focused window's popups, except a resize
+        // (they follow it) and the default-mode toggle (nothing on screen changes).
+        if !matches!(action, Action::Resize(_) | Action::ToggleDefaultMode)
+            && let Some(id) = focused
+        {
+            self.dismiss_popups(id);
+        }
         match action {
             Action::SpawnTerminal => self.spawn_terminal(),
             Action::CloseFocused => {
