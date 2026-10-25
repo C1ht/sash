@@ -99,6 +99,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut event_loop: EventLoop<Server> = EventLoop::try_new()?;
+    // SIGTERM, SIGINT and SIGHUP (the terminal went away) end the event loop, so
+    // everything is dropped in order and the session gives the display and input back.
+    // Installed before the backend opens anything: a signal during startup is then a
+    // clean, logged exit too.
+    event_loop
+        .handle()
+        .insert_source(
+            Signals::new(&[Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP])?,
+            |event, _, server| {
+                tracing::info!(signal = ?event.signal(), "quitting");
+                server.state.loop_signal.stop();
+            },
+        )
+        .map_err(|err| err.error)?;
     let (redraw, redraw_requests) = ping::make_ping()?;
     let modifier = match args.backend {
         Backend::Winit => backend::winit::MODIFIER,
@@ -112,18 +126,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Backend::Drm => backend::drm::start(&event_loop, &mut server.state, redraw_requests)?,
     }
 
-    // SIGTERM and SIGINT end the event loop, so everything is dropped in order and the
-    // session gives the display and input back.
-    event_loop
-        .handle()
-        .insert_source(
-            Signals::new(&[Signal::SIGTERM, Signal::SIGINT])?,
-            |event, _, server| {
-                tracing::info!(signal = ?event.signal(), "quitting");
-                server.state.loop_signal.stop();
-            },
-        )
-        .map_err(|err| err.error)?;
     if let Some(after) = args.exit_after {
         tracing::info!(
             seconds = after.as_secs(),

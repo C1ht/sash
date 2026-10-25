@@ -22,7 +22,13 @@ mod mode;
 mod pacing;
 mod session;
 
-use std::{cell::RefCell, error::Error, path::PathBuf, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    error::Error,
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use smithay::{
     backend::{
@@ -39,7 +45,10 @@ use smithay::{
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{ImportDma, element::memory::MemoryRenderBuffer, gles::GlesRenderer},
-        session::{Event as SessionEvent, Session, libseat::LibSeatSession},
+        session::{
+            Event as SessionEvent, Session,
+            libseat::{LibSeatSession, LibSeatSessionNotifier},
+        },
         udev::{UdevBackend, UdevEvent, all_gpus, primary_gpu},
     },
     desktop::utils::{
@@ -48,7 +57,11 @@ use smithay::{
     },
     output::Output,
     reexports::{
-        calloop::{EventLoop, LoopHandle, ping::PingSource},
+        calloop::{
+            Dispatcher, EventLoop, LoopHandle,
+            ping::PingSource,
+            timer::{TimeoutAction, Timer},
+        },
         drm::control::{Device as ControlDevice, ModeTypeFlags, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
@@ -92,6 +105,16 @@ struct Drm {
     arrow: MemoryRenderBuffer,
     /// Duration of one refresh at the chosen mode.
     refresh: Duration,
+    /// The frame waiting for its page flip: how long it took to render, and since when
+    /// input it shows was waiting.
+    queued: Option<QueuedFrame>,
+    /// Frame callbacks for an empty frame are scheduled.
+    idle_callbacks: Rc<Cell<bool>>,
+}
+
+struct QueuedFrame {
+    render_us: u64,
+    input_since: Option<Instant>,
 }
 
 /// Starts the DRM backend. Any error before the event loop runs drops what was opened
@@ -103,6 +126,7 @@ pub fn start(
 ) -> Result<(), Box<dyn Error>> {
     let (mut session, session_events) = LibSeatSession::new()
         .map_err(|err| format!("could not open a seat session (libseat): {err}"))?;
+    let session_events = wait_until_active(&session, session_events)?;
     let seat = session.seat();
     let path = choose_gpu(&seat)?;
     tracing::info!(seat, gpu = %path.display(), "DRM backend");
@@ -181,6 +205,8 @@ pub fn start(
         devices: input::Devices::default(),
         arrow: render::arrow_buffer(),
         refresh: Duration::from_micros(1_000_000_000 / refresh_mhz),
+        queued: None,
+        idle_callbacks: Rc::new(Cell::new(false)),
     }));
 
     if let Some((main_device, formats)) = dmabuf_offer {
@@ -223,6 +249,47 @@ pub fn start(
     // The first frame.
     drm.borrow_mut().render(state);
     Ok(())
+}
+
+/// How long sash-wm waits for its session to become the active one.
+const SESSION_WAIT: Duration = Duration::from_secs(10);
+
+/// Waits until the session is the active one on its seat (its VT is in front). Started
+/// on a VT that is not in front yet, sash-wm must not touch the GPU before: it would not
+/// be DRM master. Returns the notifier for the main event loop.
+fn wait_until_active(
+    session: &LibSeatSession,
+    notifier: LibSeatSessionNotifier,
+) -> Result<LibSeatSessionNotifier, Box<dyn Error>> {
+    if session.is_active() {
+        return Ok(notifier);
+    }
+    tracing::info!("waiting for the session to become active (its VT in front)");
+    let mut event_loop: EventLoop<bool> = EventLoop::try_new()?;
+    let dispatcher = Dispatcher::new(notifier, |event, _, active: &mut bool| {
+        if matches!(event, SessionEvent::ActivateSession) {
+            *active = true;
+        }
+    });
+    let token = event_loop
+        .handle()
+        .register_dispatcher(dispatcher.clone())
+        .map_err(|err| format!("session events: {err}"))?;
+    let deadline = Instant::now() + SESSION_WAIT;
+    let mut active = false;
+    while !active && Instant::now() < deadline {
+        event_loop.dispatch(Some(Duration::from_millis(100)), &mut active)?;
+    }
+    event_loop.handle().remove(token);
+    drop(event_loop);
+    if !active {
+        return Err(format!(
+            "the session did not become active within {} s",
+            SESSION_WAIT.as_secs()
+        )
+        .into());
+    }
+    Ok(dispatcher.into_source_inner())
 }
 
 /// The GPU to use: udev's primary GPU on the seat, else the first one. Only one GPU is
@@ -292,7 +359,7 @@ fn insert_sources(
     handle: &LoopHandle<'static, Server>,
     drm: &Rc<RefCell<Drm>>,
     redraw_requests: PingSource,
-    session_events: smithay::backend::session::libseat::LibSeatSessionNotifier,
+    session_events: LibSeatSessionNotifier,
     device_events: smithay::backend::drm::DrmDeviceNotifier,
     input_backend: LibinputInputBackend,
 ) -> Result<(), Box<dyn Error>> {
@@ -365,6 +432,7 @@ impl Drm {
             return;
         }
         state.flush_pending_arrange();
+        let start = Instant::now();
         let mut elements = render::cursor_elements(state, &mut self.renderer, 1.0);
         elements.extend(render::arrow_element(
             state,
@@ -396,8 +464,33 @@ impl Drm {
             }
         };
         self.pacer.rendered(queued);
-        if !queued {
-            // Nothing new on screen: clients still get their frame callbacks.
+        if queued {
+            self.queued = Some(QueuedFrame {
+                render_us: start.elapsed().as_micros() as u64,
+                input_since: state.windows.input_pending_since.take(),
+            });
+        } else {
+            self.idle_frame_callbacks(state);
+        }
+    }
+
+    /// Nothing new went on screen: clients still get their frame callbacks, one refresh
+    /// later (sending them at once would let a client that commits on every callback
+    /// spin).
+    fn idle_frame_callbacks(&self, state: &mut Sash) {
+        if self.idle_callbacks.replace(true) {
+            return;
+        }
+        let pending = self.idle_callbacks.clone();
+        let output = self.output.clone();
+        let timer = Timer::from_duration(self.refresh);
+        let inserted = state.loop_handle.insert_source(timer, move |_, _, server| {
+            pending.set(false);
+            server.state.frame_presented(&output);
+            TimeoutAction::Drop
+        });
+        if inserted.is_err() {
+            self.idle_callbacks.set(false);
             state.frame_presented(&self.output);
         }
     }
@@ -440,6 +533,17 @@ impl Drm {
             }
             Ok(_) => {}
             Err(err) => tracing::warn!(%err, "page flip completion failed"),
+        }
+        if let Some(frame) = self.queued.take() {
+            // The frame is on screen now: from the input it shows to here is what the
+            // user waited.
+            let input_to_frame_us = frame.input_since.map(|t| t.elapsed().as_micros() as u64);
+            tracing::debug!(
+                frame_time_us = frame.render_us,
+                render_us = frame.render_us,
+                input_to_frame_us,
+                "frame"
+            );
         }
         state.frame_presented(&self.output);
         if self.pacer.flip_complete() {

@@ -21,7 +21,7 @@ jobs:
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             build-essential pkg-config curl ca-certificates git binutils \
-            libxkbcommon-dev libwayland-client0
+            libxkbcommon-dev libseat-dev libinput-dev libudev-dev libgbm-dev libwayland-client0
 
       - uses: actions/checkout@v4
 

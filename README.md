@@ -27,6 +27,19 @@ RUST_LOG=sash_wm=debug cargo run -p sash-wm
 sash-wm logs the name of its own Wayland socket. Start clients against it
 with `WAYLAND_DISPLAY=<socket> <client>`.
 
+On the hardware, from a text console (M9; only by the owner's checklist
+`docs/m9-stage-c.md` on the real machine; tested in a VM, see `tools/vm/README.md`):
+
+```sh
+sash-wm --backend drm                 # mod is Super; Super+Shift+E quits
+sash-wm --backend drm --exit-after 20 # debug builds: a watchdog that quits after 20 s
+```
+
+The keyboard layout follows `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`,
+`XKB_DEFAULT_OPTIONS` (and the other `XKB_DEFAULT_*`); nothing is read from system
+configuration. `tools/drm-probe.py` lists DRM devices, connectors, modes and planes
+with queries only (no DRM master, no mode set).
+
 ## Synthetic input (debug builds)
 
 Debug builds open `$XDG_RUNTIME_DIR/sash-wm-input-<wayland socket>.sock` (mode 0600).
@@ -70,8 +83,10 @@ SIGUSR1.
 
 ## Debian 13 (trixie) packages
 
-- Build: `build-essential pkg-config libxkbcommon-dev`
-- Runtime and tests (loaded with dlopen): `libwayland-client0`, plus `libegl1` for the nested window
+- Build: `build-essential pkg-config libxkbcommon-dev libseat-dev libinput-dev libudev-dev libgbm-dev`
+- Runtime: `libseat1 libinput10 libudev1 libgbm1 libxkbcommon0`; loaded with dlopen:
+  `libwayland-client0` (nested and tests), `libegl1` and a GL driver (Mesa
+  `libegl-mesa0 libgles2 libgl1-mesa-dri`, or the NVIDIA driver)
 
 ## Updating the toolchain
 
