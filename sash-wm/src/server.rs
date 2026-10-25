@@ -30,6 +30,7 @@ impl Server {
         let state = Sash::new(
             display.handle(),
             event_loop.get_signal(),
+            event_loop.handle(),
             redraw,
             start_time,
             modifier,

@@ -7,6 +7,7 @@ mod floating;
 mod gpu;
 mod harness;
 mod snapping;
+mod tiled_resize;
 mod tiling;
 
 use std::{sync::mpsc, thread};

@@ -66,6 +66,13 @@ impl Harness {
         }
     }
 
+    /// Opens the synthetic input socket (debug builds) and returns its path.
+    #[cfg(debug_assertions)]
+    pub fn listen_synthetic(&self) -> PathBuf {
+        crate::synthetic::listen(&self.event_loop, &self.server.socket_name)
+            .expect("synthetic input socket")
+    }
+
     pub fn socket_path(&self) -> PathBuf {
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR must be set");
         PathBuf::from(runtime_dir).join(&self.server.socket_name)
@@ -78,6 +85,7 @@ impl Harness {
             .dispatch(Some(Duration::from_millis(2)), &mut self.server)
             .expect("event loop dispatch");
         if self.presenting && self.redraw_requested.replace(false) {
+            self.server.state.flush_pending_arrange();
             self.frames += 1;
             self.server.state.frame_presented(&self.output);
         }

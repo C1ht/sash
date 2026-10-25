@@ -183,6 +183,18 @@ impl TestClient {
         self.roundtrip();
     }
 
+    /// Acks the last configure but commits a buffer of its own size, like a client
+    /// that rounds to its cell grid.
+    pub fn ack_and_commit_size(&mut self, window: &TestWindow, size: (i32, i32)) {
+        let serial = self.events.serials[&window.xdg_surface.id()];
+        window.xdg_surface.ack_configure(serial);
+        let buffer = self.buffer(size, window.color);
+        window.surface.attach(Some(&buffer), 0, 0);
+        window.surface.damage_buffer(0, 0, size.0, size.1);
+        window.surface.commit();
+        self.roundtrip();
+    }
+
     /// The last configure this window got.
     pub fn config(&self, window: &TestWindow) -> Option<ToplevelConfig> {
         self.events.configs.get(&window.toplevel.id()).copied()

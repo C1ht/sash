@@ -128,7 +128,8 @@ change this file without the owner's approval.
 - Client xdg_toplevel.move is handled; on a tiled window it floats the
   window first. xdg_toplevel.resize is handled for floating windows and
   ignored for tiled ones. show_window_menu is ignored.
-- Keyboard move/resize on a tiled window floats it first.
+- Keyboard move on a tiled window floats it first. Keyboard resize of a
+  tiled window moves splits instead (see "Tiled resize (M6)").
 - Swap works on tiled windows only: with a floating window focused it
   does nothing, and floating windows are never swap candidates.
 - An output resize clamps floating windows with the same 64 px rule
@@ -256,13 +257,11 @@ change this file without the owner's approval.
   set) in one module; docs/keybinds.md is generated from it and a test
   fails if it is out of date or if two chords collide. No action is added
   without asking.
-- Every mouse action has a keybind. Until M6 the table is:
-  mod+Return foot (debug), mod+Q close, mod+H/J/K/L focus,
-  mod+Shift+H/J/K/L swap, mod+Shift+E quit, mod+F toggle floating,
-  mod+Shift+F float all, mod+Shift+T tile all, mod+Ctrl+H/J/K/L move
-  40 px, mod+Ctrl+Shift+H/J/K/L resize 40 px (L wider, H narrower,
-  J taller, K shorter, top-left fixed), mod+Tab / mod+Shift+Tab cycle,
-  mod+Ctrl+D toggle default mode (debug).
+- Every mouse action has a keybind. The table lives in
+  sash-wm/src/keybinds.rs; docs/keybinds.md lists it. Pointer rows:
+  mod+left-drag move, mod+right-drag resize, plain click focus and raise
+  (delivered). Shift is ignored when matching pointer rows, because
+  Shift during a drag turns edge snapping off.
 
 ## Protocol support and known limits
 

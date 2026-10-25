@@ -47,13 +47,13 @@ Alt+right-drag a floating window starting in each cell of a 3x3 grid over it.
 - [ ] Bottom: the bottom edge moves.
 - [ ] Bottom-right: the bottom-right corner moves.
 - [ ] **Opposite edges stay put.** In every case, the edges you are not dragging do not move or wobble, including while the client is still redrawing.
-- [ ] **Alt+right-drag on a tiled window** does nothing.
+- [ ] **Alt+right-drag on a tiled window** moves its splits instead (section 11).
 
 ## 4. Minimum and maximum size
 
 - [ ] **Too small.** Resize a window with a minimum size (most GTK apps) smaller than its minimum. It stops at the minimum, and the opposite edge does not move.
 - [ ] **Too large.** For a window with a maximum size, it stops at the maximum.
-- [ ] **Keyboard resize.** Alt+Ctrl+Shift+H/J/K/L (narrower, taller, shorter, wider; top-left fixed) also stops at the limits.
+- [ ] **Keyboard resize.** Alt+Ctrl+Shift+H/J/K/L on a floating window (narrower, taller, shorter, wider; top-left fixed) also stops at the limits.
 
 ## 5. Raise on click and floating above tiled
 
@@ -220,3 +220,41 @@ Start from an unsnapped floating window. Check every cell of the table in docs/p
 
 Notes:
 
+## 11. Tiled resize (M6)
+
+Setup as above, default mode tiled. Open three windows: 1 | (2 / 3). All keybinds are in docs/keybinds.md.
+
+### Keyboard
+
+- [ ] **Wider.** Focus window 1 (Alt+H) and press Alt+Ctrl+Shift+L. The split between 1 and the right column moves 40 px right. Window 1 stays tiled; 2 and 3 shrink together.
+- [ ] **Narrower.** Alt+Ctrl+Shift+H moves it back 40 px.
+- [ ] **Taller and shorter.** Focus window 2 and press Alt+Ctrl+Shift+J, then K. The split between 2 and 3 moves 40 px down, then up. Window 1 does not move.
+- [ ] **Output boundary.** Focus window 3. None of Alt+Ctrl+Shift+H/J/K/L changes anything: its right and bottom edges are the output's.
+- [ ] **Minimum.** Hold Alt+Ctrl+Shift+L on window 1. It stops when the right column is 64 px wide; window 1 never covers it.
+- [ ] **Keys stay with sash-wm.** None of these keys reach the app.
+
+### Mouse (Alt+right-drag, 3x3 grid)
+
+- [ ] **Right cell of window 1.** Moves the vertical split; the windows follow the pointer with no lag you can see.
+- [ ] **Left cell of window 3.** Moves the same vertical split (its left edge).
+- [ ] **Top cell of window 3.** Moves the split between 2 and 3.
+- [ ] **Corner.** Top-left cell of window 3 moves both splits at once.
+- [ ] **Center cell of window 2.** Moves its bottom split only (its right edge is the output's).
+- [ ] **Boundary.** Top-left cell of window 1 (both edges on the output boundary): nothing happens, and the click does not reach the app.
+- [ ] **Minimum.** Drag far past a neighbour. Each tile stops at 64 px.
+- [ ] **Clipping.** While dragging fast, no window draws over its neighbour, and the stale content of a window is cut off at its new tile.
+- [ ] **Release.** After releasing, the split stays where you dropped it, and clicks go to clients again.
+
+### Ratios are kept
+
+- [ ] **Toggle.** After a resize, Alt+F twice on any window: the tiling looks exactly as after the resize.
+- [ ] **Float all / tile all.** Alt+Shift+F, then Alt+Shift+T: same.
+- [ ] **Output resize.** Resize the nested sash-wm window. The splits stay at the same fraction of the output (a 520 px split on an 800 px output becomes 650 px at 1000 px).
+
+### Edge cases
+
+- [ ] **Close during a resize.** Start an Alt+right-drag on window 2's bottom split and close window 3 from a terminal (`kill`). Nothing crashes; window 2 fills the column and further motion does nothing.
+- [ ] **Hidden output.** Start a tiled resize, then switch the host to another workspace while still dragging (if your host allows it). Back on the workspace, the windows have the size of the last pointer position.
+- [ ] **Client resize.** Dragging a tiled window's own border (apps with client-side borders) does nothing; tiled resize is Alt+right-drag only.
+
+Notes:

@@ -128,7 +128,7 @@ sash/
   - Unit test: tile-all leaves forced-floating windows floating.
   - Unit test: a new window while the default mode is floating gets a placeholder next to the focused leaf, and no tiled rectangle changes.
   - Unit test: the output size changes between float and re-tile. The tree structure stays identical and the rectangles are recomputed for the new size.
-  - Definition of "identical tree" in these tests: if nothing changed while windows floated, the tree after re-tiling is identical to the tree before floating, compared as structure, split directions, split ratios, window per leaf, and resulting rectangles. If the tree changed while floating (windows opened or closed), the expected tree is the tree before floating with exactly those edits applied the way they would apply with every window tiled:
+  - Definition of "identical tree" in these tests: if nothing changed while windows floated, the tree after re-tiling is identical to the tree before floating, compared as structure, split directions, split ratios (exact fractions since M6, so a tiled resize before floating survives the round trip), window per leaf, and resulting rectangles. If the tree changed while floating (windows opened or closed), the expected tree is the tree before floating with exactly those edits applied the way they would apply with every window tiled:
     - A new window splits the focused tiled leaf.
     - A closed window's leaf is removed and its sibling takes the parent's place.
     - The placeholder keeps its position relative to the surviving nodes. If its sibling closed, the placeholder takes the parent's place.
@@ -162,7 +162,7 @@ sash/
   - Every snap zone has a keybind.
   - Windows also snap to neighbouring windows.
   - Proof: unit tests for snapping geometry, and frame time during a drag with snapping active.
-- **M6 Tiled resize and the full keybind table.** Rules are in CLAUDE.md ("Tiled resize (M6)", "Debug-only tools", "Keybinds").
+- **M6 Tiled resize and the full keybind table.** Done, pending approval. Keybinds: docs/keybinds.md (generated). Manual checklist: docs/floating-checklist.md section 11. Rules are in CLAUDE.md ("Tiled resize (M6)", "Debug-only tools", "Keybinds").
   - Step 0, a separate commit first: debug-only synthetic input (unix socket, mode 0600, same handlers as the backend), never in release builds; used for scripted drag, resize and snap runs so frame times during real drags are measured. Release builds ignore SIGUSR1.
   - Tiled resize: split ratios as exact fractions; keys and mod+right-drag move the split on the resized side; 64 px minimum tile; output-boundary edges do nothing; lossless toggling keeps ratios; live resize with configures batched per frame.
   - "Identical tree" now also compares split ratios (exactly, as fractions).
@@ -174,7 +174,6 @@ sash/
 - **M9 DRM/KMS with presentation-time.** udev + libinput + libseat + GBM/EGL on a TTY, wp_presentation for on-screen frame timing. Starts with its own investigate-then-STOP pass.
 
 Proposals (no work until approved):
-- **Tiled resize by split ratio.** mod+right-drag on a tiled window and mod+Ctrl+Shift+H/J/K/L on a tiled window change the ratio of the nearest split on that side (40 px steps, constant); each split keeps its own ratio, still integer geometry. Fits best as a small milestone right after M5: it reuses M4's grabs and keyboard resize, and M6 then puts its keybinds into the full default table.
 - **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
 
 Roadmap after M9 (no work now), in order:

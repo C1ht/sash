@@ -16,11 +16,15 @@
 //! Shift held) and, when the pointer is in a snap zone, shows a preview and snaps the
 //! window on release. Pulling a snapped window out restores its pre-snap size.
 
-use std::{process::Command, time::Instant};
+use std::{
+    process::Command,
+    time::{Duration, Instant},
+};
 
 use smithay::{
     desktop::{Window, WindowSurfaceType},
     reexports::{
+        calloop::timer::{TimeoutAction, Timer},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::protocol::wl_surface::WlSurface,
     },
@@ -32,10 +36,13 @@ use crate::{
     keybinds::{Action, Cycle},
     layout::{
         Direction, Edges, Layer, Mode, MonitorLayout, NewWindow, Presentation, Rect, STEP,
-        SizeLimits, WindowId, ZoneId, resize_rect, resize_zone, snap_to_edges,
+        SizeLimits, TiledResize, WindowId, ZoneId, resize_rect, resize_zone, snap_to_edges,
     },
     state::Sash,
 };
+
+/// How long drag configures wait for a frame before they are sent anyway.
+const FRAME_FALLBACK: Duration = Duration::from_millis(16);
 
 /// What was last sent to a client in a configure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,10 +79,12 @@ pub enum DragKind {
 }
 
 /// A drag in progress.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Drag {
     pub window: WindowId,
     pub kind: DragKind,
+    /// A resize of a tiled window: the splits being moved.
+    tiled: Option<TiledResize>,
     /// The window's rectangle and the pointer position the drag is measured from
     /// (moved when a snapped window is pulled out of its zone).
     from: Rect,
@@ -90,6 +99,10 @@ pub struct Windows {
     next_id: u64,
     /// The drag in progress.
     pub drag: Option<Drag>,
+    /// A drag changed the layout; its configures are due with the next frame.
+    arrange_pending: bool,
+    /// The FRAME_FALLBACK timer is running.
+    fallback_armed: bool,
     /// Buttons whose press started a drag or was mod+click; their release is not
     /// delivered either.
     pub swallowed_buttons: Vec<u32>,
@@ -104,6 +117,8 @@ impl Windows {
             list: Vec::new(),
             next_id: 1,
             drag: None,
+            arrange_pending: false,
+            fallback_armed: false,
             swallowed_buttons: Vec::new(),
             input_pending_since: None,
         }
@@ -130,12 +145,13 @@ impl Windows {
 
     /// The edges an interactive resize of `id` moves, if one is in progress.
     fn resizing(&self, id: WindowId) -> Option<Edges> {
-        match self.drag {
+        match &self.drag {
             Some(Drag {
                 window,
                 kind: DragKind::Resize(edges),
+                tiled: None,
                 ..
-            }) if window == id => Some(edges),
+            }) if *window == id => Some(*edges),
             _ => None,
         }
     }
@@ -515,21 +531,26 @@ impl Sash {
     }
 
     /// Starts moving or resizing `id` with the pointer pressed at `pressed_at` (mod+drag
-    /// or a client request). Moving a tiled window floats it where it is; resizing only
-    /// applies to floating windows. Returns false if the drag does not apply.
+    /// or a client request). Moving a tiled window floats it where it is; resizing a
+    /// tiled window moves the splits on the dragged edges (none on the output boundary).
+    /// Returns false if the drag does not apply.
     pub fn begin_drag(
         &mut self,
         id: WindowId,
         kind: DragKind,
         pressed_at: Point<f64, Logical>,
     ) -> bool {
+        let mut tiled = None;
         match kind {
             DragKind::Move => {
                 self.windows.layout.float_in_place(id);
             }
-            DragKind::Resize(_) => {
-                if self.windows.layout.mode(id) != Some(Mode::Floating) {
-                    return false;
+            DragKind::Resize(edges) => {
+                if self.windows.layout.mode(id) == Some(Mode::Tiled) {
+                    match self.windows.layout.begin_tiled_resize(id, edges) {
+                        Some(resize) => tiled = Some(resize),
+                        None => return false,
+                    }
                 }
             }
         }
@@ -540,6 +561,7 @@ impl Sash {
         self.windows.drag = Some(Drag {
             window: id,
             kind,
+            tiled,
             from,
             pressed_at,
             zone: None,
@@ -583,9 +605,19 @@ impl Sash {
             .filter(|(w, _, l)| *w != id && *l != Layer::Fullscreen)
             .map(|(_, r, _)| r)
             .collect();
+        if let Some(resize) = &drag.tiled {
+            // A tiled resize: the splits follow the pointer; no edge snapping or zones.
+            layout.drag_tiled_resize(resize, dx, dy);
+            self.windows.note_input(Instant::now());
+            self.schedule_arrange();
+            return true;
+        }
         let rect = match drag.kind {
             DragKind::Move => {
-                let moved = Rect::new(from.x + dx, from.y + dy, from.w, from.h);
+                // The current size: a client may have settled on its own size since
+                // the press (e.g. a terminal's cell grid after floating).
+                let (w, h) = layout.rect_of(id).map_or((from.w, from.h), |r| (r.w, r.h));
+                let moved = Rect::new(from.x + dx, from.y + dy, w, h);
                 let fixed = layout.limits(id).is_fixed();
                 drag.zone = (!fixed)
                     .then(|| layout.zones().at(area, px, py).map(|z| z.id))
@@ -609,8 +641,39 @@ impl Sash {
         let preview = drag.zone.and_then(|z| layout.zone_rect(z));
         self.overlay.set_preview(preview);
         self.windows.note_input(Instant::now());
-        self.arrange();
+        self.schedule_arrange();
         true
+    }
+
+    /// Pointer drags change the layout on every motion; their configures go out at most
+    /// once per frame: right before the next frame is drawn, or after FRAME_FALLBACK if
+    /// no frame comes (the output is not presenting). Rendering already uses the new
+    /// rectangles.
+    fn schedule_arrange(&mut self) {
+        self.windows.arrange_pending = true;
+        self.request_redraw();
+        if self.windows.fallback_armed {
+            return;
+        }
+        self.windows.fallback_armed = true;
+        let timer = Timer::from_duration(FRAME_FALLBACK);
+        let inserted = self.loop_handle.insert_source(timer, |_, _, server| {
+            server.state.windows.fallback_armed = false;
+            server.state.flush_pending_arrange();
+            server.flush();
+            TimeoutAction::Drop
+        });
+        if inserted.is_err() {
+            self.windows.fallback_armed = false;
+            self.arrange();
+        }
+    }
+
+    /// Sends the configures a drag scheduled, if any. Called before drawing a frame.
+    pub fn flush_pending_arrange(&mut self) {
+        if std::mem::take(&mut self.windows.arrange_pending) {
+            self.arrange();
+        }
     }
 
     /// A drag ended: a move released in a zone snaps the window there.
@@ -622,6 +685,7 @@ impl Sash {
             self.windows.layout.snap(drag.window, zone);
         }
         self.overlay.set_preview(None);
+        self.windows.arrange_pending = false;
         self.arrange();
     }
 
@@ -630,13 +694,14 @@ impl Sash {
     pub fn overlay_preview_for_bench(&self) -> Option<Rect> {
         self.windows
             .drag
+            .as_ref()
             .and_then(|d| d.zone)
             .and_then(|z| self.windows.layout.zone_rect(z))
     }
 
     /// The window being dragged, if any.
     pub fn dragged_window(&self) -> Option<WindowId> {
-        self.windows.drag.map(|d| d.window)
+        self.windows.drag.as_ref().map(|d| d.window)
     }
 
     /// A client's set/unset_maximized or set/unset_fullscreen. The client always gets a
@@ -737,6 +802,8 @@ impl Sash {
                 layout.set_default_mode(mode);
                 tracing::info!(?mode, "default mode");
             }
+            // Pointer rows of the table; seat.rs handles them on button presses.
+            Action::MoveDrag | Action::ResizeDrag | Action::ClickFocus => return,
         }
         self.windows.note_input(start);
         tracing::debug!(

@@ -86,16 +86,18 @@ fn add_connection(
             Generic::new(reader.get_ref().try_clone()?, Interest::READ, Mode::Level),
             move |_, _, server| {
                 loop {
-                    line.clear();
+                    // A partial line stays in `line` until the rest arrives.
                     match reader.read_line(&mut line) {
                         Ok(0) => return Ok(PostAction::Remove),
-                        Ok(_) if !line.ends_with('\n') => return Ok(PostAction::Continue),
+                        // End of stream in the middle of a line.
+                        Ok(_) if !line.ends_with('\n') => return Ok(PostAction::Remove),
                         Ok(_) => {
                             let time = started.elapsed().as_millis() as u32;
                             let reply = match run(&mut server.state, line.trim(), time) {
                                 Ok(()) => "ok\n".to_string(),
                                 Err(err) => format!("error: {err}\n"),
                             };
+                            line.clear();
                             server.flush();
                             if writer.write_all(reply.as_bytes()).is_err() {
                                 return Ok(PostAction::Remove);

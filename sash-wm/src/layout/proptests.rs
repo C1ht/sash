@@ -7,7 +7,8 @@
 use proptest::prelude::*;
 
 use super::{
-    Direction, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId, monitor::Layer,
+    Direction, MIN_TILE, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId,
+    monitor::Layer, resize_zone,
 };
 
 #[derive(Clone, Debug)]
@@ -43,6 +44,29 @@ enum Op {
     Fullscreen(usize, bool),
     /// mod+Tab: preview a window, then commit.
     Cycle(usize),
+    /// mod+right-drag on a tiled window from a 3x3 cell by (dx, dy).
+    TiledDrag(usize, (u8, u8), i32, i32),
+}
+
+/// A tiled resize never makes a tile smaller than min(MIN_TILE, its size before) on
+/// either axis.
+fn check_tile_minimum(before: &[(WindowId, Rect)], after: &[(WindowId, Rect)]) {
+    for (w, old) in before {
+        if let Some((_, new)) = after.iter().find(|(a, _)| a == w) {
+            assert!(
+                new.w >= old.w.min(MIN_TILE),
+                "{w:?} width {} -> {}",
+                old.w,
+                new.w
+            );
+            assert!(
+                new.h >= old.h.min(MIN_TILE),
+                "{w:?} height {} -> {}",
+                old.h,
+                new.h
+            );
+        }
+    }
 }
 
 fn direction() -> impl Strategy<Value = Direction> {
@@ -94,6 +118,8 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (index, any::<bool>()).prop_map(|(i, m)| Op::Maximize(i, m)),
         2 => (index, any::<bool>()).prop_map(|(i, f)| Op::Fullscreen(i, f)),
         1 => index.prop_map(Op::Cycle),
+        3 => (index, (0..3u8, 0..3u8), -2000..2000i32, -2000..2000i32)
+            .prop_map(|(i, cell, dx, dy)| Op::TiledDrag(i, cell, dx, dy)),
     ]
 }
 
@@ -163,11 +189,35 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
             }
         }
         Op::ResizeBy(i, dw, dh) => {
+            if let Some(w) = pick(layout, i) {
+                let tiled = layout.mode(w) == Some(Mode::Tiled);
+                let before = layout.tiled_rects();
+                let result = layout.resize_by(w, dw, dh);
+                if tiled {
+                    check_tile_minimum(&before, &layout.tiled_rects());
+                } else if let Some(r) = result {
+                    let limits = layout.limits(w);
+                    assert_eq!(limits.clamp((r.w, r.h)), (r.w, r.h), "size within limits");
+                }
+            }
+        }
+        Op::TiledDrag(i, (cx, cy), dx, dy) => {
             if let Some(w) = pick(layout, i)
-                && let Some(r) = layout.resize_by(w, dw, dh)
+                && let Some(rect) = layout.rect_of(w)
             {
-                let limits = layout.limits(w);
-                assert_eq!(limits.clamp((r.w, r.h)), (r.w, r.h), "size within limits");
+                // The pointer in cell (cx, cy) of the window's 3x3 grid.
+                let x = rect.x + rect.w * (2 * cx as i32 + 1) / 6;
+                let y = rect.y + rect.h * (2 * cy as i32 + 1) / 6;
+                let edges = resize_zone(rect, x, y);
+                if let Some(resize) = layout.begin_tiled_resize(w, edges) {
+                    let before = layout.tiled_rects();
+                    // A drag in several motions, measured from the press.
+                    for step in 1..=3 {
+                        layout.drag_tiled_resize(&resize, dx * step / 3, dy * step / 3);
+                        layout.check_invariants();
+                    }
+                    check_tile_minimum(&before, &layout.tiled_rects());
+                }
             }
         }
         Op::SetRect(i, rect) => {

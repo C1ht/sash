@@ -7,7 +7,7 @@ use smithay::{
     input::{Seat, SeatState, keyboard::XkbConfig},
     output::Output,
     reexports::{
-        calloop::{LoopSignal, ping::Ping},
+        calloop::{LoopHandle, LoopSignal, ping::Ping},
         wayland_server::DisplayHandle,
     },
     wayland::{
@@ -19,6 +19,7 @@ use smithay::{
 use crate::{
     keybinds::{Keybinds, Modifier},
     render::Overlay,
+    server::Server,
     windows::Windows,
 };
 
@@ -66,6 +67,7 @@ pub struct Sash {
     /// Process start; the clock for frame callback timestamps and startup time.
     pub started: Instant,
     pub loop_signal: LoopSignal,
+    pub loop_handle: LoopHandle<'static, Server>,
     redraw: Ping,
 }
 
@@ -73,6 +75,7 @@ impl Sash {
     pub fn new(
         display_handle: DisplayHandle,
         loop_signal: LoopSignal,
+        loop_handle: LoopHandle<'static, Server>,
         redraw: Ping,
         started: Instant,
         modifier: Modifier,
@@ -98,6 +101,7 @@ impl Sash {
             keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,
+            loop_handle,
             redraw,
         }
     }

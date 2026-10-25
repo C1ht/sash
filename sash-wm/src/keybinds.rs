@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The minimal hardcoded keybind table used until M6 replaces it with the full
-//! default table. Keys that trigger a keybind are not forwarded to clients.
+//! The default keybind table: every keyboard and mouse binding sash-wm has, as data.
+//! docs/keybinds.md is generated from it (a test fails if the file is out of date).
+//! Keys that trigger a binding are not forwarded to clients; nor are mod+clicks.
 
 use std::ffi::OsString;
 
 use smithay::input::keyboard::{Keycode, Keysym, ModifiersState};
 
-use crate::layout::{Direction, WindowId};
+use crate::{
+    layout::{Direction, WindowId},
+    seat::{BTN_LEFT, BTN_RIGHT},
+};
 
 /// The keybind modifier. One constant per backend: Alt when nested (the host
 /// compositor captures Super), Super on DRM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Modifier {
     Alt,
-    #[cfg_attr(not(test), expect(dead_code, reason = "the DRM backend arrives in M7"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "the DRM backend arrives in M9"))]
     Super,
 }
 
@@ -41,8 +45,8 @@ pub enum Action {
     TileAll,
     /// Moves the focused window by STEP.
     Move(Direction),
-    /// Resizes the focused window by STEP, top-left corner fixed: Right wider, Left
-    /// narrower, Down taller, Up shorter.
+    /// Resizes the focused window by STEP: Right wider, Left narrower, Down taller, Up
+    /// shorter (floating: top-left corner fixed; tiled: the right or bottom split).
     Resize(Direction),
     /// mod+arrow: snap by the state table (layout::snap_step).
     Snap(Direction),
@@ -51,86 +55,381 @@ pub enum Action {
     CyclePrevious,
     /// Flips the monitor's default mode. Debug builds only.
     ToggleDefaultMode,
+    /// Pointer: drag to move the window under the pointer.
+    MoveDrag,
+    /// Pointer: drag to resize the window under the pointer (3x3 grid).
+    ResizeDrag,
+    /// Pointer: a click focuses and raises the window under the pointer.
+    ClickFocus,
 }
 
-impl Action {
-    fn debug_only(self) -> bool {
-        matches!(self, Action::SpawnTerminal | Action::ToggleDefaultMode)
+/// Which modifiers a binding needs, besides nothing else being held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Mods {
+    /// No modifier (plain clicks).
+    None,
+    Mod,
+    ModShift,
+    ModCtrl,
+    ModCtrlShift,
+}
+
+impl Mods {
+    #[cfg(test)]
+    fn label(self) -> &'static str {
+        match self {
+            Mods::None => "",
+            Mods::Mod => "mod+",
+            Mods::ModShift => "mod+Shift+",
+            Mods::ModCtrl => "mod+Ctrl+",
+            Mods::ModCtrlShift => "mod+Ctrl+Shift+",
+        }
+    }
+
+    /// The set held now. Without the keybind modifier it is None, whatever else is
+    /// held (only plain clicks use None).
+    fn held(modifier: Modifier, mods: &ModifiersState) -> Mods {
+        if !modifier.held(mods) {
+            return Mods::None;
+        }
+        match (mods.ctrl, mods.shift) {
+            (false, false) => Mods::Mod,
+            (false, true) => Mods::ModShift,
+            (true, false) => Mods::ModCtrl,
+            (true, true) => Mods::ModCtrlShift,
+        }
     }
 }
 
-struct Binding {
-    shift: bool,
-    ctrl: bool,
-    key: Keysym,
-    action: Action,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    /// A key, matched on its unshifted (raw) keysym.
+    Key(Keysym),
+    /// A pointer button (linux input event code).
+    Button(u32),
+    /// Any pointer button.
+    AnyButton,
 }
 
-const fn bind(shift: bool, ctrl: bool, key: Keysym, action: Action) -> Binding {
+#[cfg(test)]
+impl Trigger {
+    fn label(self) -> String {
+        match self {
+            Trigger::Key(key) => match key {
+                Keysym::Return => "Return".into(),
+                Keysym::Tab => "Tab".into(),
+                Keysym::Left => "Left".into(),
+                Keysym::Right => "Right".into(),
+                Keysym::Up => "Up".into(),
+                Keysym::Down => "Down".into(),
+                other => char::from_u32(other.raw())
+                    .filter(char::is_ascii_lowercase)
+                    .map(|c| c.to_ascii_uppercase().to_string())
+                    .unwrap_or_else(|| format!("{other:?}")),
+            },
+            Trigger::Button(BTN_LEFT) => "left drag".into(),
+            Trigger::Button(BTN_RIGHT) => "right drag".into(),
+            Trigger::Button(code) => format!("button {code:#x}"),
+            Trigger::AnyButton => "click".into(),
+        }
+    }
+}
+
+pub struct Binding {
+    pub trigger: Trigger,
+    pub mods: Mods,
+    pub action: Action,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the docs/keybinds.md generator")
+    )]
+    pub description: &'static str,
+    pub debug_only: bool,
+}
+
+const fn key(mods: Mods, key: Keysym, action: Action, description: &'static str) -> Binding {
     Binding {
-        shift,
-        ctrl,
-        key,
+        trigger: Trigger::Key(key),
+        mods,
         action,
+        description,
+        debug_only: false,
     }
 }
 
-const NONE: (bool, bool) = (false, false);
-const SHIFT: (bool, bool) = (true, false);
-const CTRL: (bool, bool) = (false, true);
-const CTRL_SHIFT: (bool, bool) = (true, true);
-
-const fn with(mods: (bool, bool), key: Keysym, action: Action) -> Binding {
-    bind(mods.0, mods.1, key, action)
+const fn debug_key(mods: Mods, k: Keysym, action: Action, description: &'static str) -> Binding {
+    Binding {
+        debug_only: true,
+        ..key(mods, k, action, description)
+    }
 }
 
-/// mod + optional Shift / Ctrl + key, matched on the unshifted (raw) keysym.
-const BINDINGS: &[Binding] = &[
-    with(NONE, Keysym::Return, Action::SpawnTerminal),
-    with(NONE, Keysym::q, Action::CloseFocused),
-    with(NONE, Keysym::h, Action::Focus(Direction::Left)),
-    with(NONE, Keysym::j, Action::Focus(Direction::Down)),
-    with(NONE, Keysym::k, Action::Focus(Direction::Up)),
-    with(NONE, Keysym::l, Action::Focus(Direction::Right)),
-    with(SHIFT, Keysym::h, Action::Swap(Direction::Left)),
-    with(SHIFT, Keysym::j, Action::Swap(Direction::Down)),
-    with(SHIFT, Keysym::k, Action::Swap(Direction::Up)),
-    with(SHIFT, Keysym::l, Action::Swap(Direction::Right)),
-    with(SHIFT, Keysym::e, Action::Quit),
-    with(NONE, Keysym::f, Action::ToggleFloating),
-    with(SHIFT, Keysym::f, Action::FloatAll),
-    with(SHIFT, Keysym::t, Action::TileAll),
-    with(CTRL, Keysym::h, Action::Move(Direction::Left)),
-    with(CTRL, Keysym::j, Action::Move(Direction::Down)),
-    with(CTRL, Keysym::k, Action::Move(Direction::Up)),
-    with(CTRL, Keysym::l, Action::Move(Direction::Right)),
-    with(CTRL_SHIFT, Keysym::h, Action::Resize(Direction::Left)),
-    with(CTRL_SHIFT, Keysym::j, Action::Resize(Direction::Down)),
-    with(CTRL_SHIFT, Keysym::k, Action::Resize(Direction::Up)),
-    with(CTRL_SHIFT, Keysym::l, Action::Resize(Direction::Right)),
-    with(NONE, Keysym::Left, Action::Snap(Direction::Left)),
-    with(NONE, Keysym::Right, Action::Snap(Direction::Right)),
-    with(NONE, Keysym::Up, Action::Snap(Direction::Up)),
-    with(NONE, Keysym::Down, Action::Snap(Direction::Down)),
-    with(NONE, Keysym::Tab, Action::CycleNext),
-    with(SHIFT, Keysym::Tab, Action::CyclePrevious),
-    with(CTRL, Keysym::d, Action::ToggleDefaultMode),
+const fn pointer(
+    mods: Mods,
+    trigger: Trigger,
+    action: Action,
+    description: &'static str,
+) -> Binding {
+    Binding {
+        trigger,
+        mods,
+        action,
+        description,
+        debug_only: false,
+    }
+}
+
+use Direction::{Down, Left, Right, Up};
+use Mods::{Mod, ModCtrl, ModCtrlShift, ModShift};
+
+/// The default keybind table.
+pub const TABLE: &[Binding] = &[
+    key(
+        Mod,
+        Keysym::h,
+        Action::Focus(Left),
+        "Focus the window to the left",
+    ),
+    key(
+        Mod,
+        Keysym::j,
+        Action::Focus(Down),
+        "Focus the window below",
+    ),
+    key(Mod, Keysym::k, Action::Focus(Up), "Focus the window above"),
+    key(
+        Mod,
+        Keysym::l,
+        Action::Focus(Right),
+        "Focus the window to the right",
+    ),
+    key(
+        Mod,
+        Keysym::Tab,
+        Action::CycleNext,
+        "Cycle windows, most recent first (hold mod; release to choose)",
+    ),
+    key(
+        ModShift,
+        Keysym::Tab,
+        Action::CyclePrevious,
+        "Cycle windows backwards (hold mod)",
+    ),
+    key(
+        ModShift,
+        Keysym::h,
+        Action::Swap(Left),
+        "Swap the tiled window with its neighbour to the left",
+    ),
+    key(
+        ModShift,
+        Keysym::j,
+        Action::Swap(Down),
+        "Swap the tiled window with its neighbour below",
+    ),
+    key(
+        ModShift,
+        Keysym::k,
+        Action::Swap(Up),
+        "Swap the tiled window with its neighbour above",
+    ),
+    key(
+        ModShift,
+        Keysym::l,
+        Action::Swap(Right),
+        "Swap the tiled window with its neighbour to the right",
+    ),
+    key(
+        Mod,
+        Keysym::f,
+        Action::ToggleFloating,
+        "Toggle floating for the focused window",
+    ),
+    key(
+        ModShift,
+        Keysym::f,
+        Action::FloatAll,
+        "Float all windows on the monitor",
+    ),
+    key(
+        ModShift,
+        Keysym::t,
+        Action::TileAll,
+        "Tile all windows on the monitor",
+    ),
+    key(
+        ModCtrl,
+        Keysym::h,
+        Action::Move(Left),
+        "Move the window 40 px left (floats a tiled window)",
+    ),
+    key(
+        ModCtrl,
+        Keysym::j,
+        Action::Move(Down),
+        "Move the window 40 px down (floats a tiled window)",
+    ),
+    key(
+        ModCtrl,
+        Keysym::k,
+        Action::Move(Up),
+        "Move the window 40 px up (floats a tiled window)",
+    ),
+    key(
+        ModCtrl,
+        Keysym::l,
+        Action::Move(Right),
+        "Move the window 40 px right (floats a tiled window)",
+    ),
+    key(
+        ModCtrlShift,
+        Keysym::h,
+        Action::Resize(Left),
+        "Make the window 40 px narrower (tiled: moves the split at its right edge)",
+    ),
+    key(
+        ModCtrlShift,
+        Keysym::j,
+        Action::Resize(Down),
+        "Make the window 40 px taller (tiled: moves the split at its bottom edge)",
+    ),
+    key(
+        ModCtrlShift,
+        Keysym::k,
+        Action::Resize(Up),
+        "Make the window 40 px shorter (tiled: moves the split at its bottom edge)",
+    ),
+    key(
+        ModCtrlShift,
+        Keysym::l,
+        Action::Resize(Right),
+        "Make the window 40 px wider (tiled: moves the split at its right edge)",
+    ),
+    key(
+        Mod,
+        Keysym::Left,
+        Action::Snap(Left),
+        "Snap: left half, then bottom-left (see the snap table)",
+    ),
+    key(
+        Mod,
+        Keysym::Right,
+        Action::Snap(Right),
+        "Snap: right half, then bottom-right",
+    ),
+    key(
+        Mod,
+        Keysym::Up,
+        Action::Snap(Up),
+        "Snap: maximize, or the top quarter of a half",
+    ),
+    key(
+        Mod,
+        Keysym::Down,
+        Action::Snap(Down),
+        "Snap: quarter to half, then restore",
+    ),
+    key(
+        Mod,
+        Keysym::q,
+        Action::CloseFocused,
+        "Close the focused window",
+    ),
+    key(ModShift, Keysym::e, Action::Quit, "Quit sash-wm"),
+    debug_key(Mod, Keysym::Return, Action::SpawnTerminal, "Start foot"),
+    debug_key(
+        ModCtrl,
+        Keysym::d,
+        Action::ToggleDefaultMode,
+        "Toggle the monitor's default mode",
+    ),
+    pointer(
+        Mod,
+        Trigger::Button(BTN_LEFT),
+        Action::MoveDrag,
+        "Move the window; a tiled window floats; hold Shift to turn edge snapping off (keyboard: mod+Ctrl+H/J/K/L, mod+arrows)",
+    ),
+    pointer(
+        Mod,
+        Trigger::Button(BTN_RIGHT),
+        Action::ResizeDrag,
+        "Resize from the pointer's cell of a 3x3 grid; tiled: moves splits (keyboard: mod+Ctrl+Shift+H/J/K/L)",
+    ),
+    pointer(
+        Mods::None,
+        Trigger::AnyButton,
+        Action::ClickFocus,
+        "Focus and raise the window; the click is delivered (keyboard: mod+H/J/K/L, mod+Tab)",
+    ),
 ];
 
 const DEBUG_BUILD: bool = cfg!(debug_assertions);
 
-/// Finds the action for a key press, if any. Exactly the modifier must be held, plus
-/// exactly the Shift and Ctrl the binding asks for.
+fn active(binding: &&Binding) -> bool {
+    DEBUG_BUILD || !binding.debug_only
+}
+
+/// The action for a key press, if any. The held modifiers must match the binding's
+/// set exactly.
 pub fn lookup(modifier: Modifier, mods: &ModifiersState, key: Option<Keysym>) -> Option<Action> {
     let key = key?;
-    if !modifier.held(mods) {
-        return None;
-    }
-    BINDINGS
+    let held = Mods::held(modifier, mods);
+    TABLE
         .iter()
-        .filter(|b| DEBUG_BUILD || !b.action.debug_only())
-        .find(|b| b.shift == mods.shift && b.ctrl == mods.ctrl && b.key == key)
+        .filter(active)
+        .find(|b| b.mods == held && b.trigger == Trigger::Key(key))
         .map(|b| b.action)
+}
+
+/// The action for a pointer button press, if any. Shift is ignored: holding it during
+/// a drag turns edge snapping off.
+pub fn lookup_button(modifier: Modifier, mods: &ModifiersState, button: u32) -> Option<Action> {
+    let mods = ModifiersState {
+        shift: false,
+        ..*mods
+    };
+    let held = Mods::held(modifier, &mods);
+    TABLE
+        .iter()
+        .filter(active)
+        .filter(|b| b.mods == held)
+        .find(|b| b.trigger == Trigger::Button(button) || b.trigger == Trigger::AnyButton)
+        .map(|b| b.action)
+}
+
+/// docs/keybinds.md, generated from the table by the test below.
+#[cfg(test)]
+fn markdown() -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from(
+        "<!-- SPDX-License-Identifier: Apache-2.0 -->\n\
+         <!-- Generated from sash-wm/src/keybinds.rs. Do not edit: run\n     \
+         SASH_WRITE_KEYBINDS_DOC=1 cargo test keybinds_doc -->\n\n\
+         # Keybinds\n\n\
+         **mod** is Alt when sash-wm runs nested (the host keeps Super) and Super on a real \
+         session. Keys that trigger a binding are not passed to the focused app, and \
+         neither are mod+clicks.\n\n\
+         | Chord | Modifier set | Action | Builds |\n\
+         |---|---|---|---|\n",
+    );
+    for b in TABLE {
+        let set = match b.mods {
+            Mods::None => "no mod",
+            Mods::Mod => "mod",
+            Mods::ModShift => "mod+Shift",
+            Mods::ModCtrl => "mod+Ctrl",
+            Mods::ModCtrlShift => "mod+Ctrl+Shift",
+        };
+        let builds = if b.debug_only { "debug only" } else { "all" };
+        let _ = writeln!(
+            out,
+            "| {}{} | {set} | {} | {builds} |",
+            b.mods.label(),
+            b.trigger.label(),
+            b.description
+        );
+    }
+    out
 }
 
 /// A mod+Tab cycle in progress: a frozen most-recently-used order and the position in it.
@@ -259,6 +558,64 @@ mod tests {
         assert_eq!(
             lookup(Modifier::Alt, &alt_ctrl, Some(Keysym::d)),
             debug(Action::ToggleDefaultMode)
+        );
+    }
+
+    #[test]
+    fn pointer_bindings() {
+        let alt = mods(true, false, false, false);
+        let alt_shift = mods(true, false, true, false);
+        let none = mods(false, false, false, false);
+        let b = |m, button| lookup_button(Modifier::Alt, &m, button);
+        assert_eq!(b(alt, BTN_LEFT), Some(Action::MoveDrag));
+        assert_eq!(
+            b(alt_shift, BTN_LEFT),
+            Some(Action::MoveDrag),
+            "Shift is ignored"
+        );
+        assert_eq!(b(alt, BTN_RIGHT), Some(Action::ResizeDrag));
+        assert_eq!(b(alt, 0x112), None, "mod+middle is unbound");
+        assert_eq!(b(none, BTN_RIGHT), Some(Action::ClickFocus));
+        assert_eq!(
+            b(mods(false, false, false, true), 0x112),
+            Some(Action::ClickFocus)
+        );
+    }
+
+    #[test]
+    fn no_duplicate_chords() {
+        for (i, a) in TABLE.iter().enumerate() {
+            for b in &TABLE[i + 1..] {
+                let overlap = a.trigger == b.trigger
+                    || matches!(
+                        (a.trigger, b.trigger),
+                        (Trigger::AnyButton, Trigger::Button(_))
+                            | (Trigger::Button(_), Trigger::AnyButton)
+                    );
+                assert!(
+                    !(a.mods == b.mods && overlap),
+                    "duplicate chord {}{}: {:?} and {:?}",
+                    a.mods.label(),
+                    a.trigger.label(),
+                    a.action,
+                    b.action
+                );
+            }
+        }
+    }
+
+    /// Run with SASH_WRITE_KEYBINDS_DOC=1 to rewrite the file.
+    #[test]
+    fn keybinds_doc_is_up_to_date() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/keybinds.md");
+        let expected = markdown();
+        if std::env::var_os("SASH_WRITE_KEYBINDS_DOC").is_some() {
+            std::fs::write(path, &expected).unwrap();
+        }
+        let actual = std::fs::read_to_string(path).unwrap_or_default();
+        assert!(
+            actual == expected,
+            "docs/keybinds.md is out of date: run SASH_WRITE_KEYBINDS_DOC=1 cargo test keybinds_doc"
         );
     }
 }

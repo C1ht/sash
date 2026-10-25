@@ -328,18 +328,23 @@ fn client_resize_request_resizes_a_floating_window() {
             "resizing state cleared"
         );
 
-        // A resize request on a tiled window is ignored.
+        // A resize request on a tiled window is ignored, also with a split next to
+        // the edge.
+        let mut c2 = TestClient::connect(&socket);
+        let _w2 = c2.map_window();
         server.on_server(|h| {
-            h.chord(&[ALT, F]);
-            h.pointer_to(100.0, 100.0);
+            h.chord(&[ALT, H]); // focus 1
+            h.chord(&[ALT, F]); // 1 | 2
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
+            h.pointer_to(390.0, 590.0);
             h.button(BTN_LEFT, ButtonState::Pressed);
         });
         c.roundtrip();
         c.request_resize(&w, ResizeEdge::BottomRight);
         server.on_server(|h| {
             assert!(!h.server.state.dragged_window().is_some());
-            h.pointer_to(10.0, 10.0);
-            assert_eq!(h.rect_of(1), Some(AREA));
+            h.pointer_to(300.0, 300.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
             h.button(BTN_LEFT, ButtonState::Released);
         });
     });
@@ -379,7 +384,7 @@ fn mod_drag_moves_and_resizes_without_reaching_clients() {
             h.button(BTN_RIGHT, ButtonState::Released);
             h.key(SHIFT, KeyState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(10, 50, 460, 570)));
-            // mod+right-drag on a tiled window does nothing.
+            // mod+right-drag on a tiled window with no split on its edges does nothing.
             h.pointer_to(700.0, 300.0);
             h.button(BTN_RIGHT, ButtonState::Pressed);
             h.pointer_to(600.0, 200.0);
@@ -473,6 +478,43 @@ fn window_destroyed_during_a_drag_ends_the_drag() {
             h.key(ALT, KeyState::Released);
             assert_eq!(h.mapped_windows() + h.unmapped_windows(), 0);
         });
+    });
+}
+
+#[test]
+fn moving_keeps_the_size_the_client_settled_on() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c = TestClient::connect(&socket);
+        let w = c.map_window();
+        server.on_server(|h| {
+            h.key(ALT, KeyState::Pressed);
+            h.pointer_to(400.0, 300.0);
+            h.button(BTN_LEFT, ButtonState::Pressed); // floats at (0, 0, 800, 600)
+        });
+        c.roundtrip();
+        assert_eq!(c.config(&w), cfg((800, 600), false));
+        // Like foot rounding to its cell grid once it is no longer tiled.
+        c.ack_and_commit_size(&w, (790, 590));
+        server.on_server(|h| assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 790, 590))));
+        let configures = c.events.configures;
+        server.on_server(|h| {
+            h.pointer_to(420.0, 310.0);
+            h.pointer_to(440.0, 400.0);
+        });
+        c.roundtrip();
+        server.on_server(|h| {
+            assert_eq!(h.rect_of(1), Some(Rect::new(40, 100, 790, 590)));
+            h.button(BTN_LEFT, ButtonState::Released);
+            h.key(ALT, KeyState::Released);
+        });
+        c.roundtrip();
+        assert_eq!(c.config(&w), cfg((790, 590), false));
+        assert!(
+            c.events.configures <= configures + 1,
+            "no configure back to the size at the press"
+        );
     });
 }
 

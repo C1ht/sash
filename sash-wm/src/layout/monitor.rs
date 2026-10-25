@@ -10,8 +10,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, Mode, Rect, SizeLimits,
-    WindowId,
+    BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, Mode, Rect, Side, SizeLimits,
+    SplitHandle, WindowId,
     geometry::pick_in_direction,
     snap::{SnapStep, ZoneId, Zones, snap_step},
 };
@@ -72,6 +72,14 @@ impl WindowState {
             self.own_mode
         }
     }
+}
+
+/// A mouse resize of a tiled window: the split on each moving axis and the length of its
+/// first part when the drag started.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TiledResize {
+    horizontal: Option<(SplitHandle, i32)>,
+    vertical: Option<(SplitHandle, i32)>,
 }
 
 /// What the compositor knows about a window when it opens.
@@ -860,12 +868,58 @@ impl MonitorLayout {
         self.set_floating_rect(window, Rect::new(r.x + dx, r.y + dy, r.w, r.h))
     }
 
-    /// Keyboard resize by (dw, dh) with the top-left corner fixed. A tiled window is
-    /// floated in place first.
+    /// Keyboard resize by (dw, dh). A floating window keeps its top-left corner; a
+    /// tiled window moves the split on its right (dw) and bottom (dh) edges, and nothing
+    /// happens on an edge that lies on the output boundary.
     pub fn resize_by(&mut self, window: WindowId, dw: i32, dh: i32) -> Option<Rect> {
-        self.float_in_place(window);
+        if self.mode(window) == Some(Mode::Tiled) {
+            if dw != 0 {
+                self.tree.resize_edge(window, Side::Right, dw);
+            }
+            if dh != 0 {
+                self.tree.resize_edge(window, Side::Bottom, dh);
+            }
+            return self.rect_of(window);
+        }
         let r = self.floating.rect_of(window)?;
         self.set_floating_rect(window, Rect::new(r.x, r.y, r.w + dw, r.h + dh))
+    }
+
+    /// Starts a mouse resize of a tiled window from `edges` (from the 3x3 grid): the
+    /// splits on those edges and their lengths now. Edges on the output boundary are left
+    /// out; None if nothing can move.
+    pub fn begin_tiled_resize(&self, window: WindowId, edges: Edges) -> Option<TiledResize> {
+        let horizontal = if edges.left {
+            self.tree.edge_split(window, Side::Left)
+        } else if edges.right {
+            self.tree.edge_split(window, Side::Right)
+        } else {
+            None
+        };
+        let vertical = if edges.top {
+            self.tree.edge_split(window, Side::Top)
+        } else if edges.bottom {
+            self.tree.edge_split(window, Side::Bottom)
+        } else {
+            None
+        };
+        (horizontal.is_some() || vertical.is_some()).then_some(TiledResize {
+            horizontal,
+            vertical,
+        })
+    }
+
+    /// Applies a mouse resize of a tiled window: each split moves by the pointer's
+    /// offset since the press. Returns whether any ratio changed.
+    pub fn drag_tiled_resize(&mut self, resize: &TiledResize, dx: i32, dy: i32) -> bool {
+        let mut changed = false;
+        if let Some((handle, start)) = &resize.horizontal {
+            changed |= self.tree.set_split_first(handle, start + dx);
+        }
+        if let Some((handle, start)) = &resize.vertical {
+            changed |= self.tree.set_split_first(handle, start + dy);
+        }
+        changed
     }
 
     /// Consistency checks used by tests: every window has exactly one leaf, leaf
@@ -1028,6 +1082,58 @@ mod tests {
         assert_eq!(rect(&layout, 3), Rect::new(500, 500, 500, 501));
     }
 
+    /// 1 | (2 / 3) with the vertical split at 520 (13/20) and 2's bottom at 340 (17/30).
+    fn resized_layout() -> MonitorLayout {
+        let mut layout = layout_with(3);
+        assert_eq!(
+            layout.resize_by(id(1), 3 * STEP, 0),
+            Some(Rect::new(0, 0, 520, 600))
+        );
+        assert_eq!(
+            layout.resize_by(id(2), 0, STEP),
+            Some(Rect::new(520, 0, 280, 340))
+        );
+        assert_eq!(
+            layout.mode(id(1)),
+            Some(Mode::Tiled),
+            "tiled resize does not float"
+        );
+        layout
+    }
+
+    #[test]
+    fn toggling_keeps_tiled_resize_ratios() {
+        let mut layout = resized_layout();
+        let tree = layout.tree().clone();
+        let tiles = layout.tiled_rects();
+        assert!(layout.toggle(id(2)));
+        assert!(layout.toggle(id(2)));
+        assert_eq!(layout.tree(), &tree, "identical tree, ratios included");
+        layout.float_all();
+        layout.resize_by(id(1), -STEP, STEP);
+        layout.tile_all();
+        assert_eq!(layout.tree(), &tree, "identical tree, ratios included");
+        assert_eq!(layout.tiled_rects(), tiles, "identical rectangles");
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn output_resize_keeps_tiled_resize_ratios() {
+        let mut layout = resized_layout();
+        layout.set_area(Rect::new(0, 0, 1000, 1001));
+        // 1000 * 13/20 = 650; 1001 * 17/30 = 567.2, floored.
+        assert_eq!(rect(&layout, 1), Rect::new(0, 0, 650, 1001));
+        assert_eq!(rect(&layout, 2), Rect::new(650, 0, 350, 567));
+        assert_eq!(rect(&layout, 3), Rect::new(650, 567, 350, 434));
+        // The same while everything floats, applied at tile-all.
+        let mut floated = resized_layout();
+        floated.float_all();
+        floated.set_area(Rect::new(0, 0, 1000, 1001));
+        floated.tile_all();
+        assert_eq!(floated.tree(), layout.tree());
+        layout.check_invariants();
+    }
+
     #[test]
     fn windows_opened_and_closed_while_floating_follow_the_tiled_rules() {
         // 1 | (2 / 3), float all, open 4 (focused: 3), close 2 (3's old sibling), tile all.
@@ -1169,7 +1275,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_move_and_resize_float_tiled_windows_and_respect_limits() {
+    fn keyboard_move_floats_tiled_windows_and_resize_respects_limits() {
         let mut layout = layout_with(2);
         layout.set_limits(
             id(2),
@@ -1596,5 +1702,38 @@ mod tests {
             lookup.as_nanos() as f64 / n as f64,
             snap.as_nanos() as f64 / rounds as f64
         );
+    }
+
+    /// Timing of a tiled resize step during a drag (ratio update) and of recomputing
+    /// every tiled rectangle afterwards. Run in release:
+    /// `cargo test --release -- --ignored bench_`.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_tiled_resize() {
+        use std::{hint::black_box, time::Instant};
+        for n in [3, 16] {
+            let mut layout = layout_with(n);
+            layout.set_area(Rect::new(0, 0, 2560, 1440));
+            let resize = layout
+                .begin_tiled_resize(id(n - 1), Edges::BOTTOM_RIGHT)
+                .expect("window n-1 has splits");
+            let rounds = 1_000_000;
+            let start = Instant::now();
+            for i in 0..rounds {
+                let d = i % 200 - 100;
+                black_box(layout.drag_tiled_resize(&resize, d, -d));
+            }
+            let update = start.elapsed();
+            let start = Instant::now();
+            for _ in 0..rounds {
+                black_box(layout.tiled_rects());
+            }
+            let rects = start.elapsed();
+            println!(
+                "{n} windows: ratio update {:.1} ns/op; recompute all rects {:.1} ns/op",
+                update.as_nanos() as f64 / rounds as f64,
+                rects.as_nanos() as f64 / rounds as f64
+            );
+        }
     }
 }

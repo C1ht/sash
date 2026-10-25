@@ -36,7 +36,7 @@ use smithay::{
 };
 
 use crate::{
-    layout::Edges,
+    layout::{Edges, Mode},
     state::Sash,
     windows::{DragKind, StateRequest},
 };
@@ -192,6 +192,11 @@ impl Sash {
         let Some(id) = self.windows.by_surface(surface.wl_surface()).map(|m| m.id) else {
             return;
         };
+        // Client resizes of tiled windows stay ignored; tiled resize is mod+right-drag.
+        let tiled = self.windows.layout.mode(id) == Some(Mode::Tiled);
+        if matches!(kind, DragKind::Resize(_)) && tiled {
+            return;
+        }
         if pressed_on_window {
             self.start_pointer_drag(id, kind, start, serial);
         }

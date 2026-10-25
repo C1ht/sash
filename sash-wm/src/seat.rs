@@ -18,7 +18,11 @@ use smithay::{
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
-use crate::{keybinds, state::Sash, windows::DragKind};
+use crate::{
+    keybinds::{self, Action},
+    state::Sash,
+    windows::DragKind,
+};
 
 /// Linux input event codes (linux/input-event-codes.h).
 pub const BTN_LEFT: u32 = 0x110;
@@ -114,33 +118,36 @@ impl Sash {
         let location = pointer.current_location();
         match state {
             ButtonState::Pressed if !pointer.is_grabbed() => {
-                let mod_held = self
+                let mods = self
                     .seat
                     .get_keyboard()
-                    .is_some_and(|k| self.keybinds.modifier.held(&k.modifier_state()));
+                    .map(|k| k.modifier_state())
+                    .unwrap_or_default();
+                let modifier = self.keybinds.modifier;
                 let under = self.window_at(location);
-                if mod_held {
+                if modifier.held(&mods) {
+                    // Every mod+click is kept from clients, bound or not.
                     self.windows.swallowed_buttons.push(button);
-                    if let Some(window) = under {
-                        let kind = match button {
-                            BTN_LEFT => Some(DragKind::Move),
-                            BTN_RIGHT => {
-                                self.resize_edges_at(window, location).map(DragKind::Resize)
-                            }
-                            _ => None,
+                    let kind = match keybinds::lookup_button(modifier, &mods, button) {
+                        Some(Action::MoveDrag) => Some(DragKind::Move),
+                        Some(Action::ResizeDrag) => under
+                            .and_then(|w| self.resize_edges_at(w, location))
+                            .map(DragKind::Resize),
+                        _ => None,
+                    };
+                    if let (Some(window), Some(kind)) = (under, kind) {
+                        let start = GrabStartData {
+                            focus: None,
+                            button,
+                            location,
                         };
-                        if let Some(kind) = kind {
-                            let start = GrabStartData {
-                                focus: None,
-                                button,
-                                location,
-                            };
-                            self.start_pointer_drag(window, kind, start, serial);
-                        }
+                        self.start_pointer_drag(window, kind, start, serial);
                     }
                     return;
                 }
-                if let Some(window) = under {
+                if keybinds::lookup_button(modifier, &mods, button) == Some(Action::ClickFocus)
+                    && let Some(window) = under
+                {
                     self.focus_window(window);
                 }
             }

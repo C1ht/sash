@@ -16,10 +16,12 @@ mod monitor;
 mod proptests;
 mod snap;
 
-pub use bsp::BspTree;
+#[cfg(test)]
+pub use bsp::MIN_TILE;
+pub use bsp::{BspTree, Side, SplitHandle};
 pub use floating::FloatingLayout;
 pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone};
-pub use monitor::{Layer, MonitorLayout, NewWindow, Presentation, STEP};
+pub use monitor::{Layer, MonitorLayout, NewWindow, Presentation, STEP, TiledResize};
 pub use snap::{ZoneId, snap_to_edges};
 
 /// Identifies a window in a layout. Assigned by the compositor, never reused.
