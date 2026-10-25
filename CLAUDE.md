@@ -301,6 +301,10 @@ change this file without the owner's approval.
     are directly above their parent.
   - A popup whose parent toplevel is not mapped is dismissed at once
     (popup_done); it is never shown.
+  - Popups are dismissed innermost first (the brief contradicted
+    itself; the protocol rule wins). Confirmed by the owner after M7.
+  - Known limit: on toplevels, the part of a subsurface outside the
+    window's own rectangle does not receive pointer input.
   - Smithay 0.7 does not expose a client's xdg_wm_base, so sash-wm
     dispatches xdg_wm_base itself (forwarding to Smithay) to record it
     and post not_the_topmost_popup.
@@ -385,6 +389,20 @@ change this file without the owner's approval.
 - Confirm with the owner before moving to the next step or milestone.
 - No features beyond what was asked.
 - Report measurements and real test/command output, never "looks done".
+
+## Process and privacy rules (owner, after M7)
+
+- Never signal processes by name: no pkill, killall or pkill -f. Only
+  kill PIDs you started, and record them when you start them.
+- Run real clients (Firefox, pavucontrol, anything with personal data)
+  only with a throwaway profile or a throwaway config directory. Look
+  at every screenshot before keeping it; delete it at once if it shows
+  personal content; never commit it.
+- Do not run anything that needs a password, a login or the owner's
+  network accounts.
+- The scratchpad is volatile (it is lost on reboot). Measurement and
+  similarity scripts live in tools/, reviewed screenshots in
+  docs/screenshots/; nothing in the repo depends on the scratchpad.
 
 ## Licensing
 

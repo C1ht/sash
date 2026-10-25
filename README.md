@@ -52,6 +52,20 @@ sash-wm renders its current output once more into an offscreen buffer and
 writes it as a PNG; the host screen is never read. Release builds ignore
 SIGUSR1.
 
+## Measurement and similarity tools
+
+- `tools/measure/`: scripted measurements through the synthetic input. Build the
+  measurement binary (optimized, debug assertions on) with
+  `source tools/measure/common.sh && build_measure`, then run
+  `tools/measure/run-drags.sh <log>` (drags on three foot windows),
+  `tools/measure/run-popup.sh <log> <capture dir>` (pavucontrol menu while dragging) or
+  `tools/measure/idle.sh <log> <windows> <seconds>` (idle CPU and memory, release
+  build). Each prints frame-time and frame-interval statistics from the log.
+- `tools/similarity/`: the per-milestone similarity check against Smithay's examples.
+  In a venv with `pip install copydetect==0.5.0` and a clone of Smithay at tag
+  `v0.7.0`: `python -I tools/similarity/summary.py sash-wm/src <smithay clone> 25 30 4`;
+  `tools/similarity/pair.py <sash file> <reference file> 25 30` shows what matched.
+
 ## Debian 13 (trixie) packages
 
 - Build: `build-essential pkg-config libxkbcommon-dev`
