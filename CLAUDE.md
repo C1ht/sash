@@ -437,8 +437,12 @@ change this file without the owner's approval.
 - Unpaced flips (owner, after M9 stage B): when page flips complete
   without vblank pacing (two flips completing less than half a refresh
   period apart, as on virtio-gpu), rendering is capped at the output's
-  nominal refresh rate: no frame is rendered less than one refresh
-  period after the previous one. With vblank pacing nothing changes.
+  nominal refresh rate by a fixed schedule (owner, after M9b): each
+  frame has a slot one refresh period after the previous slot, counted
+  from the start of rendering (not its end); a frame that starts late
+  but within the next period takes that slot, so lateness does not add
+  up; after an idle gap the schedule restarts. With vblank pacing
+  nothing changes.
 - Mode selection (owner, after M9 stage B), no setting:
   1. Interlaced modes are ignored.
   2. Native resolution: if the physical size is known, the largest
@@ -461,6 +465,13 @@ change this file without the owner's approval.
   5. Debug builds only: `--mode WxH@R` picks that mode (still
      validated; refused if not offered). Not compiled into release
      builds; tools/check-release.sh proves it.
+  6. Debug builds only (owner, after M9b), fault injection for the
+     validation: SASH_DEBUG_REJECT_MODES="WxH@R,..." makes the test
+     commit of those modes fail; SASH_DEBUG_REJECT_ALL_MODES=1 makes
+     every one fail. Not compiled into release builds;
+     tools/check-release.sh proves it. The VM scenario covers the
+     fallback chain and the all-rejected exit (no commit, console
+     untouched).
 - Variable refresh rate stays off in M9 (roadmap).
 - Stage C is run by the owner, never by Claude: tools/stage-c.sh (the
   timeout wrapper, a fsynced log in ~/.cache/sash/stage-c/, the escape
