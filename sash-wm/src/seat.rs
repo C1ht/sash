@@ -222,6 +222,14 @@ impl Sash {
         };
         let serial = SERIAL_COUNTER.next_serial();
         let location = pointer.current_location();
+        record!(
+            self,
+            "pointer_button",
+            "button" => button,
+            "pressed" => state == ButtonState::Pressed,
+            "x" => location.x,
+            "y" => location.y,
+        );
         match state {
             ButtonState::Pressed if !pointer.is_grabbed() => {
                 let mods = self

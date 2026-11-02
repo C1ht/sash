@@ -47,6 +47,7 @@ see docs/DEBUG.md):
 ```sh
 cargo build -p sash-wm --features debug-record
 SASH_DEBUG_RECORD=~/.cache/sash/debug target/debug/sash-wm   # mod+F11 writes a bundle
+tools/replay.sh ~/.cache/sash/debug/bundle-<time>           # replay it headless
 ```
 
 The backend is chosen from the environment: nested (winit) when `WAYLAND_DISPLAY` or

@@ -83,6 +83,30 @@ tools/check-release.sh                          # proves none of it is in releas
 
 The VM scenario (tools/vm/scenario.py, check 17) runs it on the DRM backend.
 
-## Replay
+## Replaying a bundle
 
-See "Replaying a bundle" below (`tools/replay.sh`).
+```sh
+tools/replay.sh ~/.cache/sash/debug/bundle-<time>
+```
+
+The bundle's events are replayed in the headless test harness (nothing on the
+display) and its layout snapshots are compared, one by one, with the replay's. The
+output lists what was replayed, what was not, how many snapshots were compared, and
+every difference.
+
+- Replayed: pointer positions and buttons as sash-wm processed them (pointer
+  acceleration does not matter), modifier keys, keybind actions (Super+Return by the
+  window it opened), windows opening, committing at their recorded sizes, unmapping
+  and closing (stand-in test clients), output size changes.
+- Not replayed: printable keys (only recorded as "printable"), client requests
+  (title-bar moves and resizes, fullscreen and maximize asked by a client), popups,
+  frames, flips and pacing (DRM timing).
+- A bundle that starts with windows already open is refused: the 60-second ring cut
+  their opening. Record from an empty desktop, or with `SASH_DEBUG_RECORD_SESSION=1`.
+- Window ids are matched by order of opening; the "mapped" flag is not compared
+  (it depends on client timing); repeated and empty-desktop snapshots are merged.
+
+A bundle that shows a bug becomes a regression test: copy its `events.jsonl` and
+`state.json` (check that they contain no typed text: no `"printable"` keys) into
+`sash-wm/src/tests/fixtures/replay/<name>/` and add a test like
+`the_drm_session_recorded_in_the_vm_replays` in `sash-wm/src/tests/replay.rs`.

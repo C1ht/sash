@@ -10,6 +10,8 @@ mod harness;
 mod popups;
 #[cfg(feature = "debug-record")]
 mod record;
+#[cfg(feature = "debug-record")]
+mod replay;
 mod snapping;
 mod tiled_resize;
 mod tiling;

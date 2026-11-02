@@ -488,8 +488,9 @@ try:
     shots = sh(vm, f"ls {bundles[-1]}/screenshots" if bundles else "true").split()
     print("screenshots, second bundle:", shots)
     if shots:
+        # The default: outlines only (the window shows "hunter2", the picture must not).
         encoded = sh(vm, f"base64 -w0 {bundles[-1]}/screenshots/{shots[-1]}", timeout=300)
-        with open(os.path.join(OUT, "17-recorded-" + shots[-1]), "wb") as f:
+        with open(os.path.join(OUT, "17-outline-" + shots[-1]), "wb") as f:
             f.write(base64.b64decode(encoded))
     modes_ok = all(line.split()[0] in ("700", "600") for line in perms.splitlines() if line.strip())
     pointer_only = [l for l in first_counters.splitlines()
@@ -497,11 +498,62 @@ try:
     # Note: the screenshots show window contents, so text a client echoes on screen is
     # in them; "no typed text" is about the recorded data (events, state, log).
     check("debug recording: banner, bundles on Super+F11, private files, no typed text in "
-          "events/state/log, offscreen screenshots (see 17-recorded-*)",
+          "events/state/log, outline screenshots (see 17-outline-*)",
           banner == 1 and len(bundles) == 2 and modes_ok and leaked.strip() == ""
           and '"kind":"pointer_in"' in kinds and '"kind":"screenshot"' in kinds and bool(shots),
           f"bundles {len(bundles)}, screenshots {len(shots)}, leaked {leaked.strip() or 'nothing'}")
     print(f"seconds with pointer events in and no frame rendered: {len(pointer_only)}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 18. A session recorded on the DRM backend for replay (tools/replay.sh): windows
+    # spawned by Super+Return with the pointer in different places (rule A), a float, a
+    # Super+drag, a snap, a close; Super+F11 writes the bundle. Nothing is typed. The
+    # bundle's events.jsonl and state.json are copied out (the replay fixture).
+    sh(vm, "rm -rf /home/sash/rec18")
+    start(vm, binary=RECORD_BIN, env="SASH_DEBUG_RECORD=/home/sash/rec18", windows=0)
+    w18, h18, _ = output_mode(vm)
+    # The third spawn has the pointer over window 1 while window 2 has focus: rule A
+    # splits window 1 (the old rule split window 2).
+    for at in [(w18 // 4, h18 // 2), (w18 // 4, h18 // 4), (w18 // 4, 3 * h18 // 4)]:
+        vm.pointer_abs(at[0], at[1], w18, h18)
+        time.sleep(0.3)
+        vm.keys("meta_l", "ret")
+        time.sleep(2)
+    vm.keys("meta_l", "f")  # float the newest window
+    time.sleep(0.8)
+    vm.key_down("meta_l")  # Super+drag it
+    vm.pointer_abs(3 * w18 // 4, h18 // 2, w18, h18)
+    vm.button("left", True)
+    for i in range(20):
+        vm.pointer_abs(3 * w18 // 4 - 10 * i, h18 // 2 - 5 * i, w18, h18)
+        time.sleep(0.03)
+    vm.button("left", False)
+    vm.key_down("meta_l", False)
+    time.sleep(0.8)
+    vm.keys("meta_l", "left")  # snap it to the left half
+    time.sleep(0.8)
+    vm.pointer_abs(w18 // 8, h18 // 8, w18, h18)
+    vm.button("left", True)  # click focuses
+    vm.button("left", False)
+    time.sleep(0.5)
+    vm.keys("meta_l", "q")  # close the focused window
+    time.sleep(1.5)
+    vm.keys("meta_l", "f11")
+    time.sleep(2)
+    b18 = sh(vm, "ls -d /home/sash/rec18/bundle-* | tail -1").strip()
+    fixture = os.path.join(OUT, "18-replay-bundle")
+    os.makedirs(fixture, exist_ok=True)
+    for name in ("events.jsonl", "state.json"):
+        encoded = sh(vm, f"gzip -c {b18}/{name} | base64 -w0", timeout=300)
+        with open(os.path.join(fixture, name), "wb") as f:
+            f.write(gzip.decompress(base64.b64decode(encoded)))
+    typed = sh(vm, f"grep -c printable {b18}/events.jsonl || true").strip()
+    kinds18 = sh(vm, f"grep -oE '\"kind\":\"[a-z_]+\"' {b18}/events.jsonl | sort | uniq -c")
+    print("bundle 18:", b18, "\n" + kinds18)
+    check("a DRM session recorded for replay (copied to 18-replay-bundle)",
+          b18 != "" and typed == "0" and '"kind":"layout"' in kinds18
+          and '"kind":"pointer_button"' in kinds18,
+          f"printable keys: {typed}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
     # 16. tools/stage-c.sh on a console of the guest (the owner's stage C tool): escape

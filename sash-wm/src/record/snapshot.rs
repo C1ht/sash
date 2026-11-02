@@ -172,6 +172,7 @@ pub fn state_json(state: &Sash) -> Json {
         .map(|m| Json::obj([("id", m.id.into()), ("app_id", app_id(state, m.id))]))
         .collect();
     Json::obj([
+        ("modifier", format!("{:?}", state.keybinds.modifier).into()),
         ("output_mode", output.into()),
         ("layout_area", layout.area().into()),
         (

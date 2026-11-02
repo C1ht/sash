@@ -66,10 +66,20 @@ impl Harness {
     /// A harness advertising `formats` as dmabufs (every buffer "imports"; a GPU test
     /// imports for real when it renders).
     pub fn with_dmabuf_formats(formats: Vec<Format>) -> Self {
+        Self::build(formats, Modifier::Alt)
+    }
+
+    /// A harness whose keybind modifier is `modifier` (replays of DRM bundles: Super).
+    #[cfg(feature = "debug-record")]
+    pub fn with_modifier(modifier: Modifier) -> Self {
+        Self::build(fake_dmabuf_formats(), modifier)
+    }
+
+    fn build(formats: Vec<Format>, modifier: Modifier) -> Self {
         let event_loop = EventLoop::try_new().expect("event loop");
         let (redraw, redraw_requests) = ping::make_ping().expect("ping");
         let mut server =
-            Server::new(&event_loop, redraw, Instant::now(), Modifier::Alt).expect("server");
+            Server::new(&event_loop, redraw, Instant::now(), modifier).expect("server");
 
         let redraw_requested = Rc::new(Cell::new(false));
         let flag = redraw_requested.clone();

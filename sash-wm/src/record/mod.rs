@@ -13,7 +13,7 @@
 #[cfg(not(debug_assertions))]
 compile_error!("the debug-record feature is for debug builds only");
 
-mod json;
+pub mod json;
 pub mod outline;
 mod snapshot;
 
@@ -583,6 +583,12 @@ impl Recorder {
             vec![("file", name.clone().into()), ("reason", reason.into())],
         );
         self.shots.push(at, Shot { name, png });
+    }
+
+    /// The events in the ring, as written to events.jsonl (replay tests).
+    #[cfg(test)]
+    pub fn event_lines(&self) -> Vec<String> {
+        self.events.iter().map(|(_, line)| line.clone()).collect()
     }
 
     /// Writes a bundle: the ring's events, `state`, the screenshots and the log.

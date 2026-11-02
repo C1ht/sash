@@ -92,7 +92,7 @@ pub struct Events {
     pub close_requested: bool,
     /// Per window: last configure (by xdg_toplevel) and its serial (by xdg_surface).
     configs: HashMap<ObjectId, ToplevelConfig>,
-    serials: HashMap<ObjectId, u32>,
+    pub serials: HashMap<ObjectId, u32>,
     /// Serial of the last wl_pointer.button press, and all buttons pressed.
     pub button_serial: Option<u32>,
     pub buttons_pressed: Vec<u32>,
