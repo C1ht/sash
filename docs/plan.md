@@ -198,7 +198,7 @@ sash/
   - Stage B (VM only: QEMU/KVM, virtio-gpu, minimal Debian 13 guest, the release binary from the trixie container): Smithay's DRM/KMS path (libseat, udev, libinput, GBM/EGL, atomic modesetting on one connector at its preferred mode, page-flip pacing, presentation-time, hardware cursor with software fallback, VT switching via session pause/resume); modifier Super; mod+Shift+E; VT switches before anything else; debug-only `--exit-after <seconds>`; startup errors restore the display. Input per the owner's decision (fixed defaults, XKB_DEFAULT_* honoured). Hotplug out of scope; unplugging must not crash. Tests without GPU or session: mode selection, the pacing state machine, pause/resume sequences, input device add/remove with fakes; in the VM by script where possible. Measure in the VM (frame intervals under a drag, idle CPU and RAM); VM numbers do not predict NVIDIA hardware.
   - Docs: docs/m9-stage-c.md, the exact checklist for the first run on the real machine.
   - After stage B (owner decisions, rules in CLAUDE.md): the top-edge rule for floating windows; automatic backend selection; a render cap at the nominal refresh when flips are not vblank-paced; same-connector disconnect/reconnect (stop, then clear and modeset at the same mode); tools/stage-c.sh and monitor power-off/on and cable-pull runs in docs/m9-stage-c.md; a VM check that a udev event arrives.
-  - Mode selection rule (proposal, not built; owner decides): see "Proposal: mode selection" below.
+  - Mode selection rule: approved by the owner after stage B, with TEST_ONLY validation and a fallback chain, placeholder physical sizes, and a debug-only `--mode WxH@R` (rules in CLAUDE.md). Reconnect keeps the previous mode if offered, else the rule (confirmed). Backend selection needs XDG_SESSION_ID, XDG_SEAT and XDG_VTNR. The VM lives in ~/.cache/sash/vm. Tag m9b.
   - Done after stage B, pending approval: the decisions above are built and tested (unit, property and headless tests; the VM scenario passes 16 of 16 checks, including a udev change event with unplug and replug, and tools/stage-c.sh on a guest console). Reconnect when the display no longer offers the mode in use: the mode-selection rule picks one (Claude's decision, to be confirmed).
   - Stage C (first bare-metal run) only with the owner. Explicit sync (wp_linux_drm_syncobj_v1) is decided at that first bare-metal run (owner decision after M8).
 
@@ -211,6 +211,8 @@ Roadmap after M9 (no work now), in order:
 3. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
 4. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
 5. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
+
+Later (owner, after M9 stage B): **variable refresh rate (VRR)**, off in M9.
 
 Before daily use (owner, after M9 stage B): **Xcursor theme loading.** On DRM, sash-wm draws only its built-in arrow for every named cursor shape; client-chosen shapes (text beam, resize arrows, hand) need an Xcursor theme loaded from the system's icon theme directories.
 
@@ -227,7 +229,7 @@ On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itsel
 - **Middle ground to consider:** B now, with a fixed list of exactly which values would become settings under A, so the decision can be revisited at M9 when real devices exist.
 - **Owner decision (after M8): the middle ground.** Fixed defaults now; the keymap honours the XKB_DEFAULT_* environment variables and reads nothing from system configuration (not /etc/default/keyboard, not localed); the "input" group joins the closed settings list when the settings protocol is built. Recorded in CLAUDE.md ("Settings and configuration").
 
-### Proposal: mode selection (owner decides; nothing implemented)
+### Mode selection (proposal after stage B; approved by the owner with additions, see CLAUDE.md)
 
 The owner's monitor (probe after M9 stage B, `tools/drm-probe.py --all-modes`) is a 1190x340 mm (32:9) panel on HDMI-A-1. Its EDID preferred mode is 3840x1080@120, which is not its native resolution; Hyprland runs it at 5120x1440@240. The largest mode by pixel count is 3840x2160 (a 16:9 scaled mode), so "largest" is wrong too.
 

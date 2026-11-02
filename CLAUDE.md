@@ -422,29 +422,54 @@ change this file without the owner's approval.
   drops hotplug when powered off): rendering and frame callbacks stop;
   windows, layout and the output stay; client requests are served.
   Connected again: the CRTC is cleared and a full modeset is committed
-  at the same mode, then the whole output is redrawn. If the display no
-  longer offers that mode (a different mode list after the reconnect),
-  the mode-selection rule picks one on that connector and the output and
-  layout follow its size (Claude's decision, to be confirmed by the
-  owner). Never a panic. Stage C tests a monitor power
+  at the previous mode if the display still offers it; otherwise the
+  mode-selection rule picks one on that connector (confirmed by the
+  owner after M9 stage B). A resolution change goes through the normal
+  output-resize path (floating windows re-clamped). Then the whole
+  output is redrawn. Never a panic. Stage C tests a monitor power
   off/on and a cable pull; the VM test confirms that a udev event
   arrives.
-- Backend selection (owner, after M9 stage B): DRM when neither
-  WAYLAND_DISPLAY nor DISPLAY is set and a login session exists
-  (XDG_SESSION_ID set); winit otherwise. `--backend winit|drm`
-  overrides. Neither a display nor a session: exit with a message.
+- Backend selection (owner, after M9 stage B): winit when WAYLAND_DISPLAY
+  or DISPLAY is set; DRM only when XDG_SESSION_ID, XDG_SEAT and
+  XDG_VTNR are all set (a local console session); otherwise exit with
+  "DRM needs a local console session; this looks like a remote login".
+  Empty values count as unset. `--backend winit|drm` overrides.
 - Unpaced flips (owner, after M9 stage B): when page flips complete
   without vblank pacing (two flips completing less than half a refresh
   period apart, as on virtio-gpu), rendering is capped at the output's
   nominal refresh rate: no frame is rendered less than one refresh
   period after the previous one. With vblank pacing nothing changes.
-- Mode selection: today the connector's preferred mode. The owner's
-  monitor reports a non-native preferred mode, so a new rule is
-  proposed in docs/plan.md and is not built before the owner approves.
+- Mode selection (owner, after M9 stage B), no setting:
+  1. Interlaced modes are ignored.
+  2. Native resolution: if the physical size is known, the largest
+     mode (by pixel count) whose aspect ratio is within 5% of the
+     panel's physical aspect ratio. Physical size unknown: 0x0 mm, or
+     the placeholder sizes 160x90 mm and 16x9 (cm values); then, and
+     when no mode matches, the preferred mode's resolution, else the
+     largest.
+  3. At that resolution the highest exact refresh rate (pixel clock /
+     (htotal x vtotal)); ties: the kernel's order.
+  4. Validation before anything is committed: each candidate is tested
+     with an atomic TEST_ONLY commit (allow-modeset). Candidates in
+     order: the selected mode, the same resolution at the next lower
+     refresh rates, then the next lower resolutions of the same aspect
+     (within 5%), each from its highest refresh down. Every candidate
+     and the reason it was rejected is logged. If none passes, sash-wm
+     exits with a message and the display is left untouched (the device
+     is opened without disabling outputs; they are turned off only
+     after a mode passed).
+  5. Debug builds only: `--mode WxH@R` picks that mode (still
+     validated; refused if not offered). Not compiled into release
+     builds; tools/check-release.sh proves it.
+- Variable refresh rate stays off in M9 (roadmap).
 - Stage C is run by the owner, never by Claude: tools/stage-c.sh (the
   timeout wrapper, a fsynced log in ~/.cache/sash/stage-c/, the escape
   instructions printed first) and docs/m9-stage-c.md. Nothing runs on
-  the real display.
+  the real display. Run 1 uses `--mode 5120x1440@60`, the next runs the
+  selected mode.
+- The VM (owner, after M9 stage B): its image, guest disk, packages and
+  test downloads live in ~/.cache/sash/vm, each download checked
+  against a checksum. Nothing in tools/ depends on the scratchpad.
 - Owner approvals (M9 stage B): Smithay features backend_drm,
   backend_gbm, backend_libinput, backend_udev, backend_session_libseat and
   their crates (drm, drm-ffi, drm-sys, gbm, gbm-sys, input, input-sys,
