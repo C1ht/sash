@@ -37,6 +37,7 @@ use crate::{
     layout::{
         Direction, Edges, Layer, Mode, MonitorLayout, NewWindow, Presentation, Rect, STEP,
         SizeLimits, TiledResize, WindowId, ZoneId, resize_rect, resize_zone, snap_to_edges,
+        stop_top_edge,
     },
     popups::popups_of,
     state::Sash,
@@ -691,12 +692,14 @@ impl Sash {
                 }
             }
             DragKind::Resize(edges) => {
-                let resized = resize_rect(from, edges, dx, dy, layout.limits(id));
-                if free {
+                let limits = layout.limits(id);
+                let resized = resize_rect(from, edges, dx, dy, limits);
+                let resized = if free {
                     resized
                 } else {
                     snap_to_edges(resized, edges, area, &others)
-                }
+                };
+                stop_top_edge(resized, edges, area, limits)
             }
         };
         layout.set_floating_rect(id, rect);

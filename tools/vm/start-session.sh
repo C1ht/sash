@@ -4,6 +4,7 @@
 # Runs as root inside the test guest: starts sash-wm for the user "sash" in a real
 # logind session on VT 2 (as a display manager would), and switches to VT 2.
 # Usage: start-session.sh BINARY [ARGS...]
+# No --backend: sash-wm chooses DRM itself (no display variables, a login session).
 # Environment: XKB_DEFAULT_* (passed on), CHVT_DELAY (seconds before the VT switch).
 set -e
 BIN=$1
@@ -22,7 +23,7 @@ systemctl reset-failed sash-session 2>/dev/null || true
 chmod 666 /tmp/sash.log
 # Only XKB_DEFAULT_* variables that are set and not empty are passed on: xkbcommon
 # takes an empty one at its word (an empty layout has no letters).
-set -- --setenv=RUST_LOG="${RUST_LOG:-sash_wm=debug}" "$BIN" --backend drm "$@"
+set -- --setenv=RUST_LOG="${RUST_LOG:-sash_wm=debug}" "$BIN" "$@"
 for var in XKB_DEFAULT_RULES XKB_DEFAULT_MODEL XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT \
     XKB_DEFAULT_OPTIONS; do
     value=$(printenv "$var" || true)

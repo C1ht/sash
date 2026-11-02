@@ -10,7 +10,7 @@ use super::{
     client::{TestClient, ToplevelConfig},
     harness::{
         Harness,
-        keys::{ALT, CTRL, F, H, L, SHIFT, T, TAB},
+        keys::{ALT, CTRL, DOWN, F, H, J, K, L, LEFT, SHIFT, T, TAB, UP},
     },
 };
 use crate::{
@@ -351,6 +351,97 @@ fn client_resize_request_resizes_a_floating_window() {
 }
 
 #[test]
+fn the_top_edge_never_goes_above_the_output() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c = TestClient::connect(&socket);
+        let w = c.map_window();
+        server.on_server(|h| {
+            h.chord(&[ALT, F]); // floats at (0, 0, 800, 600)
+            // Shift held through the drags: no edge snapping, so the numbers are exact.
+            h.key(ALT, KeyState::Pressed);
+            h.key(SHIFT, KeyState::Pressed);
+            // Shrink to 400x300 from the bottom-right corner, then move it to y = 100.
+            h.pointer_to(400.0, 300.0);
+            h.button(BTN_RIGHT, ButtonState::Pressed);
+            h.pointer_to(0.0, 0.0);
+            h.button(BTN_RIGHT, ButtonState::Released);
+            h.pointer_to(100.0, 100.0);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+            h.pointer_to(150.0, 200.0);
+            h.button(BTN_LEFT, ButtonState::Released);
+            assert_eq!(h.rect_of(1), Some(Rect::new(50, 100, 400, 300)));
+            // Mouse move upwards past the top: the top edge stops at 0; the window
+            // follows the pointer back down from there.
+            h.pointer_to(200.0, 200.0);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+            h.pointer_to(220.0, 20.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 0, 400, 300)));
+            h.pointer_to(220.0, 0.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 0, 400, 300)));
+            h.pointer_to(220.0, 130.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 30, 400, 300)));
+            h.button(BTN_LEFT, ButtonState::Released);
+            // Resize by the top edge (top-middle cell) past the top: the top edge stops
+            // at 0, the bottom edge stays.
+            h.pointer_to(270.0, 40.0);
+            h.button(BTN_RIGHT, ButtonState::Pressed);
+            h.pointer_to(270.0, 0.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 0, 400, 330)));
+            h.button(BTN_RIGHT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
+            h.key(ALT, KeyState::Released);
+            // Keyboard move up (mod+Ctrl+K, 40 px): stays at 0.
+            h.chord(&[ALT, CTRL, J]);
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 40, 400, 330)));
+            h.chord(&[ALT, CTRL, K]);
+            h.chord(&[ALT, CTRL, K]);
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 0, 400, 330)));
+            // Restore from a snap by dragging out, grabbed near the bottom: the grab
+            // point keeps its horizontal position, the top clamps at 0, and the window
+            // then follows the pointer.
+            h.chord(&[ALT, LEFT]);
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
+            h.key(ALT, KeyState::Pressed);
+            h.key(SHIFT, KeyState::Pressed);
+            h.pointer_to(100.0, 540.0); // 25% across, 90% down
+            h.button(BTN_LEFT, ButtonState::Pressed);
+            h.pointer_to(300.0, 100.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(200, 0, 400, 330)));
+            h.pointer_to(310.0, 140.0);
+            assert_eq!(h.rect_of(1), Some(Rect::new(210, 40, 400, 330)));
+            h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
+            h.key(ALT, KeyState::Released);
+            // Restore from maximize: back at its rectangle, on the output.
+            h.chord(&[ALT, UP]);
+            assert_eq!(h.rect_of(1), Some(AREA));
+            h.chord(&[ALT, DOWN]);
+            assert_eq!(h.rect_of(1), Some(Rect::new(210, 40, 400, 330)));
+            // An output resize moves it up just enough for 64 px, never above the top.
+            h.server.state.set_layout_area((800, 100).into());
+            assert_eq!(h.rect_of(1), Some(Rect::new(210, 36, 400, 330)));
+            h.server.state.set_layout_area((800, 20).into());
+            assert_eq!(h.rect_of(1), Some(Rect::new(210, 0, 400, 330)));
+            h.server.state.set_layout_area((800, 600).into());
+            h.pointer_to(300.0, 100.0);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+        });
+        // A client move request (a title-bar drag) upwards past the top.
+        c.roundtrip();
+        c.request_move(&w);
+        server.on_server(|h| {
+            h.key(SHIFT, KeyState::Pressed);
+            h.pointer_to(300.0, 10.0);
+            assert_eq!(h.rect_of(1).map(|r| r.y), Some(0));
+            h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
+        });
+    });
+}
+
+#[test]
 fn mod_drag_moves_and_resizes_without_reaching_clients() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
@@ -560,7 +651,7 @@ fn window_larger_than_the_output_and_tiny_output() {
         c.dispatch_until("configure", |e| e.configures >= 1);
         c.ack_and_commit(&big);
         server.on_server(|h| {
-            assert_eq!(h.rect_of(1), Some(Rect::new(-600, -450, 2000, 1500)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(-600, 0, 2000, 1500)));
             // Moving it far away keeps 64 px on the output.
             h.chord(&[ALT, CTRL, L]);
             for _ in 0..50 {

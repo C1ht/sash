@@ -199,6 +199,7 @@ sash/
   - Docs: docs/m9-stage-c.md, the exact checklist for the first run on the real machine.
   - After stage B (owner decisions, rules in CLAUDE.md): the top-edge rule for floating windows; automatic backend selection; a render cap at the nominal refresh when flips are not vblank-paced; same-connector disconnect/reconnect (stop, then clear and modeset at the same mode); tools/stage-c.sh and monitor power-off/on and cable-pull runs in docs/m9-stage-c.md; a VM check that a udev event arrives.
   - Mode selection rule (proposal, not built; owner decides): see "Proposal: mode selection" below.
+  - Done after stage B, pending approval: the decisions above are built and tested (unit, property and headless tests; the VM scenario passes 16 of 16 checks, including a udev change event with unplug and replug, and tools/stage-c.sh on a guest console). Reconnect when the display no longer offers the mode in use: the mode-selection rule picks one (Claude's decision, to be confirmed).
   - Stage C (first bare-metal run) only with the owner. Explicit sync (wp_linux_drm_syncobj_v1) is decided at that first bare-metal run (owner decision after M8).
 
 Proposals (no work until approved):

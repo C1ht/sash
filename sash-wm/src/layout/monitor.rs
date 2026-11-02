@@ -983,6 +983,10 @@ impl MonitorLayout {
                 is_visible_enough(rect, self.area),
                 "{window:?} at {rect:?} breaks the visibility rule"
             );
+            assert!(
+                rect.y >= self.area.y,
+                "{window:?} at {rect:?} has its top edge above the output"
+            );
         }
         match self.focused {
             Some(f) => assert!(self.contains(f), "focus on an unknown window"),
@@ -1416,7 +1420,7 @@ mod tests {
         big.open(id(1), fixed);
         assert_eq!(
             big.place(id(1), (2000, 1500)),
-            Some(Rect::new(-600, -450, 2000, 1500))
+            Some(Rect::new(-600, 0, 2000, 1500))
         );
         big.move_by(id(1), 5000, 5000);
         big.check_invariants();
@@ -1478,6 +1482,13 @@ mod tests {
             .unsnap_for_drag(id(1), (100, 60), (300, 300))
             .expect("was snapped");
         assert_eq!(r, Rect::new(250, 290, 200, 100));
+        // Grabbed 90% down, pointer near the top: the top edge stops at 0; the grab
+        // point keeps its horizontal position (25%).
+        layout.snap(id(1), ZoneId::LEFT);
+        let r = layout
+            .unsnap_for_drag(id(1), (100, 540), (300, 20))
+            .expect("was snapped");
+        assert_eq!(r, Rect::new(250, 0, 200, 100));
         layout.check_invariants();
     }
 

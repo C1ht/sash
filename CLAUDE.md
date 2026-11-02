@@ -422,9 +422,11 @@ change this file without the owner's approval.
   drops hotplug when powered off): rendering and frame callbacks stop;
   windows, layout and the output stay; client requests are served.
   Connected again: the CRTC is cleared and a full modeset is committed
-  at the same mode, then the whole output is redrawn. A monitor that no
-  longer offers that mode stays dark, logged (mode changes wait for the
-  mode-selection rule). Never a panic. Stage C tests a monitor power
+  at the same mode, then the whole output is redrawn. If the display no
+  longer offers that mode (a different mode list after the reconnect),
+  the mode-selection rule picks one on that connector and the output and
+  layout follow its size (Claude's decision, to be confirmed by the
+  owner). Never a panic. Stage C tests a monitor power
   off/on and a cable pull; the VM test confirms that a udev event
   arrives.
 - Backend selection (owner, after M9 stage B): DRM when neither

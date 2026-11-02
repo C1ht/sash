@@ -26,7 +26,7 @@ cargo build --locked 2>&1 | tail -1
 cp target/release/sash-wm /out/sash-wm-release
 cp target/debug/sash-wm /out/sash-wm-debug
 ' 2>&1 | grep -v '^info:\|^warn:'
-cp "$ROOT"/tools/vm/*.sh "$ISO_DIR"/
+cp "$ROOT"/tools/vm/*.sh "$ROOT"/tools/stage-c.sh "$ROOT"/tools/drm-probe.py "$ISO_DIR"/
 xorriso -as mkisofs -quiet -R -J -V SASH -o "$OUT/sash.iso" "$ISO_DIR"
 rm -rf -- "$SRC" "$ISO_DIR"
 echo "wrote $OUT/sash.iso"

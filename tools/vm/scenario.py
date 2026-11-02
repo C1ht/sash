@@ -66,6 +66,11 @@ def lines(vm):
     return int(sh(vm, "wc -l < /tmp/sash.log"))
 
 
+def count(vm, pattern):
+    """Lines of sash-wm's log (colour codes removed) that match the regex."""
+    return int(sh(vm, f"sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -cE '{pattern}' || true"))
+
+
 def fetch_log(vm, name):
     encoded = sh(vm, "gzip -c /tmp/sash.log | base64 -w0", timeout=300)
     text = gzip.decompress(base64.b64decode(encoded)).decode(errors="replace")
@@ -75,13 +80,13 @@ def fetch_log(vm, name):
     return path
 
 
-def output_size(vm):
+def output_mode(vm):
     log = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -o 'mode=\"[0-9x@]*\"' | tail -1")
-    found = re.search(r"(\d+)x(\d+)", log)
+    found = re.search(r"(\d+)x(\d+)@(\d+)", log)
     if not found:
         print(sh(vm, "systemctl status sash-session --no-pager | tail -5; head -c 2000 /tmp/sash.log"))
         raise RuntimeError("sash-wm did not start")
-    return int(found.group(1)), int(found.group(2))
+    return int(found.group(1)), int(found.group(2)), int(found.group(3))
 
 
 vm = VM(WORKDIR, IMAGE, ISO)
@@ -91,11 +96,14 @@ try:
     sh(vm, "mkdir -p /mnt/sash; mountpoint -q /mnt/sash || mount -o ro /dev/sr0 /mnt/sash")
     print("guest:", sh(vm, "uname -r; cat /etc/debian_version").replace("\n", " "))
 
-    # 1. Starts on the console and shows two windows.
+    # 1. Starts on the console (no --backend: it chooses DRM itself) and shows two
+    # windows.
     start(vm)
-    W, H = output_size(vm)
-    check("starts in a logind session on VT 2", active(vm) == "active" and vt_mode(vm) == "graphics",
-          f"{W}x{H}, VT 2 {vt_mode(vm)}")
+    W, H, HZ = output_mode(vm)
+    auto = count(vm, 'backend=Drm chosen_by="environment"')
+    check("starts in a logind session on VT 2, DRM chosen from the environment",
+          active(vm) == "active" and vt_mode(vm) == "graphics" and auto == 1,
+          f"{W}x{H}@{HZ}, VT 2 {vt_mode(vm)}, auto-chosen: {auto}")
     print("renderer:", sh(vm, f"grep -oE '/usr/lib/[^ ]*(dri|gallium|llvm)[^ ]*' /proc/{pid(vm)}/maps | sort -u | tr '\\n' ' '"))
     shot(vm, "01-two-windows")
 
@@ -157,6 +165,12 @@ try:
                             str(before), str(after)], capture_output=True, text=True).stdout
     print(f"drag: {motions} motions\n{stats}")
     check("frames during a drag", "frames:" in stats)
+    # virtio-gpu completes flips at once: the cap must hold rendering at the refresh rate.
+    fps = re.search(r"= ([0-9.]+) fps", stats)
+    capped = count(vm, "rendering is capped at the refresh rate")
+    check("unpaced flips: rendering capped at the refresh rate",
+          fps is not None and float(fps.group(1)) <= HZ * 1.02 and capped == 1,
+          f"{fps.group(1) if fps else '?'} fps at {HZ} Hz, cap logged: {capped}")
 
     # 7. Idle CPU and memory with three windows.
     sh(vm, "(/mnt/sash/foot.sh 3 &); sleep 2")
@@ -231,17 +245,68 @@ try:
     check("started before its VT is in front, it waits and then runs",
           active(vm) == "active" and waited == "1", f"waited: {waited}")
 
-    # 15. Unplug: force the virtual connector off, then back.
-    start(vm, windows=1)
-    connector = sh(vm, "ls -d /sys/class/drm/card0-*/ | head -1").strip()
-    sh(vm, f"echo off > {connector}status; sleep 2")
+    # 15. Unplug and plug back: the connector is forced off (sysfs), and the kernel sends
+    # a real hotplug uevent (debugfs trigger_hotplug, as a cable pull would); then the
+    # same with the connector back. sash-wm must see the udev event, stop rendering while
+    # disconnected, and do a full modeset and redraw on reconnect.
+    start(vm, windows=2)
+    connector = sh(vm, "ls -d /sys/class/drm/card0-*/ | head -1").strip().rstrip("/")
+    name = connector.rsplit("card0-", 1)[1]
+    trigger = sh(vm, f"mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; "
+                     f"ls /sys/kernel/debug/dri/*/{name}/trigger_hotplug 2>/dev/null | head -1").strip()
+    print("connector:", connector, "hotplug trigger:", trigger or "none")
+    hotplug = f"echo 1 > {trigger}" if trigger else "udevadm trigger --action=change /sys/class/drm/card0"
+    shot(vm, "11-before-unplug")
+    events0 = count(vm, "udev event")
+    sh(vm, f"echo off > {connector}/status; {hotplug}; sleep 2")
+    events1 = count(vm, "udev event")
+    gone = count(vm, "display disconnected")
+    frames0 = count(vm, "frame frame_time")
+    for _ in range(20):
+        vm.pointer_rel(10, 5)
+        time.sleep(0.05)
+    time.sleep(1)
+    frames1 = count(vm, "frame frame_time")
     alive = active(vm)
-    shot(vm, "11-connector-off")
-    sh(vm, f"echo detect > {connector}status; sleep 2")
-    events = sh(vm, "grep -c 'udev event' /tmp/sash.log").strip()
-    check("forcing the connector off does not crash", alive == "active" and active(vm) == "active",
-          f"udev events logged: {events}")
-    shot(vm, "12-connector-back")
+    sh(vm, f"echo detect > {connector}/status; {hotplug}; sleep 2")
+    back = count(vm, "display connected again")
+    for _ in range(20):
+        vm.pointer_rel(-10, -5)
+        time.sleep(0.05)
+    time.sleep(1)
+    frames2 = count(vm, "frame frame_time")
+    shot(vm, "12-after-replug")
+    check("unplug: a udev event arrives and rendering stops; sash-wm keeps running",
+          events1 > events0 and gone == 1 and frames1 == frames0 and alive == "active",
+          f"udev events {events0} -> {events1}, disconnect logged {gone}, "
+          f"frames while unplugged {frames1 - frames0}")
+    check("replug: full modeset, frames again, same windows (see 11, 12)",
+          back == 1 and frames2 > frames1 and active(vm) == "active",
+          f"reconnect logged {back}, frames after {frames2 - frames1}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 16. tools/stage-c.sh on a console of the guest (the owner's stage C tool): escape
+    # instructions first, Enter starts sash-wm with --exit-after, a client starts, the
+    # log is written, the console comes back.
+    sh(vm, "rm -rf /home/sash/.cache/sash; systemctl reset-failed stage-c 2>/dev/null; "
+           "systemd-run --unit=stage-c --collect -p PAMName=login -p User=sash "
+           "-p TTYPath=/dev/tty2 -p StandardInput=tty-force -p StandardOutput=tty "
+           "-p StandardError=tty --setenv=STAGE_C_BIN=" + DEBUG + " --setenv=RUST_LOG=sash_wm=debug "
+           "/bin/bash /mnt/sash/stage-c.sh 8 vmtest -- foot; sleep 2; chvt 2; sleep 1")
+    shot(vm, "13-stage-c-instructions")
+    vm.keys("ret")
+    time.sleep(4)
+    shot(vm, "14-stage-c-running")
+    time.sleep(12)
+    shot(vm, "15-stage-c-done")
+    log = sh(vm, "ls /home/sash/.cache/sash/stage-c/*-vmtest.log").strip()
+    content = sh(vm, f"sed 's/\\x1b\\[[0-9;]*m//g' {log} | grep -E '^== |exit-after reached|starting the client' ")
+    print("stage-c log:", log, "\n" + content)
+    check("tools/stage-c.sh: instructions, run, client, fsynced log, console back (see 13-15)",
+          "exit-after reached" in content and "exit status 0" in content
+          and "starting the client" in content and vt_mode(vm) == "text"
+          and sh(vm, "ls /home/sash/.cache/sash/stage-c/sash-wm.pid 2>/dev/null").strip() == "",
+          f"log {log}")
     fetch_log(vm, "final")
     sh(vm, "systemctl stop sash-session; chvt 1")
 finally:

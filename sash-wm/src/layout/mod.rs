@@ -20,7 +20,7 @@ mod snap;
 pub use bsp::MIN_TILE;
 pub use bsp::{BspTree, Side, SplitHandle};
 pub use floating::FloatingLayout;
-pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone};
+pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone, stop_top_edge};
 pub use monitor::{Layer, MonitorLayout, NewWindow, Presentation, STEP, TiledResize};
 pub use snap::{ZoneId, snap_to_edges};
 

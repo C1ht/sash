@@ -6,7 +6,7 @@
 use super::{Direction, Rect, WindowId};
 
 /// At least this many pixels of a floating window (or all of it, if smaller) stay on
-/// the output on each axis.
+/// the output on each axis. The top edge has a stricter rule: see `clamp_visible`.
 pub const MIN_VISIBLE: i32 = 64;
 
 /// A client's min/max size; 0 on an axis means unconstrained.
@@ -47,20 +47,31 @@ pub fn initial_size(size: (i32, i32), limits: SizeLimits, area: Rect) -> (i32, i
 }
 
 /// Moves `rect` just enough that min(MIN_VISIBLE, size) pixels of it stay inside
-/// `area` on each axis. The size is kept.
+/// `area` on each axis, and its top edge is not above the top of `area`. The size is
+/// kept.
 pub fn clamp_visible(rect: Rect, area: Rect) -> Rect {
-    let axis = |pos: i32, len: i32, start: i32, area_len: i32| {
-        let visible = MIN_VISIBLE.min(len).min(area_len).max(0);
-        let lowest = start + visible - len;
-        let highest = start + area_len - visible;
-        pos.clamp(lowest.min(highest), highest)
+    let highest = |len: i32, start: i32, area_len: i32| {
+        start + area_len - MIN_VISIBLE.min(len).min(area_len).max(0)
     };
+    let x_highest = highest(rect.w, area.x, area.w);
+    let x_lowest = area.x + MIN_VISIBLE.min(rect.w).min(area.w).max(0) - rect.w;
+    let y_highest = highest(rect.h, area.y, area.h).max(area.y);
     Rect::new(
-        axis(rect.x, rect.w, area.x, area.w),
-        axis(rect.y, rect.h, area.y, area.h),
+        rect.x.clamp(x_lowest.min(x_highest), x_highest),
+        rect.y.clamp(area.y, y_highest),
         rect.w,
         rect.h,
     )
+}
+
+/// A resize that moves the top edge stops at the top of `area`: the window gets shorter
+/// instead (down to its min height; `clamp_visible` then moves what is left).
+pub fn stop_top_edge(rect: Rect, edges: Edges, area: Rect, limits: SizeLimits) -> Rect {
+    if !edges.top || edges.bottom || rect.y >= area.y {
+        return rect;
+    }
+    let (_, h) = limits.clamp((rect.w, rect.bottom() - area.y));
+    Rect::new(rect.x, rect.bottom() - h, rect.w, h)
 }
 
 /// True if `rect` satisfies the visibility rule in `area`.
@@ -273,19 +284,33 @@ mod tests {
             clamp_visible(Rect::new(5000, 5000, 200, 200), AREA),
             Rect::new(736, 536, 200, 200)
         );
-        // Far left / top: 64 px of the right / bottom part stay.
+        // Far left: 64 px of the right part stay. Above the top: the top edge stops
+        // at the top of the area.
         assert_eq!(
             clamp_visible(Rect::new(-5000, -5000, 200, 200), AREA),
-            Rect::new(-136, -136, 200, 200)
+            Rect::new(-136, 0, 200, 200)
+        );
+        assert_eq!(
+            clamp_visible(Rect::new(100, -1, 200, 200), AREA),
+            Rect::new(100, 0, 200, 200)
+        );
+        // An area that does not start at 0 (a usable area below a panel).
+        let below_panel = Rect::new(0, 30, 800, 570);
+        assert_eq!(
+            clamp_visible(Rect::new(10, 0, 200, 200), below_panel),
+            Rect::new(10, 30, 200, 200)
         );
         // Smaller than 64 px: the whole window stays.
         assert_eq!(
             clamp_visible(Rect::new(-50, 590, 30, 20), AREA),
             Rect::new(0, 580, 30, 20)
         );
-        // Larger than the area: still only 64 px are required.
-        let huge = Rect::new(-1900, -1900, 2000, 2000);
-        assert!(is_visible_enough(huge, AREA));
+        // Larger than the area: still only 64 px are required, except at the top.
+        assert!(is_visible_enough(Rect::new(-1900, 0, 2000, 2000), AREA));
+        assert_eq!(
+            clamp_visible(Rect::new(-1900, -1900, 2000, 2000), AREA),
+            Rect::new(-1900, 0, 2000, 2000)
+        );
         // Area smaller than 64 px: the window must cover what it can.
         let tiny = Rect::new(0, 0, 10, 10);
         assert_eq!(
@@ -294,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             clamp_visible(Rect::new(-300, -300, 100, 100), tiny),
-            Rect::new(-90, -90, 100, 100)
+            Rect::new(-90, 0, 100, 100)
         );
     }
 
@@ -367,6 +392,44 @@ mod tests {
             resize_rect(start, top, 999, -30, none),
             Rect::new(100, 70, 300, 230)
         );
+    }
+
+    #[test]
+    fn a_top_edge_resize_stops_at_the_top_of_the_area() {
+        let none = SizeLimits::default();
+        let top = Edges {
+            top: true,
+            ..Default::default()
+        };
+        let top_left = Edges {
+            left: true,
+            top: true,
+            ..Default::default()
+        };
+        // Pulled 50 px above the area: cut at the top, the bottom edge stays.
+        assert_eq!(
+            stop_top_edge(Rect::new(100, -50, 300, 250), top, AREA, none),
+            Rect::new(100, 0, 300, 200)
+        );
+        assert_eq!(
+            stop_top_edge(Rect::new(80, -50, 320, 250), top_left, AREA, none),
+            Rect::new(80, 0, 320, 200)
+        );
+        // Inside the area, a bottom resize, or a move: unchanged.
+        let inside = Rect::new(100, 10, 300, 250);
+        assert_eq!(stop_top_edge(inside, top, AREA, none), inside);
+        let above = Rect::new(100, -50, 300, 250);
+        assert_eq!(stop_top_edge(above, Edges::BOTTOM_RIGHT, AREA, none), above);
+        assert_eq!(stop_top_edge(above, Edges::ALL, AREA, none), above);
+        // A min height larger than what fits keeps the min height; clamp_visible then
+        // moves the window down.
+        let tall = SizeLimits {
+            min: (0, 280),
+            max: (0, 0),
+        };
+        let cut = stop_top_edge(Rect::new(100, -100, 300, 300), top, AREA, tall);
+        assert_eq!(cut, Rect::new(100, -80, 300, 280));
+        assert_eq!(clamp_visible(cut, AREA), Rect::new(100, 0, 300, 280));
     }
 
     #[test]

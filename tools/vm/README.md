@@ -11,9 +11,16 @@ runs as the normal user (`/dev/kvm`), shows nothing on the host display
   skip the first-boot questions.
 - `guest-setup.sh` (in the guest, once, as root): runtime packages and the user `sash`.
 - `start-session.sh` (in the guest): sash-wm for `sash` in a logind session on VT 2,
-  like a display manager would start it.
+  like a display manager would start it (no `--backend`: sash-wm chooses DRM itself).
 - `foot.sh` (in the guest): a foot window on sash-wm.
-- `scenario.py`: every check, PASS/FAIL, screenshots and logs.
+- `build-iso.sh`: the trixie-built binaries, the guest scripts, `tools/stage-c.sh` and
+  `tools/drm-probe.py` on an ISO.
+- `scenario.py`: every check, PASS/FAIL, screenshots and logs: start (backend chosen
+  from the environment), input, a drag with frame statistics and the refresh-rate cap,
+  idle CPU and memory, VT switch, quit key, XKB layout, SIGTERM/SIGABRT/SIGKILL,
+  `--exit-after`, a late VT, unplug and replug (the connector forced off and back
+  through sysfs, then a change uevent: debugfs `trigger_hotplug` where the kernel has
+  it, else `udevadm trigger`), and `tools/stage-c.sh` on a guest console.
 
 ## Run
 

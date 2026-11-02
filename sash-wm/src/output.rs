@@ -60,10 +60,17 @@ pub fn create_physical(state: &mut Sash, name: &str, size_mm: (i32, i32), mode: 
 
 /// Sets the output's only mode. Earlier modes are removed so clients see exactly one.
 pub fn set_size(output: &Output, size: Size<i32, Physical>) {
-    let mode = Mode {
-        size,
-        refresh: NOMINAL_REFRESH_MHZ,
-    };
+    set_mode(
+        output,
+        Mode {
+            size,
+            refresh: NOMINAL_REFRESH_MHZ,
+        },
+    );
+}
+
+/// Sets the output's only mode (size and refresh); earlier modes are removed.
+pub fn set_mode(output: &Output, mode: Mode) {
     for old in output.modes().into_iter().filter(|old| *old != mode) {
         output.delete_mode(old);
     }

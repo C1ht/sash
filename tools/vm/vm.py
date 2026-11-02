@@ -31,7 +31,7 @@ class VM:
         self.qmp_path = os.path.join(sockets, "qmp.sock")
         overlay = os.path.join(workdir, "guest.qcow2")
         if not os.path.exists(overlay):
-            subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-b", image,
+            subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-b", os.path.abspath(image),
                             "-F", "qcow2", overlay, "8G"], check=True)
         self.args = [
             "qemu-system-x86_64", "-enable-kvm", "-cpu", cpu, "-m", memory,

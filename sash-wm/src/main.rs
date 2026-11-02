@@ -35,7 +35,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::server::Server;
 
-/// Which backend runs: nested in another session (default), or on the hardware.
+/// Which backend runs: nested in another session, or on the hardware.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backend {
     Winit,
@@ -44,7 +44,8 @@ enum Backend {
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
-    backend: Backend,
+    /// `--backend`; without it, `choose_backend` decides.
+    backend: Option<Backend>,
     /// Debug builds: quit after this long (a watchdog for the first DRM runs).
     exit_after: Option<Duration>,
 }
@@ -53,7 +54,7 @@ const USAGE: &str = "usage: sash-wm [--backend winit|drm] [--exit-after <seconds
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args {
-        backend: Backend::Winit,
+        backend: None,
         exit_after: None,
     };
     let mut args = args.into_iter();
@@ -61,8 +62,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match arg.as_str() {
             "--backend" => {
                 parsed.backend = match args.next().as_deref() {
-                    Some("winit") => Backend::Winit,
-                    Some("drm") => Backend::Drm,
+                    Some("winit") => Some(Backend::Winit),
+                    Some("drm") => Some(Backend::Drm),
                     _ => return Err(format!("--backend takes winit or drm\n{USAGE}")),
                 }
             }
@@ -82,6 +83,27 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     Ok(parsed)
 }
 
+/// The backend when `--backend` is not given: nested (winit) inside a Wayland or X11
+/// session, DRM on a console with a login session (logind sets XDG_SESSION_ID). Empty
+/// variables count as unset.
+fn choose_backend(
+    explicit: Option<Backend>,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<Backend, String> {
+    let set = |name: &str| env(name).is_some_and(|value| !value.is_empty());
+    match explicit {
+        Some(backend) => Ok(backend),
+        None if set("WAYLAND_DISPLAY") || set("DISPLAY") => Ok(Backend::Winit),
+        None if set("XDG_SESSION_ID") => Ok(Backend::Drm),
+        None => Err(
+            "no WAYLAND_DISPLAY or DISPLAY (nothing to run nested in) and no \
+             login session (XDG_SESSION_ID) for the DRM backend; log in on a text \
+             console, or choose with --backend winit|drm"
+                .into(),
+        ),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
 
@@ -89,14 +111,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let args = parse_args(std::env::args().skip(1))?;
-    if args.backend == Backend::Winit
-        && std::env::var_os("WAYLAND_DISPLAY").is_none()
-        && std::env::var_os("DISPLAY").is_none()
-    {
-        return Err(
-            "no WAYLAND_DISPLAY or DISPLAY set; on a text console use --backend drm".into(),
-        );
-    }
+    let backend = choose_backend(args.backend, |name| std::env::var_os(name))?;
+    tracing::info!(
+        ?backend,
+        chosen_by = if args.backend.is_some() {
+            "--backend"
+        } else {
+            "environment"
+        },
+        "backend"
+    );
 
     let mut event_loop: EventLoop<Server> = EventLoop::try_new()?;
     // SIGTERM, SIGINT and SIGHUP (the terminal went away) end the event loop, so
@@ -114,14 +138,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|err| err.error)?;
     let (redraw, redraw_requests) = ping::make_ping()?;
-    let modifier = match args.backend {
+    let modifier = match backend {
         Backend::Winit => backend::winit::MODIFIER,
         Backend::Drm => backend::drm::MODIFIER,
     };
     let mut server = Server::new(&event_loop, redraw, start_time, modifier)?;
     tracing::info!(socket = ?server.socket_name, "listening on wayland socket");
 
-    match args.backend {
+    match backend {
         Backend::Winit => backend::winit::start(&event_loop, &mut server.state, redraw_requests)?,
         Backend::Drm => backend::drm::start(&event_loop, &mut server.state, redraw_requests)?,
     }
@@ -169,8 +193,15 @@ mod args_tests {
 
     #[test]
     fn backends_and_watchdog() {
-        assert_eq!(parse(&[]).unwrap().backend, Backend::Winit);
-        assert_eq!(parse(&["--backend", "drm"]).unwrap().backend, Backend::Drm);
+        assert_eq!(parse(&[]).unwrap().backend, None);
+        assert_eq!(
+            parse(&["--backend", "drm"]).unwrap().backend,
+            Some(Backend::Drm)
+        );
+        assert_eq!(
+            parse(&["--backend", "winit"]).unwrap().backend,
+            Some(Backend::Winit)
+        );
         assert!(parse(&["--backend", "x11"]).is_err());
         assert!(parse(&["--backend"]).is_err());
         assert!(parse(&["--frobnicate"]).is_err());
@@ -182,5 +213,51 @@ mod args_tests {
         } else {
             assert!(watchdog.is_err(), "debug builds only");
         }
+    }
+
+    #[test]
+    fn backend_from_the_environment() {
+        let env = |vars: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                vars.iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            }
+        };
+        let auto = |vars| choose_backend(None, env(vars));
+        // Inside a Wayland or X11 session: nested.
+        assert_eq!(
+            auto(&[("WAYLAND_DISPLAY", "wayland-1")]),
+            Ok(Backend::Winit)
+        );
+        assert_eq!(auto(&[("DISPLAY", ":0")]), Ok(Backend::Winit));
+        assert_eq!(
+            auto(&[("WAYLAND_DISPLAY", "wayland-1"), ("XDG_SESSION_ID", "3")]),
+            Ok(Backend::Winit),
+            "a desktop session also has a login session"
+        );
+        // A text console with a login session: DRM.
+        assert_eq!(auto(&[("XDG_SESSION_ID", "3")]), Ok(Backend::Drm));
+        assert_eq!(
+            auto(&[
+                ("WAYLAND_DISPLAY", ""),
+                ("DISPLAY", ""),
+                ("XDG_SESSION_ID", "3")
+            ]),
+            Ok(Backend::Drm),
+            "empty variables count as unset"
+        );
+        // Neither: an error with a message.
+        assert!(auto(&[]).is_err());
+        assert!(auto(&[("XDG_SESSION_ID", "")]).is_err());
+        // --backend overrides the environment either way.
+        assert_eq!(
+            choose_backend(Some(Backend::Drm), env(&[("WAYLAND_DISPLAY", "wayland-1")])),
+            Ok(Backend::Drm)
+        );
+        assert_eq!(
+            choose_backend(Some(Backend::Winit), env(&[])),
+            Ok(Backend::Winit)
+        );
     }
 }

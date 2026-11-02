@@ -204,11 +204,9 @@ mod tests {
             ..Default::default()
         };
         layout.insert(id(2), &fixed_big);
-        // Larger than the output: centered, overhanging on all sides.
-        assert_eq!(
-            layout.rect_of(id(2)),
-            Some(Rect::new(-100, -150, 1000, 900))
-        );
+        // Larger than the output: centered horizontally, overhanging left and right;
+        // the top edge stays at the top of the output, the rest overhangs the bottom.
+        assert_eq!(layout.rect_of(id(2)), Some(Rect::new(-100, 0, 1000, 900)));
         let min_limited = InsertHint {
             size: (10, 10),
             limits: SizeLimits {
@@ -243,12 +241,16 @@ mod tests {
     }
 
     #[test]
-    fn moves_keep_64_pixels_visible() {
+    fn moves_keep_64_pixels_visible_and_the_top_edge_on_the_output() {
         let mut layout = FloatingLayout::new(AREA);
         layout.insert_at(id(1), Rect::new(100, 100, 300, 200));
         assert_eq!(
             layout.set_rect(id(1), Rect::new(10_000, -10_000, 300, 200)),
-            Some(Rect::new(736, -136, 300, 200))
+            Some(Rect::new(736, 0, 300, 200))
+        );
+        assert_eq!(
+            layout.set_rect(id(1), Rect::new(-10_000, 10_000, 300, 200)),
+            Some(Rect::new(-236, 536, 300, 200))
         );
         assert_eq!(layout.set_rect(id(99), Rect::new(0, 0, 1, 1)), None);
     }
