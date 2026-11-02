@@ -55,6 +55,7 @@ fn a_typed_password_never_reaches_a_bundle() {
                 dir: bundle_dir,
                 session: false,
                 keys_full: false,
+                screenshots_full: false,
             };
             h.server.state.recorder = Some(Recorder::new(config, Instant::now()).unwrap());
         });
@@ -112,6 +113,28 @@ fn a_typed_password_never_reaches_a_bundle() {
             !all.contains(&format!(r#""key":"{letter}""#)),
             "key {letter} recorded by name"
         );
+    }
+    // The pictures: window outlines only. Every pixel of every screenshot is one of
+    // the outline palette's colours, so nothing a client drew (or showed as text) is
+    // in them.
+    let pictures: Vec<_> = files
+        .iter()
+        .filter(|f| f.extension().is_some_and(|e| e == "png"))
+        .collect();
+    assert!(!pictures.is_empty(), "the hotkey takes a screenshot");
+    for picture in &pictures {
+        let decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(picture).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        for px in pixels[..info.buffer_size()].chunks(4) {
+            assert!(
+                record::outline::PALETTE.contains(&[px[0], px[1], px[2], px[3]]),
+                "{} has a colour outside the outline palette: {px:?}",
+                picture.display()
+            );
+        }
     }
     let events = fs::read_to_string(bundles[0].join("events.jsonl")).unwrap();
     let printable = events.matches(r#""key":"printable""#).count();

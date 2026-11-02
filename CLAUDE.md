@@ -494,10 +494,13 @@ change this file without the owner's approval.
   nothing changes.
 - Pacing classification (owner, after stage C run 1): the first flip
   after a modeset or a resume is not used; the output becomes unpaced
-  after 3 consecutive flip intervals under half a period, and paced
-  again after 3 consecutive intervals between half a period and four
-  periods (longer gaps are idle and count for neither). Every change
-  is logged. Tested with the owner's real NVIDIA flip times.
+  after 3 consecutive flip intervals under half a period (longer gaps
+  are idle and reset nothing). Unpaced stays until the next modeset or
+  resume, when the classification starts over as paced: while the cap
+  is on, the cap itself spaces the flips, so they cannot show pacing
+  (a "paced again after normal intervals" rule oscillated in the tests).
+  Every change is logged. Tested with the owner's real NVIDIA flip
+  times.
 - Pointer frames (owner, after stage C run 1): when the cursor sash-wm
   draws (the arrow on DRM, a client cursor surface anywhere) has to
   move, a frame is requested, at most one per refresh period (merged

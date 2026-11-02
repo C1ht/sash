@@ -69,6 +69,7 @@ impl Sash {
             focus = None;
         }
         let previous = pointer.current_focus();
+        let moved = pointer.current_location() != location;
         let motion = MotionEvent {
             location,
             serial: SERIAL_COUNTER.next_serial(),
@@ -91,8 +92,14 @@ impl Sash {
             "window" => self.window_at(location),
             "grabbed" => pointer.is_grabbed(),
         );
-        // A cursor sash-wm draws follows the pointer.
-        if self.cursor_surface().is_some() {
+        // A cursor sash-wm draws (a client's cursor surface; on DRM also the arrow)
+        // follows the pointer: one frame, merged until the next frame starts.
+        let drawn = match self.cursor.image() {
+            CursorImageStatus::Surface(_) => true,
+            CursorImageStatus::Named(_) => self.draws_named_cursor,
+            CursorImageStatus::Hidden => false,
+        };
+        if moved && drawn && self.cursor_frames.moved() {
             self.request_redraw();
         }
     }

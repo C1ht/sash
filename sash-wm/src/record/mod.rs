@@ -6,13 +6,15 @@
 //! ring buffer in memory; mod+F11 writes a bundle (events.jsonl, state.json,
 //! screenshots, log.txt) to a new directory there. Keys are recorded by name only when
 //! they cannot be text: modifiers, non-printing keys and chords; every other key is
-//! "printable". Screenshots come from the offscreen render path (`capture`), never
-//! from the screen.
+//! "printable". Screenshots are window outlines with ids drawn from the layout alone
+//! (`outline`); only with SASH_DEBUG_SCREENSHOTS=full do they show window contents,
+//! through the offscreen render path (`capture`). Never the screen.
 
 #[cfg(not(debug_assertions))]
 compile_error!("the debug-record feature is for debug builds only");
 
 mod json;
+pub mod outline;
 mod snapshot;
 
 use std::{
@@ -42,6 +44,7 @@ use crate::{capture, state::Sash};
 pub const DIR_VAR: &str = "SASH_DEBUG_RECORD";
 pub const SESSION_VAR: &str = "SASH_DEBUG_RECORD_SESSION";
 pub const KEYS_VAR: &str = "SASH_DEBUG_KEYS";
+pub const SCREENSHOTS_VAR: &str = "SASH_DEBUG_SCREENSHOTS";
 
 /// How much the ring buffers keep.
 pub const WINDOW: Duration = Duration::from_secs(60);
@@ -148,6 +151,8 @@ pub struct Config {
     pub dir: PathBuf,
     pub session: bool,
     pub keys_full: bool,
+    /// Screenshots with window contents (SASH_DEBUG_SCREENSHOTS=full); outlines else.
+    pub screenshots_full: bool,
 }
 
 impl Config {
@@ -158,6 +163,7 @@ impl Config {
             dir: PathBuf::from(dir),
             session: var(SESSION_VAR).as_deref() == Some("1"),
             keys_full: var(KEYS_VAR).as_deref() == Some("full"),
+            screenshots_full: var(SCREENSHOTS_VAR).as_deref() == Some("full"),
         })
     }
 }
@@ -461,13 +467,25 @@ impl Recorder {
              {mode}. Records: input devices, pointer events and positions, keys \
              (modifiers, non-printing keys and chords by name; other keys as \
              \"printable\" only), keybinds, focus, grabs, window map/configure/commit, \
-             layout changes, frames and flips, per-second counters, offscreen \
-             screenshots (after layout changes, at most 1/s and 100 per session), \
-             the log. Bundles older than 7 days deleted: {pruned}.\n",
-            self.dir.display()
+             layout changes, frames and flips, per-second counters, screenshots \
+             ({shots}; after layout changes at most 1/s and 100 per session), the \
+             log. Bundles older than 7 days deleted: {pruned}.\n",
+            self.dir.display(),
+            shots = if self.config.screenshots_full {
+                "WITH WINDOW CONTENTS"
+            } else {
+                "window outlines and ids only, no window contents"
+            },
         );
         eprintln!("{text}");
         tracing::warn!(dir = %self.dir.display(), session = self.session.is_some(), "debug recording is on");
+        if self.config.screenshots_full {
+            eprintln!(
+                "*** WARNING: {SCREENSHOTS_VAR}=full: SCREENSHOTS SHOW WINDOW CONTENTS, \
+                 including any text on screen. ***\n"
+            );
+            tracing::warn!("{SCREENSHOTS_VAR}=full: screenshots show window contents");
+        }
         if self.config.keys_full {
             eprintln!(
                 "*** WARNING: {KEYS_VAR}=full: EVERY KEY IS RECORDED BY NAME, including \
@@ -479,6 +497,10 @@ impl Recorder {
 
     pub fn keys_full(&self) -> bool {
         self.config.keys_full
+    }
+
+    pub fn screenshots_full(&self) -> bool {
+        self.config.screenshots_full
     }
 
     pub fn elapsed(&self) -> Duration {
@@ -639,6 +661,12 @@ pub fn mark(state: &mut Sash) {
     recorder.push("mark", vec![]);
     recorder.shot_request = Some("hotkey".into());
     recorder.bundle_pending = true;
+    if !recorder.screenshots_full() {
+        // Outlines need no frame: the picture and the bundle are written now.
+        take_outline_shot(state);
+        flush_bundle(state);
+        return;
+    }
     state.request_redraw();
     let timer = Timer::from_duration(BUNDLE_WAIT);
     let _ = state.loop_handle.insert_source(timer, |_, _, server| {
@@ -673,6 +701,15 @@ where
     R::TextureId: Texture + Send + Clone + 'static,
     R::Error: 'static,
 {
+    if !state
+        .recorder
+        .as_ref()
+        .is_some_and(Recorder::screenshots_full)
+    {
+        take_outline_shot(state);
+        flush_bundle(state);
+        return;
+    }
     let Some(reason) = state
         .recorder
         .as_mut()
@@ -697,6 +734,49 @@ where
         Err(err) => tracing::warn!(%err, "debug screenshot: offscreen render failed"),
     }
     flush_bundle(state);
+}
+
+/// Takes a requested screenshot as window outlines (no window contents).
+pub fn take_outline_shot(state: &mut Sash) {
+    let Some(reason) = state
+        .recorder
+        .as_mut()
+        .and_then(Recorder::take_shot_request)
+    else {
+        return;
+    };
+    let area = state.windows.layout.area();
+    let focused = state.windows.layout.focused();
+    let windows: Vec<outline::Outline> = state
+        .windows
+        .layout
+        .stacking()
+        .into_iter()
+        .map(|(id, rect, layer)| outline::Outline {
+            id,
+            rect,
+            layer,
+            focused: Some(id) == focused,
+        })
+        .collect();
+    let pointer = state.seat.get_pointer().map(|p| {
+        let at = p.current_location();
+        (at.x.floor() as i32, at.y.floor() as i32)
+    });
+    let canvas = outline::draw(
+        (area.w.max(1) as usize, area.h.max(1) as usize),
+        &windows,
+        pointer,
+        MAX_SHOT_WIDTH,
+    );
+    match capture::encode_png(&canvas.pixels, canvas.width as u32, canvas.height as u32) {
+        Ok(png) => {
+            if let Some(recorder) = state.recorder.as_mut() {
+                recorder.add_shot(&reason, png);
+            }
+        }
+        Err(err) => tracing::warn!(%err, "debug screenshot: PNG encoding failed"),
+    }
 }
 
 /// RGBA pixels scaled down by a whole factor (box filter) to at most `max_width`.

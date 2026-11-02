@@ -194,6 +194,7 @@ impl Nested {
                 self.counters.redraws_received += 1;
                 state.flush_pending_arrange();
                 let input_since = state.windows.input_pending_since.take();
+                state.frame_started();
                 record!(state, "frame_start");
                 let times = match self.render(state) {
                     Ok(times) => times,

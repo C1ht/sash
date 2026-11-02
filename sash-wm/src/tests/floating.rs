@@ -21,11 +21,16 @@ use crate::{
 const AREA: Rect = Rect::new(0, 0, 800, 600);
 
 /// Three clients, 1 | (2 / 3), window 3 focused.
-fn open_three(socket: &std::path::Path) -> [(TestClient, super::client::TestWindow); 3] {
+fn open_three(
+    socket: &std::path::Path,
+    server: &super::harness::Remote,
+) -> [(TestClient, super::client::TestWindow); 3] {
     let mut c1 = TestClient::connect(socket);
     let w1 = c1.map_window();
+    server.pointer_over_focused();
     let mut c2 = TestClient::connect(socket);
     let w2 = c2.map_window();
+    server.pointer_over_focused();
     let mut c3 = TestClient::connect(socket);
     let w3 = c3.map_window();
     c1.roundtrip();
@@ -47,7 +52,7 @@ fn floating_one_window_refills_the_others_and_toggles_back() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket);
+        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket, &server);
         server.on_server(|h| {
             h.chord(&[ALT, F]);
             assert_eq!(h.mode_of(3), Some(Mode::Floating));
@@ -92,7 +97,7 @@ fn float_all_and_tile_all() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [(mut c1, w1), _c2, (mut c3, w3)] = open_three(&socket);
+        let [(mut c1, w1), _c2, (mut c3, w3)] = open_three(&socket, &server);
         server.on_server(|h| {
             h.chord(&[ALT, SHIFT, F]);
             for (id, rect) in [
@@ -501,7 +506,7 @@ fn floating_keybind_keys_never_reach_clients() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [(mut c1, _), (mut c2, _), (mut c3, _)] = open_three(&socket);
+        let [(mut c1, _), (mut c2, _), (mut c3, _)] = open_three(&socket, &server);
         server.on_server(|h| {
             h.chord(&[ALT, F]);
             h.chord(&[ALT, CTRL, L]);
@@ -528,7 +533,7 @@ fn mod_tab_cycles_while_held_and_commits_on_release() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let _clients = open_three(&socket); // focus history 1, 2, 3
+        let _clients = open_three(&socket, &server); // focus history 1, 2, 3
         server.on_server(|h| {
             h.key(ALT, KeyState::Pressed);
             h.chord(&[TAB]);

@@ -86,6 +86,10 @@ pub struct Sash {
     pub presentation: Option<PresentationState>,
     pub loop_handle: LoopHandle<'static, Server>,
     redraw: Ping,
+    /// The backend draws the named arrow itself (DRM); nested, the host draws it.
+    pub draws_named_cursor: bool,
+    /// Frames requested because the cursor sash-wm draws moved.
+    pub cursor_frames: crate::cursor::CursorFrames,
     /// Debug recording (feature `debug-record`), when SASH_DEBUG_RECORD is set.
     #[cfg(feature = "debug-record")]
     pub recorder: Option<crate::record::Recorder>,
@@ -128,6 +132,8 @@ impl Sash {
             presentation: None,
             loop_handle,
             redraw,
+            draws_named_cursor: false,
+            cursor_frames: Default::default(),
             #[cfg(feature = "debug-record")]
             recorder: None,
         }
@@ -147,6 +153,11 @@ impl Sash {
             crate::record::Counters::bump(&recorder.counters.redraws_requested);
         }
         self.redraw.ping();
+    }
+
+    /// Called by the backend when it starts drawing a frame.
+    pub fn frame_started(&mut self) {
+        self.cursor_frames.frame_started();
     }
 
     /// Called by the backend after a frame for `output` reached the screen.

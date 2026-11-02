@@ -112,6 +112,7 @@ impl Harness {
             .dispatch(Some(Duration::from_millis(2)), &mut self.server)
             .expect("event loop dispatch");
         if self.presenting && self.redraw_requested.replace(false) {
+            self.server.state.frame_started();
             self.server.state.flush_pending_arrange();
             self.frames += 1;
             self.server.state.frame_presented(&self.output);
@@ -223,6 +224,17 @@ impl Remote {
     pub fn on_server(&self, step: impl FnOnce(&mut Harness) + Send + 'static) {
         self.steps.send(Box::new(step)).expect("server thread gone");
         self.done.recv().expect("server step failed");
+    }
+
+    /// Moves the pointer over the focused window, so that (rule A) the next tiled
+    /// window splits it: the newest window, as when opening windows one by one.
+    pub fn pointer_over_focused(&self) {
+        self.on_server(|h| {
+            let focused = h.server.state.windows.layout.focused();
+            if let Some(r) = focused.and_then(|id| h.server.state.windows.layout.rect_of(id)) {
+                h.pointer_to((r.x + r.w / 2) as f64, (r.y + r.h / 2) as f64);
+            }
+        });
     }
 }
 

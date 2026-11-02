@@ -88,6 +88,8 @@ pub struct NewWindow {
     pub forced: bool,
     pub parent: Option<WindowId>,
     pub limits: SizeLimits,
+    /// Where the pointer is (rule A: a new tiled window splits the tile under it).
+    pub pointer: Option<(i32, i32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -218,10 +220,28 @@ impl MonitorLayout {
             snap: None,
             maximized_tiled: false,
         };
-        self.tree
-            .insert_with_mode(window, self.focused, state.mode());
+        // Rule A: a new tiled window splits the tile under the pointer, otherwise the
+        // focused one; anything else gets its placeholder next to the focused window.
+        let next_to = match state.mode() {
+            Mode::Tiled => new
+                .pointer
+                .and_then(|(x, y)| self.tile_at(x, y))
+                .or(self.focused),
+            Mode::Floating => self.focused,
+        };
+        self.tree.insert_with_mode(window, next_to, state.mode());
         self.windows.insert(window, state);
         self.focus(window);
+    }
+
+    /// The tiled window whose tile contains (x, y), whatever is drawn above it.
+    pub fn tile_at(&self, x: i32, y: i32) -> Option<WindowId> {
+        self.tiled_rects()
+            .into_iter()
+            .find(|(_, r)| {
+                r.w > 0 && r.h > 0 && (r.x..r.x + r.w).contains(&x) && (r.y..r.y + r.h).contains(&y)
+            })
+            .map(|(id, _)| id)
     }
 
     /// Gives a floating window without a rectangle its first one: the client's size,
@@ -1075,39 +1095,92 @@ mod tests {
         out
     }
 
-    /// STEP 3b (owner, after stage C run 1): where the current rule puts 1 to 6 windows
-    /// on the owner's and other common outputs, focus following each new window. Run
-    /// with `cargo test new_window_placement_table -- --nocapture` to see the table.
+    /// Where the pointer is when each window opens, for the placement table.
+    #[derive(Clone, Copy, Debug)]
+    enum Pointer {
+        OverNewest,
+        OverFirst,
+        Nowhere,
+        /// Parked at a fixed point (a spawn by keybind with the mouse left alone).
+        ParkedAt(i32, i32),
+    }
+
+    fn open_with(layout: &mut MonitorLayout, n: u64, pointer: Pointer) {
+        let center = |layout: &MonitorLayout, w: Option<WindowId>| {
+            w.and_then(|w| layout.rect_of(w))
+                .map(|r| (r.x + r.w / 2, r.y + r.h / 2))
+        };
+        let at = match pointer {
+            Pointer::OverNewest => center(layout, layout.focused()),
+            Pointer::OverFirst => center(layout, Some(id(1))),
+            Pointer::Nowhere => None,
+            Pointer::ParkedAt(x, y) => Some((x, y)),
+        };
+        let new = NewWindow {
+            pointer: at,
+            ..Default::default()
+        };
+        layout.open(id(n), new);
+        assert_eq!(
+            layout.focused(),
+            Some(id(n)),
+            "focus follows the new window"
+        );
+    }
+
+    /// Rule A (owner, after stage C run 1): where 1 to 6 windows go on 5120x1440 and
+    /// 1920x1080, with the pointer over the newest window, over the first, over none,
+    /// and parked at a fixed point while windows are spawned by keybind. Run with
+    /// `cargo test new_window_placement_table -- --nocapture` to see the table.
     #[test]
     fn new_window_placement_table() {
-        for (w, h) in [(5120, 1440), (3440, 1440), (2560, 1440), (1920, 1080)] {
-            let mut layout = MonitorLayout::new(Rect::new(0, 0, w, h));
-            for n in 1..=6u64 {
-                layout.open(id(n), NewWindow::default());
-                assert_eq!(
-                    layout.focused(),
-                    Some(id(n)),
-                    "focus follows the new window"
-                );
-                println!("== {w}x{h}, {n} window(s)\n{}", tree_text(&layout));
-                let mut rects = layout.tiled_rects();
-                rects.sort_by_key(|(id, _)| id.0);
-                for (id, r) in rects {
-                    println!("  window {}: x={} y={} {}x{}", id.0, r.x, r.y, r.w, r.h);
+        for (w, h) in [(5120, 1440), (1920, 1080)] {
+            let parked = Pointer::ParkedAt(w / 4, h / 4);
+            for pointer in [
+                Pointer::OverNewest,
+                Pointer::OverFirst,
+                Pointer::Nowhere,
+                parked,
+            ] {
+                let mut layout = MonitorLayout::new(Rect::new(0, 0, w, h));
+                for n in 1..=6u64 {
+                    open_with(&mut layout, n, pointer);
+                    let mut rects = layout.tiled_rects();
+                    rects.sort_by_key(|(id, _)| id.0);
+                    let row: Vec<String> = rects
+                        .iter()
+                        .map(|(id, r)| format!("{}:{},{} {}x{}", id.0, r.x, r.y, r.w, r.h))
+                        .collect();
+                    println!("{w}x{h} {pointer:?} n={n}: {}", row.join("  "));
+                    layout.check_invariants();
                 }
-                layout.check_invariants();
+                println!("{w}x{h} {pointer:?} tree:\n{}", tree_text(&layout));
             }
         }
-        // The owner's report: on 5120x1440 the first windows form a row, then new ones
-        // stack into the bottom-right corner (each splits the newest, focused window).
+        // Over the newest window: the old rule, a row, then into the bottom-right
+        // corner (what the owner saw on 5120x1440).
         let mut layout = MonitorLayout::new(Rect::new(0, 0, 5120, 1440));
         for n in 1..=4 {
-            layout.open(id(n), NewWindow::default());
+            open_with(&mut layout, n, Pointer::OverNewest);
         }
         assert_eq!(rect(&layout, 1), Rect::new(0, 0, 2560, 1440));
         assert_eq!(rect(&layout, 2), Rect::new(2560, 0, 1280, 1440));
         assert_eq!(rect(&layout, 3), Rect::new(3840, 0, 1280, 720));
         assert_eq!(rect(&layout, 4), Rect::new(3840, 720, 1280, 720));
+        // Over no window: the focused one, the same as over the newest.
+        let mut nowhere = MonitorLayout::new(Rect::new(0, 0, 5120, 1440));
+        for n in 1..=4 {
+            open_with(&mut nowhere, n, Pointer::Nowhere);
+        }
+        assert_eq!(nowhere.tiled_rects(), layout.tiled_rects());
+        // Over the first window: window 1 is split each time.
+        let mut first = MonitorLayout::new(Rect::new(0, 0, 5120, 1440));
+        for n in 1..=3 {
+            open_with(&mut first, n, Pointer::OverFirst);
+        }
+        assert_eq!(rect(&first, 1), Rect::new(0, 0, 1280, 1440));
+        assert_eq!(rect(&first, 3), Rect::new(1280, 0, 1280, 1440));
+        assert_eq!(rect(&first, 2), Rect::new(2560, 0, 2560, 1440));
     }
 
     #[test]

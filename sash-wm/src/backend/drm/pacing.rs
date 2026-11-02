@@ -6,8 +6,13 @@
 //! when it is queued.
 //!
 //! Flips are normally paced by vblank: they complete one refresh period apart at the
-//! earliest. Some devices (virtio-gpu) complete them at once. Two flips that complete
-//! less than half a refresh period apart mark the output as unpaced; from then on frames
+//! earliest. Some devices (virtio-gpu) complete them at once. The classification uses
+//! the intervals between flips: the first flip after a modeset or a resume is not used
+//! (a modeset completes off the vblank grid); 3 consecutive intervals under half a
+//! period make the output unpaced. That stays until the next modeset or resume, when
+//! the classification starts over as paced: while the cap is on, flips are spaced by
+//! the cap itself and look paced, so they cannot tell. Every change is reported to the
+//! caller (logged). While the output is unpaced, frames
 //! follow a fixed schedule of one refresh period: each frame has a slot, and the next
 //! may start at the earliest one period after that slot. A frame that starts late (a
 //! timer fires late, or input arrives between slots) but within the next period takes
@@ -20,6 +25,9 @@
 //! ones.
 
 use std::time::Duration;
+
+/// Consecutive intervals that change the classification.
+const RUN: u32 = 3;
 
 /// What the backend should do about the next frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +54,12 @@ pub struct Pacer {
     connected: bool,
     /// Flips complete without vblank pacing.
     unpaced: bool,
+    /// The next flip is the first after a modeset or resume: not used to classify.
+    skip_flip: bool,
+    /// Consecutive flip intervals under half a period.
+    short_run: u32,
+    /// A classification change not yet taken by the caller: Some(unpaced).
+    change: Option<bool>,
     /// When the last flip completed (the kernel's timestamp when it has one).
     last_flip: Option<Duration>,
     /// The schedule slot of the last queued frame (unpaced output): when it was due.
@@ -61,6 +75,9 @@ impl Pacer {
             active: true,
             connected: true,
             unpaced: false,
+            skip_flip: true,
+            short_run: 0,
+            change: None,
             last_flip: None,
             slot: None,
         }
@@ -100,13 +117,37 @@ impl Pacer {
             return Next::Wait;
         }
         self.flip_pending = false;
-        if let Some(previous) = self.last_flip
-            && flipped.saturating_sub(previous) < self.refresh / 2
-        {
-            self.unpaced = true;
-        }
-        self.last_flip = Some(flipped);
+        self.classify(flipped);
         self.next(now)
+    }
+
+    /// Classifies the output by the interval since the last flip.
+    fn classify(&mut self, flipped: Duration) {
+        if std::mem::take(&mut self.skip_flip) {
+            // The first flip after a modeset or resume: no reference for the next one.
+            self.last_flip = None;
+            return;
+        }
+        let Some(previous) = self.last_flip.replace(flipped) else {
+            return;
+        };
+        let interval = flipped.saturating_sub(previous);
+        if interval < self.refresh / 2 {
+            self.short_run += 1;
+            if !self.unpaced && self.short_run >= RUN {
+                self.unpaced = true;
+                self.change = Some(true);
+            }
+        } else if interval <= 4 * self.refresh {
+            self.short_run = 0;
+        }
+        // Longer: an idle gap, which says nothing about pacing.
+    }
+
+    /// A change of classification since the last call: Some(true) became unpaced,
+    /// Some(false) became paced again.
+    pub fn take_change(&mut self) -> Option<bool> {
+        self.change.take()
     }
 
     /// The timer of a `RenderAt` fired.
@@ -153,6 +194,7 @@ impl Pacer {
         self.connected
     }
 
+    #[cfg(any(test, feature = "debug-record"))]
     pub fn is_unpaced(&self) -> bool {
         self.unpaced
     }
@@ -163,6 +205,14 @@ impl Pacer {
         self.flip_pending = false;
         self.wanted = true;
         self.last_flip = None;
+        // A modeset or resume follows: its first flip is off the vblank grid, and the
+        // classification starts over.
+        self.skip_flip = true;
+        self.short_run = 0;
+        if std::mem::take(&mut self.unpaced) {
+            self.change = Some(false);
+        }
+        self.slot = None;
         self.is_active()
     }
 
@@ -362,19 +412,20 @@ mod tests {
             now += step;
         }
         assert!(pacer.is_unpaced());
-        // The first two frames come before the output is known to be unpaced; after
-        // that, frames are one refresh period apart, give or take the 0.5 ms steps of
-        // this simulation (a late frame keeps its slot, so the next may come early).
+        // The first five frames come before the output is known to be unpaced (the
+        // first flip is not used, then 3 short intervals); after that, frames are one
+        // refresh period apart, give or take the 0.5 ms steps of this simulation (a
+        // late frame keeps its slot, so the next may come early).
         let intervals: Vec<Duration> = rendered.windows(2).map(|w| w[1] - w[0]).collect();
         assert!(
-            intervals[1..]
+            intervals[5..]
                 .iter()
                 .all(|&i| i + step >= REFRESH && i <= REFRESH + step),
             "{intervals:?}"
         );
-        // And the rate is 60 Hz.
+        // And the rate is 60 Hz, plus the uncapped first frames.
         assert!(
-            (59..=61).contains(&rendered.len()),
+            (59..=65).contains(&rendered.len()),
             "{} frames in one second",
             rendered.len()
         );
@@ -444,12 +495,12 @@ mod tests {
             now += tick;
         }
         assert!(pacer.is_unpaced());
-        // Frames after the first two (before the output was known to be unpaced).
-        let steady = &starts[2..];
+        // Frames after the first five (before the output was known to be unpaced).
+        let steady = &starts[5..];
         let span = *steady.last().unwrap() - steady[0];
         let mean = span / (steady.len() as u32 - 1);
         assert!(
-            (598..=601).contains(&starts.len()),
+            (598..=605).contains(&starts.len()),
             "{} frames in 10 s",
             starts.len()
         );
@@ -457,5 +508,65 @@ mod tests {
             mean.abs_diff(REFRESH) < Duration::from_micros(20),
             "mean interval {mean:?}, refresh {REFRESH:?}"
         );
+    }
+
+    /// The owner's real NVIDIA flips (stage C, 5120x1440 at 240 Hz): the modeset's
+    /// completion 0.97 ms before the first page flip, then multiples of the 4.166 ms
+    /// period. Classified paced throughout; the old rule (any interval under half a
+    /// period) called it unpaced at the second flip.
+    #[test]
+    fn the_owners_nvidia_flips_are_classified_paced() {
+        let flips: Vec<Duration> = include_str!("fixtures/nvidia-flips-20261102.txt")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .map(|l| Duration::from_micros(l.trim().parse().unwrap()))
+            .collect();
+        assert_eq!(flips.len(), 448);
+        assert!(flips[1] - flips[0] < Duration::from_micros(1000));
+        let mut pacer = Pacer::new(Duration::from_micros(4166));
+        for &at in &flips {
+            pacer.rendered(true, at);
+            pacer.flip_complete(at, at);
+            assert_eq!(pacer.take_change(), None, "no change at {at:?}");
+            assert!(!pacer.is_unpaced());
+        }
+    }
+
+    /// A really unpaced device (flips 0.4 ms after each frame, frames as fast as
+    /// allowed): unpaced after the unused first flip, the reference flip and 3 short
+    /// intervals, logged once; a modeset or resume starts over (logged), and it is
+    /// found again.
+    #[test]
+    fn an_unpaced_stream_is_classified_unpaced() {
+        let mut pacer = pacer();
+        let mut t = Duration::ZERO;
+        let mut changes = Vec::new();
+        let flip = |pacer: &mut Pacer, t: &mut Duration| {
+            pacer.rendered(true, *t);
+            *t += Duration::from_micros(400);
+            pacer.flip_complete(*t, *t);
+            *t += Duration::from_micros(100);
+            pacer.take_change()
+        };
+        for n in 1..=6 {
+            if let Some(change) = flip(&mut pacer, &mut t) {
+                changes.push((n, change));
+            }
+        }
+        // Flip 1 is not used, flip 2 is the reference, flips 3, 4 and 5 make the 3
+        // short intervals.
+        assert_eq!(
+            changes,
+            vec![(5, true)],
+            "unpaced at the 5th flip, logged once"
+        );
+        assert!(pacer.is_unpaced());
+        // A resume starts over: paced (logged) until 3 short intervals again.
+        pacer.pause();
+        assert!(pacer.resume());
+        assert_eq!(pacer.take_change(), Some(false));
+        assert!(!pacer.is_unpaced());
+        let again: Vec<Option<bool>> = (0..5).map(|_| flip(&mut pacer, &mut t)).collect();
+        assert_eq!(again, vec![None, None, None, None, Some(true)]);
     }
 }

@@ -168,6 +168,7 @@ fn bundles_are_private() {
         dir: dir.clone(),
         session: false,
         keys_full: false,
+        screenshots_full: false,
     };
     let mut recorder = Recorder::new(config, Instant::now()).unwrap();
     recorder.push("test", vec![("n", 1.into())]);
@@ -285,12 +286,13 @@ fn config_from_the_environment() {
         (DIR_VAR, "/x"),
         (SESSION_VAR, "1"),
         (KEYS_VAR, "full"),
+        (SCREENSHOTS_VAR, "full"),
     ]))
     .unwrap();
-    assert!(config.session && config.keys_full);
+    assert!(config.session && config.keys_full && config.screenshots_full);
     let plain = Config::from_env(env(&[(DIR_VAR, "/x"), (KEYS_VAR, "yes")])).unwrap();
     assert!(
-        !plain.session && !plain.keys_full,
-        "only \"1\" and \"full\" switch them on"
+        !plain.session && !plain.keys_full && !plain.screenshots_full,
+        "only \"1\" and \"full\" switch them on; screenshots are outlines by default"
     );
 }

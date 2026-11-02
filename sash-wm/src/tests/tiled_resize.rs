@@ -20,11 +20,13 @@ use crate::{
 };
 
 /// Three clients, 1 | (2 / 3), window 3 focused.
-fn open_three(socket: &Path) -> [(TestClient, TestWindow); 3] {
+fn open_three(socket: &Path, server: &super::harness::Remote) -> [(TestClient, TestWindow); 3] {
     let mut c1 = TestClient::connect(socket);
     let w1 = c1.map_window();
+    server.pointer_over_focused();
     let mut c2 = TestClient::connect(socket);
     let w2 = c2.map_window();
+    server.pointer_over_focused();
     let mut c3 = TestClient::connect(socket);
     let w3 = c3.map_window();
     c1.roundtrip();
@@ -47,7 +49,7 @@ fn keyboard_resize_moves_the_split_on_the_right_or_bottom_edge() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket);
+        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket, &server);
         server.on_server(|h| {
             // Window 3's right and bottom edges are on the output boundary.
             for key in [H, J, K, L] {
@@ -103,7 +105,7 @@ fn scripted_mouse_resize_moves_splits_through_the_synthetic_input() {
     let socket = harness.socket_path();
     let input = harness.listen_synthetic();
     harness.run_with_remote(move |server| {
-        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket);
+        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket, &server);
         // Center cell of window 2 (400, 0, 400, 300): its bottom-right corner. The right
         // edge is on the output boundary, so only the bottom split moves.
         script(
@@ -221,7 +223,7 @@ fn ratios_survive_toggling_and_output_resizes() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [(mut c1, w1), (mut c2, w2), (_c3, _w3)] = open_three(&socket);
+        let [(mut c1, w1), (mut c2, w2), (_c3, _w3)] = open_three(&socket, &server);
         server.on_server(|h| {
             h.chord(&[ALT, H]); // focus 1
             for _ in 0..3 {
@@ -246,7 +248,7 @@ fn closing_windows_during_a_resize() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket);
+        let [(mut c1, w1), (mut c2, w2), (mut c3, w3)] = open_three(&socket, &server);
         // Drag the split between 2 and 3 from window 2's center cell.
         server.on_server(|h| {
             h.key(ALT, KeyState::Pressed);

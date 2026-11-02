@@ -18,6 +18,39 @@ use smithay::{
 
 use crate::state::Sash;
 
+/// Frames for a moving cursor sash-wm draws: one request until the next frame starts,
+/// so however many motion events arrive, at most one frame per frame (the backend
+/// renders at most once per refresh period).
+#[derive(Debug, Default)]
+pub struct CursorFrames {
+    pending: bool,
+    requested: u64,
+}
+
+impl CursorFrames {
+    /// The drawn cursor moved. Returns true if a frame must be requested (none is
+    /// pending yet).
+    pub fn moved(&mut self) -> bool {
+        if self.pending {
+            return false;
+        }
+        self.pending = true;
+        self.requested += 1;
+        true
+    }
+
+    /// The backend started a frame: it shows the cursor where it is now.
+    pub fn frame_started(&mut self) {
+        self.pending = false;
+    }
+
+    /// Frames requested for cursor motion so far.
+    #[cfg(test)]
+    pub fn requested(&self) -> u64 {
+        self.requested
+    }
+}
+
 pub struct Cursor {
     image: CursorImageStatus,
     /// Bumped on every change, so the backend can apply a change once.
@@ -91,3 +124,49 @@ impl Sash {
 impl TabletSeatHandler for Sash {}
 
 delegate_cursor_shape!(Sash);
+
+#[cfg(test)]
+mod tests {
+    use super::CursorFrames;
+
+    /// 1000 motion events per second, frames every 16.667 ms (60 Hz): one frame
+    /// request per frame at most, never more.
+    #[test]
+    fn a_fast_mouse_requests_at_most_one_frame_per_period() {
+        let mut frames = CursorFrames::default();
+        let period_us = 16_667;
+        let mut pending = false;
+        let mut rendered = 0;
+        for t in 0..1_000_000u64 {
+            if t % 1000 == 0 && frames.moved() {
+                pending = true;
+            }
+            if t % period_us == 0 && pending {
+                frames.frame_started();
+                pending = false;
+                rendered += 1;
+            }
+        }
+        // Every request but a last pending one became a frame.
+        assert_eq!(frames.requested(), rendered + u64::from(pending));
+        assert!(
+            (59..=61).contains(&frames.requested()),
+            "{} requests in one second",
+            frames.requested()
+        );
+    }
+
+    #[test]
+    fn no_motion_requests_no_frame() {
+        let mut frames = CursorFrames::default();
+        for _ in 0..100 {
+            frames.frame_started();
+        }
+        assert_eq!(frames.requested(), 0);
+        assert!(frames.moved(), "the first motion asks for a frame");
+        assert!(!frames.moved(), "merged until the frame starts");
+        frames.frame_started();
+        assert!(frames.moved());
+        assert_eq!(frames.requested(), 2);
+    }
+}

@@ -230,6 +230,8 @@ pub fn start(
         "output"
     );
     let output = output::create_physical(state, &name, size_mm, drm_mode.into());
+    // sash-wm draws the arrow here (cursor plane or composited).
+    state.draws_named_cursor = true;
     state.set_layout_area((width as i32, height as i32).into());
 
     let allocator = GbmAllocator::new(
@@ -684,6 +686,7 @@ impl Drm {
         let start = Instant::now();
         // The pacer's schedule counts from the start of rendering, not its end.
         let started = now();
+        state.frame_started();
         record!(state, "frame_start");
         let mut elements = render::cursor_elements(state, &mut self.renderer, 1.0);
         elements.extend(render::arrow_element(
@@ -853,13 +856,17 @@ impl Drm {
             "sequence" => sequence,
             "kernel_timestamp" => metadata_present,
         );
-        let unpaced = self.pacer.is_unpaced();
         let next = self.pacer.flip_complete(time, now());
-        if !unpaced && self.pacer.is_unpaced() {
-            tracing::info!(
+        match self.pacer.take_change() {
+            Some(true) => tracing::info!(
                 refresh_us = self.refresh.as_micros() as u64,
                 "page flips complete without vblank pacing; rendering is capped at the refresh rate"
-            );
+            ),
+            Some(false) => tracing::info!(
+                refresh_us = self.refresh.as_micros() as u64,
+                "modeset or resume: flip pacing is classified again from the start (cap off)"
+            ),
+            None => {}
         }
         self.follow(next, state);
     }

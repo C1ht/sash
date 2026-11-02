@@ -18,6 +18,8 @@ enum Op {
         forced: bool,
         parent: Option<usize>,
         fixed: Option<(i32, i32)>,
+        /// Where the pointer is (rule A), if anywhere.
+        pointer: Option<(i32, i32)>,
     },
     /// Gives an unplaced floating window its size (the client's first buffer).
     Place(usize, (i32, i32)),
@@ -95,8 +97,18 @@ fn size() -> impl Strategy<Value = (i32, i32)> {
 fn op() -> impl Strategy<Value = Op> {
     let index = any::<usize>();
     prop_oneof![
-        4 => (any::<bool>(), prop::option::of(any::<usize>()), prop::option::of(size()))
-            .prop_map(|(forced, parent, fixed)| Op::Open { forced, parent, fixed }),
+        4 => (
+            any::<bool>(),
+            prop::option::of(any::<usize>()),
+            prop::option::of(size()),
+            prop::option::of((-500..4500i32, -500..4500i32)),
+        )
+            .prop_map(|(forced, parent, fixed, pointer)| Op::Open {
+                forced,
+                parent,
+                fixed,
+                pointer,
+            }),
         3 => (index, size()).prop_map(|(i, s)| Op::Place(i, s)),
         2 => index.prop_map(Op::Close),
         2 => index.prop_map(Op::Toggle),
@@ -137,6 +149,7 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
             forced,
             parent,
             fixed,
+            pointer,
         } => {
             *next += 1;
             let limits = fixed
@@ -149,8 +162,21 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
                 forced: forced || limits.is_fixed(),
                 parent: parent.and_then(|p| pick(layout, p)),
                 limits,
+                pointer,
             };
+            // Rule A: the tile under the pointer is split, otherwise the focused one;
+            // its leaf becomes the new window's sibling.
+            let under = pointer.and_then(|(x, y)| layout.tile_at(x, y));
+            let focused = layout.focused();
             layout.open(WindowId(*next), new);
+            let tiled = layout.mode(WindowId(*next)) == Some(Mode::Tiled);
+            if let Some(target) = if tiled { under.or(focused) } else { focused } {
+                assert_eq!(
+                    layout.tree().sibling_leaf(WindowId(*next)),
+                    Some(target),
+                    "the new window splits the right leaf"
+                );
+            }
             assert_eq!(
                 layout.focused(),
                 Some(WindowId(*next)),

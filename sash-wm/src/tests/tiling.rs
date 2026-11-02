@@ -10,7 +10,7 @@ use super::{
         keys::{ALT, H, J, K, L, Q, SHIFT},
     },
 };
-use crate::layout::Rect;
+use crate::layout::{Rect, WindowId};
 
 fn assert_tiles(h: &Harness, expected: &[(u64, Rect)]) {
     for &(id, rect) in expected {
@@ -19,11 +19,13 @@ fn assert_tiles(h: &Harness, expected: &[(u64, Rect)]) {
 }
 
 /// Three clients: 1 | (2 / 3). Opens them in order and checks configure sizes.
-fn open_three(socket: &std::path::Path) -> [TestClient; 3] {
+fn open_three(socket: &std::path::Path, server: &super::harness::Remote) -> [TestClient; 3] {
     let mut c1 = TestClient::connect(socket);
     let _ = c1.map_window();
+    server.pointer_over_focused();
     let mut c2 = TestClient::connect(socket);
     let _ = c2.map_window();
+    server.pointer_over_focused();
     let mut c3 = TestClient::connect(socket);
     let _ = c3.map_window();
     c1.roundtrip();
@@ -55,6 +57,8 @@ fn three_windows_get_tile_sizes_and_refill_when_the_middle_closes() {
         c1.roundtrip();
         assert_eq!(c1.events.toplevel_size, Some((400, 600)));
 
+        // Rule A: the pointer over window 2 (the focused one) when window 3 opens.
+        server.pointer_over_focused();
         let mut c3 = TestClient::connect(&socket);
         let _w3 = c3.map_window();
         assert_eq!(c3.events.toplevel_size, Some((400, 300)));
@@ -103,7 +107,7 @@ fn keybinds_move_focus_and_swap_without_reaching_clients() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [mut c1, mut c2, mut c3] = open_three(&socket);
+        let [mut c1, mut c2, mut c3] = open_three(&socket, &server);
 
         // Focus is on 3 (bottom right). Alt+H: left to 1.
         server.on_server(|h| {
@@ -190,7 +194,7 @@ fn layout_updates_while_the_output_is_hidden() {
     harness.presenting = false;
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
-        let [mut c1, _c2, mut c3] = open_three(&socket);
+        let [mut c1, _c2, mut c3] = open_three(&socket, &server);
         assert_eq!(c3.events.toplevel_size, Some((400, 300)));
         server.on_server(|h| h.chord(&[ALT, SHIFT, H]));
         c1.roundtrip();
@@ -257,6 +261,38 @@ fn unmapped_window_leaves_the_layout_and_reenters_on_remap() {
                 ],
             );
             assert_eq!(h.keyboard_focus(), Some(2));
+        });
+    });
+}
+
+/// Rule A: a new tiled window splits the tile under the pointer, not the focused
+/// window; with the pointer parked over another window, a spawn splits that one.
+#[test]
+fn a_new_window_splits_the_tile_under_the_pointer() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        let mut c2 = TestClient::connect(&socket);
+        let _w2 = c2.map_window(); // 1 | 2, focus 2
+        // The pointer parked over window 1 while window 2 has focus.
+        server.on_server(|h| {
+            h.pointer_to(100.0, 100.0);
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(2)));
+        });
+        let mut c3 = TestClient::connect(&socket);
+        let _w3 = c3.map_window();
+        server.on_server(|h| {
+            assert_tiles(
+                h,
+                &[
+                    (1, Rect::new(0, 0, 400, 300)),
+                    (3, Rect::new(0, 300, 400, 300)),
+                    (2, Rect::new(400, 0, 400, 600)),
+                ],
+            );
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(3)));
         });
     });
 }

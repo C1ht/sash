@@ -328,3 +328,50 @@ fn vt_switch_keys_go_to_the_session_first() {
     });
     assert_eq!(*switched.lock().unwrap(), vec![2, 12]);
 }
+
+/// The arrow sash-wm draws (DRM) moves with the pointer: motion over an empty desktop
+/// requests a frame, merged until that frame starts; no motion, no frame. Nested, the
+/// host draws the arrow: no frame.
+#[test]
+fn pointer_motion_over_an_empty_desktop_redraws_the_arrow() {
+    let mut harness = Harness::new();
+    harness.server.state.draws_named_cursor = true;
+    for _ in 0..5 {
+        harness.step();
+    }
+    let idle = harness.frames;
+    for _ in 0..20 {
+        harness.step();
+    }
+    assert_eq!(harness.frames, idle, "idle: no frames");
+    // Many motions before the next frame: one request, one frame.
+    for i in 0..50 {
+        harness.pointer_to(100.0 + i as f64, 100.0);
+    }
+    assert_eq!(harness.server.state.cursor_frames.requested(), 1);
+    harness.step();
+    assert_eq!(harness.frames, idle + 1, "one frame for the motion");
+    for _ in 0..20 {
+        harness.step();
+    }
+    assert_eq!(harness.frames, idle + 1, "idle again");
+    harness.pointer_to(300.0, 300.0);
+    harness.step();
+    assert_eq!(harness.server.state.cursor_frames.requested(), 2);
+    assert_eq!(harness.frames, idle + 2);
+    // The same position again is no motion.
+    harness.pointer_to(300.0, 300.0);
+    harness.step();
+    assert_eq!(harness.frames, idle + 2);
+
+    // Nested: the host draws the arrow, sash-wm needs no frame for it.
+    let mut nested = Harness::new();
+    for _ in 0..5 {
+        nested.step();
+    }
+    let before = nested.frames;
+    nested.pointer_to(200.0, 200.0);
+    nested.step();
+    assert_eq!(nested.server.state.cursor_frames.requested(), 0);
+    assert_eq!(nested.frames, before);
+}

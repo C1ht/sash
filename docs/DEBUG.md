@@ -22,6 +22,10 @@ CLAUDE.md ("Debug recording").
   not only when the hotkey is pressed.
 - `SASH_DEBUG_KEYS=full`: record every key by name, printable ones included. A warning
   is printed at startup. Do not use it while typing passwords.
+- `SASH_DEBUG_SCREENSHOTS=full`: screenshots with window contents instead of outlines.
+  A warning is printed at startup. **Everything on screen is then in the bundle**,
+  including any text a window shows (what you typed into a terminal, a document, a web
+  page). Close or hide such windows before pressing the hotkey.
 
 ## What is recorded
 
@@ -42,11 +46,13 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
   cursor plane or was composited;
 - counters per second: pointer events in, position updates, redraws requested, frames
   rendered, flips completed, cursor updates;
-- screenshots, through the same offscreen render path as `SIGUSR1` captures (never the
-  screen): after each layout change (at most one per second, 100 per session) and when
-  the hotkey is pressed; scaled to at most 1920 px wide. **They show window contents,
-  so any text a window displays (including what you typed into a terminal) is in
-  them.** Close or hide windows with private content before pressing the hotkey;
+- screenshots after each layout change (at most one per second, 100 per session) and
+  when the hotkey is pressed, at most 1920 px wide. By default they show **window
+  outlines only**: each window as a flat box (tiled and floating in different shades),
+  a 2 px border (blue for the focused window), its id in simple built-in digits, and
+  the pointer as a red cross, drawn from the layout alone. No window contents. With
+  `SASH_DEBUG_SCREENSHOTS=full` they show contents, rendered through the same offscreen
+  path as `SIGUSR1` captures (never the screen);
 - sash-wm's own log.
 
 ## The hotkey: mod+F11
@@ -77,6 +83,6 @@ tools/check-release.sh                          # proves none of it is in releas
 
 The VM scenario (tools/vm/scenario.py, check 17) runs it on the DRM backend.
 
-## Not yet
+## Replay
 
-Replaying a bundle's pointer and keybind events (`--replay`) is proposed, not built.
+See "Replaying a bundle" below (`tools/replay.sh`).

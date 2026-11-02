@@ -401,6 +401,29 @@ impl BspTree {
         self.root.is_none()
     }
 
+    /// The window in the leaf next to `window`'s leaf (the other child of its parent),
+    /// if that child is a leaf.
+    #[cfg(test)]
+    pub fn sibling_leaf(&self, window: WindowId) -> Option<WindowId> {
+        fn find(node: &Node, window: WindowId) -> Option<Option<WindowId>> {
+            let Node::Split(split) = node else {
+                return None;
+            };
+            let leaf_window = |n: &Node| match n {
+                Node::Leaf(leaf) => Some(leaf.window),
+                Node::Split(_) => None,
+            };
+            if leaf_window(&split.first) == Some(window) {
+                return Some(leaf_window(&split.second));
+            }
+            if leaf_window(&split.second) == Some(window) {
+                return Some(leaf_window(&split.first));
+            }
+            find(&split.first, window).or_else(|| find(&split.second, window))
+        }
+        find(self.root.as_ref()?, window).flatten()
+    }
+
     /// The tree in preorder (see `OutlineNode`).
     #[cfg(any(test, feature = "debug-record"))]
     pub fn outline(&self) -> Vec<OutlineNode> {
