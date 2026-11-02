@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Fails if debug-only code (offscreen capture, synthetic input, the --mode flag) is in the
-# release binary.
+# Fails if debug-only code (offscreen capture, synthetic input, the --mode flag, mode
+# fault injection) is in the release binary.
 # Builds the release binary first. Usage: tools/check-release.sh
 
 set -euo pipefail
@@ -22,6 +22,9 @@ markers=(
     "--mode takes WxH@R"
     "--mode: only the requested mode is tried"
     "[--mode WxH@R]"
+    SASH_DEBUG_REJECT_MODES
+    SASH_DEBUG_REJECT_ALL_MODES
+    "fault injection"
 )
 found=0
 for marker in "${markers[@]}"; do
@@ -45,10 +48,11 @@ fi
 # Control: the same markers must be found in a debug build, or the check proves nothing.
 cargo build --locked -p sash-wm
 for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
-    "--mode: only the requested mode is tried"; do
+    "--mode: only the requested mode is tried" SASH_DEBUG_REJECT_MODES \
+    SASH_DEBUG_REJECT_ALL_MODES "fault injection"; do
     if ! grep -aqF -- "$marker" target/debug/sash-wm; then
         echo "FAIL: control: debug binary lacks $marker, the check is stale"
         exit 1
     fi
 done
-echo "ok: release binary has no debug-only capture, synthetic input or --mode code"
+echo "ok: release binary has no debug-only capture, synthetic input, --mode or fault injection code"

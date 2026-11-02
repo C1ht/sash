@@ -29,7 +29,9 @@ guest (`ssh/`) and the results (`out/`). Nothing depends on a temporary director
   the session variables of a console, a serial and an SSH login (and DRM refused over
   SSH), input, a drag with frame statistics and the refresh-rate cap, idle CPU and
   memory, VT switch, quit key, XKB layout, SIGTERM/SIGABRT/SIGKILL, `--exit-after`,
-  `--mode` (offered and not offered), a late VT, unplug and replug (the connector forced
+  `--mode` (offered and not offered), mode fault injection (the first candidates
+  rejected; all rejected, with the kernel's DRM ioctl trace showing that sash-wm made
+  no state-changing ioctl), a late VT, unplug and replug (the connector forced
   off and back through sysfs, then a change uevent: debugfs `trigger_hotplug` where the
   kernel has it, else `udevadm trigger`), and `tools/stage-c.sh` on a guest console.
 

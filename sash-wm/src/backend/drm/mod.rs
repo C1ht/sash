@@ -137,6 +137,9 @@ struct Drm {
     modeset_pending: bool,
     /// For timers that call back into the backend.
     this: Weak<RefCell<Drm>>,
+    /// Debug builds: test commits made to fail (fault injection).
+    #[cfg(debug_assertions)]
+    faults: mode::ModeFaults,
 }
 
 struct QueuedFrame {
@@ -194,7 +197,13 @@ pub fn start(
     let surface = device
         .create_surface(crtc, candidates[0], &[connector])
         .map_err(|err| format!("DRM surface on {name}: {err}"))?;
-    let Some(drm_mode) = validate(&candidates, mode_name, |mode| surface.use_mode(mode)) else {
+    #[cfg(debug_assertions)]
+    let faults = mode_faults_from_env()?;
+    let Some(drm_mode) = validate(&candidates, mode_name, |mode| {
+        #[cfg(debug_assertions)]
+        injected_fault(&faults, &mode)?;
+        surface.use_mode(mode).map_err(|err| err.to_string())
+    }) else {
         // Nothing was committed. Pausing the device first makes dropping the surface and
         // the device commit nothing either: the display stays as it was.
         device.pause();
@@ -273,6 +282,8 @@ pub fn start(
             cap_timer: false,
             modeset_pending: false,
             this: this.clone(),
+            #[cfg(debug_assertions)]
+            faults,
         })
     });
 
@@ -530,18 +541,44 @@ fn connector_info(handle: connector::Handle, info: &connector::Info) -> Connecto
         id: u32::from(handle),
         connected: info.state() == connector::State::Connected,
         size_mm: info.size().unwrap_or((0, 0)),
-        modes: info
-            .modes()
-            .iter()
-            .map(|m| ModeInfo {
-                width: m.size().0,
-                height: m.size().1,
-                refresh_mhz: exact_refresh_mhz(m),
-                preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
-                interlaced: m.flags().contains(ModeFlags::INTERLACE),
-            })
-            .collect(),
+        modes: info.modes().iter().map(mode_info).collect(),
     }
+}
+
+/// A mode as mode.rs sees it.
+fn mode_info(m: &Mode) -> ModeInfo {
+    ModeInfo {
+        width: m.size().0,
+        height: m.size().1,
+        refresh_mhz: exact_refresh_mhz(m),
+        preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+        interlaced: m.flags().contains(ModeFlags::INTERLACE),
+    }
+}
+
+/// Debug builds: the fault injection asked for in the environment.
+#[cfg(debug_assertions)]
+fn mode_faults_from_env() -> Result<mode::ModeFaults, String> {
+    let var = |name| std::env::var(name).ok();
+    let faults = mode::ModeFaults::parse(
+        var("SASH_DEBUG_REJECT_MODES").as_deref(),
+        var("SASH_DEBUG_REJECT_ALL_MODES").as_deref(),
+    )?;
+    if !faults.is_empty() {
+        tracing::warn!(?faults, "fault injection: these test commits will fail");
+    }
+    Ok(faults)
+}
+
+/// Debug builds: fails the test commit of `mode` if the fault injection says so.
+#[cfg(debug_assertions)]
+fn injected_fault(faults: &mode::ModeFaults, mode: &Mode) -> Result<(), String> {
+    if faults.rejects(&mode_info(mode)) {
+        return Err(
+            "fault injection (SASH_DEBUG_REJECT_MODES / SASH_DEBUG_REJECT_ALL_MODES)".into(),
+        );
+    }
+    Ok(())
 }
 
 fn insert_sources(
@@ -619,6 +656,8 @@ impl Drm {
         }
         state.flush_pending_arrange();
         let start = Instant::now();
+        // The pacer's schedule counts from the start of rendering, not its end.
+        let started = now();
         let mut elements = render::cursor_elements(state, &mut self.renderer, 1.0);
         elements.extend(render::arrow_element(
             state,
@@ -649,7 +688,7 @@ impl Drm {
                 false
             }
         };
-        self.pacer.rendered(queued, now());
+        self.pacer.rendered(queued, started);
         if queued {
             self.queued = Some(QueuedFrame {
                 render_us: start.elapsed().as_micros() as u64,
@@ -845,8 +884,13 @@ impl Drm {
             candidates = ?candidates.iter().map(mode_name).collect::<Vec<_>>(),
             "the display no longer offers the mode in use; mode candidates"
         );
-        let Some(mode) = validate(candidates, mode_name, |mode| self.compositor.use_mode(mode))
-        else {
+        let Some(mode) = validate(candidates, mode_name, |mode| {
+            #[cfg(debug_assertions)]
+            injected_fault(&self.faults, &mode)?;
+            self.compositor
+                .use_mode(mode)
+                .map_err(|err| err.to_string())
+        }) else {
             tracing::warn!("no mode passed its test commit; the display stays dark");
             return false;
         };

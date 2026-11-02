@@ -7,9 +7,14 @@
 //!
 //! Flips are normally paced by vblank: they complete one refresh period apart at the
 //! earliest. Some devices (virtio-gpu) complete them at once. Two flips that complete
-//! less than half a refresh period apart mark the output as unpaced; from then on no
-//! frame is rendered less than one refresh period after the previous one, which caps
-//! rendering at the nominal refresh rate. With vblank pacing nothing is delayed.
+//! less than half a refresh period apart mark the output as unpaced; from then on frames
+//! follow a fixed schedule of one refresh period: each frame has a slot, and the next
+//! may start at the earliest one period after that slot. A frame that starts late (a
+//! timer fires late, or input arrives between slots) but within the next period takes
+//! the next slot, so lateness does not add up and a steady stream runs at the nominal
+//! refresh rate. After an idle gap the schedule restarts at the frame's start. Slots
+//! are measured from the start of rendering, not its end. With vblank pacing nothing is
+//! delayed.
 //!
 //! Times are monotonic clock readings passed in by the caller, so the tests use fake
 //! ones.
@@ -43,8 +48,8 @@ pub struct Pacer {
     unpaced: bool,
     /// When the last flip completed (the kernel's timestamp when it has one).
     last_flip: Option<Duration>,
-    /// When the last frame was queued.
-    last_render: Option<Duration>,
+    /// The schedule slot of the last queued frame (unpaced output): when it was due.
+    slot: Option<Duration>,
 }
 
 impl Pacer {
@@ -57,7 +62,7 @@ impl Pacer {
             connected: true,
             unpaced: false,
             last_flip: None,
-            last_render: None,
+            slot: None,
         }
     }
 
@@ -67,13 +72,23 @@ impl Pacer {
         self.next(now)
     }
 
-    /// The backend rendered at `now`: `queued` if a frame went to the display (it will
-    /// flip), false if there was nothing to show or rendering failed.
-    pub fn rendered(&mut self, queued: bool, now: Duration) {
+    /// The backend rendered a frame it started at `started`: `queued` if a frame went to
+    /// the display (it will flip), false if there was nothing to show or rendering
+    /// failed.
+    pub fn rendered(&mut self, queued: bool, started: Duration) {
         self.wanted = false;
         self.flip_pending = queued;
         if queued {
-            self.last_render = Some(now);
+            self.slot = Some(match self.slot {
+                // On schedule, or late by less than a period: the next slot.
+                Some(slot)
+                    if started >= slot + self.refresh && started < slot + 2 * self.refresh =>
+                {
+                    slot + self.refresh
+                }
+                // The first frame, or after an idle gap: the schedule starts here.
+                _ => started,
+            });
         }
     }
 
@@ -155,9 +170,9 @@ impl Pacer {
         if !self.is_active() || !self.wanted || self.flip_pending {
             return Next::Wait;
         }
-        match self.last_render {
-            Some(last) if self.unpaced && now < last + self.refresh => {
-                Next::RenderAt(last + self.refresh)
+        match self.slot {
+            Some(slot) if self.unpaced && now < slot + self.refresh => {
+                Next::RenderAt(slot + self.refresh)
             }
             _ => Next::Render,
         }
@@ -348,17 +363,99 @@ mod tests {
         }
         assert!(pacer.is_unpaced());
         // The first two frames come before the output is known to be unpaced; after
-        // that, no two frames are less than one refresh period apart.
+        // that, frames are one refresh period apart, give or take the 0.5 ms steps of
+        // this simulation (a late frame keeps its slot, so the next may come early).
         let intervals: Vec<Duration> = rendered.windows(2).map(|w| w[1] - w[0]).collect();
         assert!(
-            intervals[1..].iter().all(|&i| i >= REFRESH),
+            intervals[1..]
+                .iter()
+                .all(|&i| i + step >= REFRESH && i <= REFRESH + step),
             "{intervals:?}"
         );
-        // And the rate is close to 60 Hz (the timer fires on the 0.5 ms grid here).
+        // And the rate is 60 Hz.
         assert!(
-            (55..=61).contains(&rendered.len()),
+            (59..=61).contains(&rendered.len()),
             "{} frames in one second",
             rendered.len()
+        );
+    }
+
+    /// A full-rate stream on an unpaced output, as in the VM: input every millisecond,
+    /// each frame takes 3 ms to render, the cap's timer fires 0.7 ms late, and the flip
+    /// completes 0.5 ms after the frame is queued. Slots are kept from the start of
+    /// rendering, so neither the render time nor the timer's lateness lowers the rate:
+    /// 600 frames in 10 s, at the nominal 60 Hz. (Spacing from the end of the previous
+    /// render, as before, gave one frame per 16.666 + 3 + 0.7 ms: about 49 Hz.)
+    #[test]
+    fn a_full_rate_stream_runs_at_the_nominal_refresh_rate() {
+        let tick = Duration::from_micros(100);
+        let render_time = ms(3);
+        let timer_late = Duration::from_micros(700);
+        let flip_delay = Duration::from_micros(500);
+        let mut pacer = pacer();
+        let mut starts: Vec<Duration> = Vec::new();
+        let mut timer: Option<Duration> = None;
+        let mut rendering_until: Option<Duration> = None;
+        let mut flip_at: Option<Duration> = None;
+        let mut now = Duration::ZERO;
+        let end = Duration::from_secs(10);
+        let start_frame =
+            |now: Duration, starts: &mut Vec<Duration>, rendering: &mut Option<Duration>| {
+                starts.push(now);
+                *rendering = Some(now + render_time);
+            };
+        while now < end {
+            // A frame being rendered is queued when its render time is over.
+            if let Some(done) = rendering_until
+                && now >= done
+            {
+                rendering_until = None;
+                pacer.rendered(true, *starts.last().unwrap());
+                flip_at = Some(now + flip_delay);
+            }
+            let mut next = Next::Wait;
+            if let Some(at) = flip_at
+                && now >= at
+            {
+                flip_at = None;
+                next = pacer.flip_complete(at, now);
+            }
+            if let Some(at) = timer
+                && now >= at + timer_late
+            {
+                timer = None;
+                next = pacer.timer_fired(now);
+            }
+            if rendering_until.is_none() && now.as_micros().is_multiple_of(1000) {
+                let wanted = pacer.want_frame(now);
+                if next == Next::Wait {
+                    next = wanted;
+                }
+            }
+            if rendering_until.is_none() {
+                match next {
+                    Next::Render => start_frame(now, &mut starts, &mut rendering_until),
+                    Next::RenderAt(at) => {
+                        timer.get_or_insert(at);
+                    }
+                    Next::Wait => {}
+                }
+            }
+            now += tick;
+        }
+        assert!(pacer.is_unpaced());
+        // Frames after the first two (before the output was known to be unpaced).
+        let steady = &starts[2..];
+        let span = *steady.last().unwrap() - steady[0];
+        let mean = span / (steady.len() as u32 - 1);
+        assert!(
+            (598..=601).contains(&starts.len()),
+            "{} frames in 10 s",
+            starts.len()
+        );
+        assert!(
+            mean.abs_diff(REFRESH) < Duration::from_micros(20),
+            "mean interval {mean:?}, refresh {REFRESH:?}"
         );
     }
 }

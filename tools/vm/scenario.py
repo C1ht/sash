@@ -317,10 +317,67 @@ try:
           and active(vm) == "active", f"{w}x{h}@{hz}")
     start(vm, binary=DEBUG, args="--mode 1234x567@60", windows=0)
     refused = count(vm, "is not offered; offered:")
-    committed = count(vm, "passed its test commit|frame frame_time")
+    committed = count(vm, "candidate passed its test commit|frame frame_time")
     check("--mode with a mode that is not offered: refused, nothing committed",
           refused == 1 and committed == 0 and active(vm) != "active" and vt_mode(vm) == "text",
           f"unit {active(vm)}, VT 2 {vt_mode(vm)}")
+
+    # 13c/13d. Fault injection (debug build). The kernel's DRM debug output (drm.debug:
+    # core 0x01 logs every ioctl with the calling program's name; atomic 0x10) shows
+    # which DRM ioctls sash-wm itself made. Counting all commits would prove nothing:
+    # fbcon commits on its own (virtio's console cursor blink is a damage commit).
+    SETTERS = ("DRM_IOCTL_MODE_ATOMIC", "DRM_IOCTL_MODE_SETCRTC", "DRM_IOCTL_MODE_PAGE_FLIP",
+               "DRM_IOCTL_MODE_SETPLANE", "DRM_IOCTL_MODE_CURSOR", "DRM_IOCTL_MODE_DIRTYFB",
+               "DRM_IOCTL_MODE_SETPROPERTY", "DRM_IOCTL_MODE_OBJ_SETPROPERTY")
+
+    def traced_start(env):
+        """Starts the debug build with `env` under DRM ioctl tracing; returns sash-wm's
+        ioctls (name -> count) and whether the CRTC/plane state is unchanged."""
+        sh(vm, "systemctl stop sash-session 2>/dev/null; chvt 1; sleep 1")
+        sh(vm, "echo 0x11 > /sys/module/drm/parameters/debug; dmesg -C")
+        before = sh(vm, "grep -E 'fb=|mode:|active=' /sys/kernel/debug/dri/0/state")
+        sh(vm, f"{env} /mnt/sash/start-session.sh {DEBUG}; sleep 4")
+        trace = sh(vm, "dmesg | grep -F 'comm=\"sash-wm-debug\"' | grep -oE 'DRM_IOCTL_[A-Z0-9_]+' "
+                       "| sort | uniq -c")
+        sh(vm, "echo 0 > /sys/module/drm/parameters/debug")
+        after = sh(vm, "grep -E 'fb=|mode:|active=' /sys/kernel/debug/dri/0/state")
+        ioctls = {name: int(n) for n, name in (l.split() for l in trace.splitlines() if l.strip())}
+        return ioctls, before == after
+
+    # 13c. The first two candidates' test commits fail: the fallback chain is logged and
+    # the third candidate is used. Its test commit and the modeset are real ioctls from
+    # sash-wm (the positive control for 13d's tracing).
+    ioctls_c, _ = traced_start("SASH_DEBUG_REJECT_MODES=1920x1200@60,1680x1050@60")
+    lines_c = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | "
+                     "grep -E 'fault injection|mode candidate|output connector' | cut -c28-400")
+    print("--- log, first candidates rejected:\n" + lines_c)
+    print("sash-wm's DRM ioctls:", ioctls_c)
+    w, h, hz = output_mode(vm)
+    check("fault injection: the first candidates rejected, the fallback chain logged, the "
+          "next mode used", count(vm, "mode candidate rejected") == 2
+          and count(vm, "candidate passed its test commit") == 1 and (w, h) == (1440, 900)
+          and ioctls_c.get("DRM_IOCTL_MODE_ATOMIC", 0) > 0 and active(vm) == "active",
+          f"{w}x{h}@{hz}, atomic ioctls {ioctls_c.get('DRM_IOCTL_MODE_ATOMIC', 0)}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 13d. Every candidate rejected: sash-wm exits with a message, without one
+    # state-changing DRM ioctl, and the CRTC/plane state is the same as before.
+    ioctls_d, same = traced_start("SASH_DEBUG_REJECT_ALL_MODES=1")
+    shot(vm, "16-all-rejected")
+    lines_d = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | "
+                     "grep -E 'fault injection|mode candidate|passed|Error|untouched' | cut -c28-400")
+    print("--- log, every candidate rejected:\n" + lines_d)
+    print("sash-wm's DRM ioctls:", ioctls_d, "; CRTC/plane state unchanged:", same)
+    setters = {k: v for k, v in ioctls_d.items() if k in SETTERS}
+    check("fault injection: every candidate rejected, exit with a message, no commit or "
+          "other state-changing ioctl, the console untouched (see 16)",
+          "the display was left untouched" in lines_d
+          and count(vm, "mode candidate rejected") == 5
+          and count(vm, "candidate passed its test commit|frame frame_time") == 0
+          and ioctls_d and not setters and same
+          and active(vm) != "active" and vt_mode(vm) == "text",
+          f"state-changing ioctls: {setters or 'none'}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
     # 14. Started on a VT that is not in front: sash-wm waits until it is.
     start(vm, env="CHVT_DELAY=3", windows=1)
@@ -349,7 +406,7 @@ try:
     sh(vm, f"echo off > {connector}/status; {hotplug}; sleep 2")
     sh(vm, f"echo detect > {connector}/status; {hotplug}; sleep 3")
     switched = count(vm, "no longer offers the mode in use; mode candidates")
-    tested = count(vm, "passed its test commit")
+    tested = count(vm, "candidate passed its test commit")
     w, h, hz = output_mode(vm)
     chosen = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep 'passed its test commit' | tail -1 | grep -o 'mode=\"[0-9x]*'")
     shot(vm, "12b-after-replug-new-mode")

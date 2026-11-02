@@ -35,6 +35,8 @@ On the hardware, from a text console (M9; only by the owner's checklist
 sash-wm                               # mod is Super; Super+Shift+E quits
 sash-wm --exit-after 20               # debug builds: a watchdog that quits after 20 s
 sash-wm --mode 5120x1440@60           # debug builds: this mode instead of the rule
+SASH_DEBUG_REJECT_MODES=5120x1440@240 sash-wm   # debug builds: fail these test commits
+SASH_DEBUG_REJECT_ALL_MODES=1 sash-wm           # debug builds: fail every test commit
 tools/stage-c.sh 20 run1 --mode 5120x1440@60   # the owner's stage C runs
 ```
 

@@ -174,6 +174,56 @@ pub fn requested(connector: &ConnectorInfo, request: ModeRequest) -> Vec<usize> 
     found
 }
 
+/// Debug builds: test commits that are made to fail, to exercise the fallback chain
+/// (`SASH_DEBUG_REJECT_MODES="WxH@R,..."`, `SASH_DEBUG_REJECT_ALL_MODES=1`).
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModeFaults {
+    all: bool,
+    modes: Vec<ModeRequest>,
+}
+
+#[cfg(debug_assertions)]
+impl ModeFaults {
+    /// From the two variables' values (unset or empty: no fault). `all` must be "1".
+    pub fn parse(modes: Option<&str>, all: Option<&str>) -> Result<Self, String> {
+        let all = match all.unwrap_or("") {
+            "" => false,
+            "1" => true,
+            other => {
+                return Err(format!(
+                    "SASH_DEBUG_REJECT_ALL_MODES={other}: only 1 is valid"
+                ));
+            }
+        };
+        let modes = modes
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|m| {
+                ModeRequest::parse(m)
+                    .ok_or_else(|| format!("SASH_DEBUG_REJECT_MODES: {m} is not WxH@R"))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { all, modes })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.all && self.modes.is_empty()
+    }
+
+    /// True if the test commit of this mode is to fail (the refresh rate is compared
+    /// rounded to Hz, as for `--mode`).
+    pub fn rejects(&self, mode: &ModeInfo) -> bool {
+        self.all
+            || self.modes.iter().any(|r| {
+                (mode.width, mode.height) == (r.width, r.height)
+                    && (mode.refresh_mhz + 500) / 1000 == r.refresh
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +419,32 @@ mod tests {
         ];
         assert_eq!(choose_connector(&connectors), Some(2));
         assert_eq!(choose_connector(&[]), None);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn fault_injection_rejects_the_chosen_modes() {
+        let none = ModeFaults::parse(None, None).unwrap();
+        assert!(none.is_empty());
+        assert_eq!(ModeFaults::parse(Some(""), Some("")), Ok(none.clone()));
+        assert!(!none.rejects(&mode(5120, 1440, 240_000, false)));
+
+        let some = ModeFaults::parse(Some("5120x1440@240, 5120x1440@120"), None).unwrap();
+        assert!(!some.is_empty());
+        assert!(some.rejects(&mode(5120, 1440, 240_000, false)));
+        assert!(
+            some.rejects(&mode(5120, 1440, 119_998, false)),
+            "rounded to Hz"
+        );
+        assert!(!some.rejects(&mode(5120, 1440, 60_000, false)));
+        assert!(!some.rejects(&mode(3840, 1080, 240_000, false)));
+
+        let all = ModeFaults::parse(None, Some("1")).unwrap();
+        assert!(all.rejects(&mode(640, 480, 60_000, false)));
+
+        assert!(ModeFaults::parse(Some("5120x1440"), None).is_err());
+        assert!(ModeFaults::parse(Some("5120x1440@240,junk"), None).is_err());
+        assert!(ModeFaults::parse(None, Some("yes")).is_err());
     }
 
     #[cfg(debug_assertions)]

@@ -5,7 +5,8 @@
 # logind session on VT 2 (as a display manager would), and switches to VT 2.
 # Usage: start-session.sh BINARY [ARGS...]
 # No --backend: sash-wm chooses DRM itself (no display variables, a login session).
-# Environment: XKB_DEFAULT_* (passed on), CHVT_DELAY (seconds before the VT switch).
+# Environment: XKB_DEFAULT_* and SASH_DEBUG_REJECT_* (passed on), CHVT_DELAY (seconds
+# before the VT switch).
 set -e
 BIN=$1
 shift
@@ -25,7 +26,7 @@ chmod 666 /tmp/sash.log
 # takes an empty one at its word (an empty layout has no letters).
 set -- --setenv=RUST_LOG="${RUST_LOG:-sash_wm=debug}" "$BIN" "$@"
 for var in XKB_DEFAULT_RULES XKB_DEFAULT_MODEL XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT \
-    XKB_DEFAULT_OPTIONS; do
+    XKB_DEFAULT_OPTIONS SASH_DEBUG_REJECT_MODES SASH_DEBUG_REJECT_ALL_MODES; do
     value=$(printenv "$var" || true)
     [ -n "$value" ] && set -- --setenv="$var=$value" "$@"
 done
