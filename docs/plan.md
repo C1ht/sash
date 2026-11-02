@@ -80,7 +80,7 @@ sash/
   - Geometry is computed only over tiled leaves.
   - Focus moves and swaps use a minimal hardcoded keybind set.
 
-  - New window splits the focused leaf along its longer side, ratio 0.5, new window second and focused; integer geometry (first child floor, second the remainder).
+  - New window splits the focused leaf along its longer side, ratio 0.5, new window second and focused; integer geometry (first child floor, second the remainder). Changed after stage C run 1 (owner, rule A): the tiled window under the pointer is split, otherwise the focused one.
   - Close: sibling takes the parent's place; focus to the most recently focused window in that subtree.
   - Focus move and swap by direction (nearest overlapping neighbour, ties by most recently focused, no wrap). Swap keeps the tree structure.
   - Min/max size hints ignored while tiled (known limit). No gaps, borders, resize keybinds or workspaces.
@@ -129,7 +129,7 @@ sash/
   - Unit test: a new window while the default mode is floating gets a placeholder next to the focused leaf, and no tiled rectangle changes.
   - Unit test: the output size changes between float and re-tile. The tree structure stays identical and the rectangles are recomputed for the new size.
   - Definition of "identical tree" in these tests: if nothing changed while windows floated, the tree after re-tiling is identical to the tree before floating, compared as structure, split directions, split ratios (exact fractions since M6, so a tiled resize before floating survives the round trip), window per leaf, and resulting rectangles. If the tree changed while floating (windows opened or closed), the expected tree is the tree before floating with exactly those edits applied the way they would apply with every window tiled:
-    - A new window splits the focused tiled leaf.
+    - A new window splits the focused tiled leaf (with rule A: the tiled leaf under the pointer, if any).
     - A closed window's leaf is removed and its sibling takes the parent's place.
     - The placeholder keeps its position relative to the surviving nodes. If its sibling closed, the placeholder takes the parent's place.
     - Re-tiling must produce exactly that tree and its rectangles.
@@ -198,6 +198,7 @@ sash/
   - Stage B (VM only: QEMU/KVM, virtio-gpu, minimal Debian 13 guest, the release binary from the trixie container): Smithay's DRM/KMS path (libseat, udev, libinput, GBM/EGL, atomic modesetting on one connector at its preferred mode, page-flip pacing, presentation-time, hardware cursor with software fallback, VT switching via session pause/resume); modifier Super; mod+Shift+E; VT switches before anything else; debug-only `--exit-after <seconds>`; startup errors restore the display. Input per the owner's decision (fixed defaults, XKB_DEFAULT_* honoured). Hotplug out of scope; unplugging must not crash. Tests without GPU or session: mode selection, the pacing state machine, pause/resume sequences, input device add/remove with fakes; in the VM by script where possible. Measure in the VM (frame intervals under a drag, idle CPU and RAM); VM numbers do not predict NVIDIA hardware.
   - Docs: docs/m9-stage-c.md, the exact checklist for the first run on the real machine.
   - After stage B (owner decisions, rules in CLAUDE.md): the top-edge rule for floating windows; automatic backend selection; a render cap at the nominal refresh when flips are not vblank-paced; same-connector disconnect/reconnect (stop, then clear and modeset at the same mode); tools/stage-c.sh and monitor power-off/on and cable-pull runs in docs/m9-stage-c.md; a VM check that a udev event arrives.
+  - After stage C run 1 (owner, tag m9c): debug recording screenshots are outlines by default (`SASH_DEBUG_SCREENSHOTS=full` for contents); rule A for new windows; a frame per pointer motion when sash-wm draws the cursor (merged to one per refresh); pacing classification ignores the first flip after a modeset or resume and needs 3 consecutive short intervals; replay of bundles in the test harness (tools/replay.sh).
   - Mode selection rule: approved by the owner after stage B, with TEST_ONLY validation and a fallback chain, placeholder physical sizes, and a debug-only `--mode WxH@R` (rules in CLAUDE.md). Reconnect keeps the previous mode if offered, else the rule (confirmed). Backend selection needs XDG_SESSION_ID, XDG_SEAT and XDG_VTNR. The VM lives in ~/.cache/sash/vm. Tag m9b.
   - Done after stage B, pending approval: the decisions above are built and tested (unit, property and headless tests; the VM scenario passes 16 of 16 checks, including a udev change event with unplug and replug, and tools/stage-c.sh on a guest console). Reconnect when the display no longer offers the mode in use: the mode-selection rule picks one (Claude's decision, to be confirmed).
   - Stage C (first bare-metal run) only with the owner. Explicit sync (wp_linux_drm_syncobj_v1) is decided at that first bare-metal run (owner decision after M8).

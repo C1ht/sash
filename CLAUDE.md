@@ -53,9 +53,16 @@ change this file without the owner's approval.
   tiled/floating flag; only "tiled" is used until M4.
 - The `Layout` trait is the interface M4's floating layout also
   implements.
-- New window: splits the focused leaf along the longer side of its
-  rectangle, ratio 0.5; the new window becomes the second child and
-  gets focus. With no windows, it fills the output.
+- New window: splits the tiled window under the pointer, otherwise the
+  focused leaf (owner, after stage C run 1: rule A), along the longer
+  side of its rectangle, ratio 0.5; the new window becomes the second
+  child and gets focus. With no windows, it fills the output. "Under the
+  pointer" means the tile that contains the pointer position, also when a
+  floating, maximized or fullscreen window is drawn above it; the
+  pointer outside every tile (or no pointer) means the focused leaf. This
+  holds for every new tiled window, also one spawned by a keybind. No
+  preselect keys. A new window while the default mode is floating still
+  gets its placeholder next to the focused leaf.
 - Integer geometry only: the first child gets the floor, the second the
   remainder, so rectangles cover the output exactly.
 - Close: the sibling takes the parent's place. Focus goes to the most
@@ -334,6 +341,13 @@ change this file without the owner's approval.
 - Screenshots only through the offscreen render path, never the host
   screen: on the hotkey, and after each layout change at most one per
   second and 100 per session, scaled to at most 1920 px wide.
+- Screenshot contents (owner, after stage C run 1): by default plain
+  window outlines with their ids on the clear colour, no window
+  contents; the ids are drawn with simple built-in digits (no font
+  dependency). Full contents only with `SASH_DEBUG_SCREENSHOTS=full`,
+  with a startup banner warning and a docs/DEBUG.md warning. The tests
+  prove the default bundle has no window contents and that typed text
+  is in no file of it, pictures included.
 - Hotkey: mod+F11 (Super on DRM, Alt nested) marks a bug and writes a
   bundle. It clashes with no keybind (a test checks the table) and is
   never forwarded to clients. Not a keybind-table row: it exists only in
@@ -345,7 +359,13 @@ change this file without the owner's approval.
 - docs/DEBUG.md describes it; docs/v1.md has the gate "debug recording
   removed or proven compiled out"; tools/check-release.sh fails if any
   of it is in the release binary.
-- No replay (`--replay`) until the owner approves it.
+- Replay (owner, after stage C run 1): a bundle's pointer, keybind and
+  layout events are replayed in the headless test harness with stand-in
+  windows, and the layout snapshots are compared with the bundle's.
+  Runs through the test harness (`tools/replay.sh <bundle>`, a debug
+  test build), not as a sash-wm flag: the stand-in clients use the
+  test-only Wayland client library. Bundles from real hardware become
+  regression tests (fixtures with no typed text).
 
 ## Keybinds
 
@@ -472,6 +492,19 @@ change this file without the owner's approval.
   but within the next period takes that slot, so lateness does not add
   up; after an idle gap the schedule restarts. With vblank pacing
   nothing changes.
+- Pacing classification (owner, after stage C run 1): the first flip
+  after a modeset or a resume is not used; the output becomes unpaced
+  after 3 consecutive flip intervals under half a period, and paced
+  again after 3 consecutive intervals between half a period and four
+  periods (longer gaps are idle and count for neither). Every change
+  is logged. Tested with the owner's real NVIDIA flip times.
+- Pointer frames (owner, after stage C run 1): when the cursor sash-wm
+  draws (the arrow on DRM, a client cursor surface anywhere) has to
+  move, a frame is requested, at most one per refresh period (merged
+  until the next frame starts); no motion, no frame. The hardware
+  cursor plane is moved through that frame (only the cursor plane
+  changes, nothing else is rendered again) when the driver gives a
+  cursor plane; otherwise the arrow is composited.
 - Mode selection (owner, after M9 stage B), no setting:
   1. Interlaced modes are ignored.
   2. Native resolution: if the physical size is known, the largest
