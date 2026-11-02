@@ -318,6 +318,35 @@ change this file without the owner's approval.
     dispatches xdg_wm_base itself (forwarding to Smithay) to record it
     and post not_the_topmost_popup.
 
+## Debug recording (owner, after stage C run 1)
+
+- Behind the cargo feature `debug-record`, off by default and never in a
+  release build (a release build with the feature fails to compile).
+  Enabled at runtime only by `SASH_DEBUG_RECORD=<dir>`; the directory is
+  created with mode 0700 and refused if it lies inside a git work tree
+  (never inside the repo). A banner at startup says it is on and what it
+  records.
+- Compositor-level data only. Keyboard: chords (a key pressed with Ctrl,
+  Alt or Super held), modifiers and non-printing keys by name; plain
+  printable keys (Shift alone counts as plain) are logged as "printable"
+  with a timestamp, never by identity. Full key names only with
+  `SASH_DEBUG_KEYS=full`, with a warning at startup.
+- Screenshots only through the offscreen render path, never the host
+  screen: on the hotkey, and after each layout change at most one per
+  second and 100 per session, scaled to at most 1920 px wide.
+- Hotkey: mod+F11 (Super on DRM, Alt nested) marks a bug and writes a
+  bundle. It clashes with no keybind (a test checks the table) and is
+  never forwarded to clients. Not a keybind-table row: it exists only in
+  builds with the feature.
+- A 60-second in-memory ring buffer; nothing is written until the
+  hotkey, unless `SASH_DEBUG_RECORD_SESSION=1` (then everything is
+  written as it happens).
+- Retention: bundles older than 7 days are deleted at startup.
+- docs/DEBUG.md describes it; docs/v1.md has the gate "debug recording
+  removed or proven compiled out"; tools/check-release.sh fails if any
+  of it is in the release binary.
+- No replay (`--replay`) until the owner approves it.
+
 ## Keybinds
 
 - Until M6 there is one minimal hardcoded keybind table; M6 replaces it
