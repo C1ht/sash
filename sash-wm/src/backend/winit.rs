@@ -194,6 +194,7 @@ impl Nested {
                 self.counters.redraws_received += 1;
                 state.flush_pending_arrange();
                 let input_since = state.windows.input_pending_since.take();
+                record!(state, "frame_start");
                 let times = match self.render(state) {
                     Ok(times) => times,
                     Err(err) => {
@@ -219,12 +220,46 @@ impl Nested {
                         "first frame submitted"
                     );
                 }
+                #[cfg(feature = "debug-record")]
+                self.record_frame(state, &times);
                 state.frame_presented(&self.output);
             }
             WinitEvent::Input(event) => state.handle_input(event),
             WinitEvent::CloseRequested => state.loop_signal.stop(),
             WinitEvent::Focus(_) => {}
         }
+    }
+
+    /// Debug recording: the frame's end and a screenshot if one is due. Nested, a named
+    /// cursor is the host's (sash-wm draws only cursor surfaces).
+    #[cfg(feature = "debug-record")]
+    fn record_frame(&mut self, state: &mut Sash, times: &FrameTimes) {
+        if state.recorder.is_none() {
+            return;
+        }
+        let surface = state.cursor_surface().is_some();
+        let pointer = state.seat.get_pointer().map(|p| p.current_location());
+        if let Some(recorder) = state.recorder.as_mut() {
+            crate::record::Counters::bump(&recorder.counters.frames_rendered);
+            if surface && let Some(p) = pointer {
+                recorder.cursor_drawn((p.x.round() as i32, p.y.round() as i32));
+            }
+            recorder.push(
+                "frame_end",
+                vec![
+                    ("queued", true.into()),
+                    ("render_us", times.render_us.into()),
+                    ("submit_us", times.submit_us.into()),
+                    ("cursor", if surface { "composited" } else { "host" }.into()),
+                ],
+            );
+        }
+        let size = self.backend.window_size();
+        crate::record::after_frame::<_, smithay::backend::renderer::gles::GlesTexture>(
+            state,
+            self.backend.renderer(),
+            size,
+        );
     }
 
     /// Shows the cursor clients asked for on the host window: a named shape, or no

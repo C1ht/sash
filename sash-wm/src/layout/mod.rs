@@ -18,6 +18,8 @@ mod snap;
 
 #[cfg(test)]
 pub use bsp::MIN_TILE;
+#[cfg(any(test, feature = "debug-record"))]
+pub use bsp::OutlineNode;
 pub use bsp::{BspTree, Side, SplitHandle};
 pub use floating::FloatingLayout;
 pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone, stop_top_edge};

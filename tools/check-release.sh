@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fails if debug-only code (offscreen capture, synthetic input, the --mode flag, mode
-# fault injection) is in the release binary.
+# fault injection, debug recording) is in the release binary, or if a release build
+# with the debug-record feature compiles at all.
 # Builds the release binary first. Usage: tools/check-release.sh
 
 set -euo pipefail
@@ -25,6 +26,11 @@ markers=(
     SASH_DEBUG_REJECT_MODES
     SASH_DEBUG_REJECT_ALL_MODES
     "fault injection"
+    SASH_DEBUG_RECORD
+    SASH_DEBUG_KEYS
+    "DEBUG RECORDING"
+    "sash_wm::record"
+    "debug bundle"
 )
 found=0
 for marker in "${markers[@]}"; do
@@ -45,6 +51,12 @@ if ! grep -qF "unknown argument --mode" <<< "$refused"; then
     exit 1
 fi
 
+# Debug recording cannot be built into a release binary: the build must fail.
+if cargo build --release --locked -p sash-wm --features debug-record > /dev/null 2>&1; then
+    echo "FAIL: a release build with --features debug-record compiled"
+    exit 1
+fi
+
 # Control: the same markers must be found in a debug build, or the check proves nothing.
 cargo build --locked -p sash-wm
 for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
@@ -55,4 +67,15 @@ for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
         exit 1
     fi
 done
-echo "ok: release binary has no debug-only capture, synthetic input, --mode or fault injection code"
+# Control for the recorder: its markers are in a debug build with the feature.
+cargo build --locked -p sash-wm --features debug-record
+for marker in SASH_DEBUG_RECORD SASH_DEBUG_KEYS "DEBUG RECORDING" "sash_wm::record" "debug bundle"; do
+    if ! grep -aqF -- "$marker" target/debug/sash-wm; then
+        echo "FAIL: control: the debug-record build lacks $marker, the check is stale"
+        exit 1
+    fi
+done
+# Leave the default debug build in target/debug.
+cargo build --locked -p sash-wm
+
+echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection or debug recording code"

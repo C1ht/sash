@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Builds sash-wm (release and debug) in a debian:trixie container from the working tree's
+# Builds sash-wm (release, debug, and debug with the debug-record feature) in a
+# debian:trixie container from the working tree's
 # sources, and an ISO with both binaries and the guest scripts for the test VM.
 # Usage: tools/vm/build-iso.sh OUTDIR   (writes OUTDIR/sash.iso)
 set -eu
@@ -25,6 +26,8 @@ cargo build --locked --release 2>&1 | tail -1
 cargo build --locked 2>&1 | tail -1
 cp target/release/sash-wm /out/sash-wm-release
 cp target/debug/sash-wm /out/sash-wm-debug
+cargo build --locked --features debug-record 2>&1 | tail -1
+cp target/debug/sash-wm /out/sash-wm-debug-record
 ' 2>&1 | grep -v '^info:\|^warn:'
 cp "$ROOT"/tools/vm/*.sh "$ROOT"/tools/stage-c.sh "$ROOT"/tools/drm-probe.py "$ISO_DIR"/
 xorriso -as mkisofs -quiet -R -J -V SASH -o "$OUT/sash.iso" "$ISO_DIR"

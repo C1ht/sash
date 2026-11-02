@@ -39,6 +39,16 @@ impl Ratio {
         }
     }
 
+    #[cfg(any(test, feature = "debug-record"))]
+    pub fn num(self) -> u32 {
+        self.num
+    }
+
+    #[cfg(any(test, feature = "debug-record"))]
+    pub fn den(self) -> u32 {
+        self.den
+    }
+
     /// The first child's share of `len` pixels.
     pub fn first_of(self, len: i32) -> i32 {
         (len as i64 * self.num as i64 / self.den as i64) as i32
@@ -327,6 +337,44 @@ fn remove_leaf(node: Node, window: WindowId, sibling_windows: &mut Vec<WindowId>
     }
 }
 
+#[cfg(any(test, feature = "debug-record"))]
+/// One node of the tree, for diagnostics (debug recording, layout tables): the tree in
+/// preorder, first child before second, with each node's depth (the root is 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutlineNode {
+    Split {
+        depth: usize,
+        /// Children left | right (true) or top / bottom (false).
+        side_by_side: bool,
+        ratio: Ratio,
+    },
+    Leaf {
+        depth: usize,
+        window: WindowId,
+        mode: Mode,
+    },
+}
+
+#[cfg(any(test, feature = "debug-record"))]
+fn outline_node(node: &Node, depth: usize, out: &mut Vec<OutlineNode>) {
+    match node {
+        Node::Leaf(leaf) => out.push(OutlineNode::Leaf {
+            depth,
+            window: leaf.window,
+            mode: leaf.mode,
+        }),
+        Node::Split(split) => {
+            out.push(OutlineNode::Split {
+                depth,
+                side_by_side: split.orientation == Orientation::SideBySide,
+                ratio: split.ratio,
+            });
+            outline_node(&split.first, depth + 1, out);
+            outline_node(&split.second, depth + 1, out);
+        }
+    }
+}
+
 /// The BSP tiling layout of one output.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BspTree {
@@ -351,6 +399,16 @@ impl BspTree {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
+    }
+
+    /// The tree in preorder (see `OutlineNode`).
+    #[cfg(any(test, feature = "debug-record"))]
+    pub fn outline(&self) -> Vec<OutlineNode> {
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            outline_node(root, 0, &mut out);
+        }
+        out
     }
 
     pub fn rect_of(&self, window: WindowId) -> Option<Rect> {

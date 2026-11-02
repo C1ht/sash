@@ -32,6 +32,9 @@ pub const BTN_RIGHT: u32 = 0x111;
 enum Intercepted {
     Action(Action),
     Vt(i32),
+    /// mod+F11 with debug recording on: mark a bug and write a bundle.
+    #[cfg(feature = "debug-record")]
+    DebugMark,
 }
 
 impl SeatHandler for Sash {
@@ -76,6 +79,18 @@ impl Sash {
         if pointer.current_focus() != previous {
             self.pointer_focus_changed();
         }
+        #[cfg(feature = "debug-record")]
+        if let Some(recorder) = &self.recorder {
+            crate::record::Counters::bump(&recorder.counters.position_updates);
+        }
+        record!(
+            self,
+            "pointer_position",
+            "x" => location.x,
+            "y" => location.y,
+            "window" => self.window_at(location),
+            "grabbed" => pointer.is_grabbed(),
+        );
         // A cursor sash-wm draws follows the pointer.
         if self.cursor_surface().is_some() {
             self.request_redraw();
@@ -97,46 +112,77 @@ impl Sash {
             key_state,
             serial,
             time_msec,
-            |state, mods, key| match key_state {
-                KeyState::Pressed => {
-                    // Ctrl+Alt+F1..F12 (the keymap's VT switch keys) go to the session
-                    // first, so the keyboard can never be trapped (DRM backend only).
-                    let sym = key.modified_sym().raw();
-                    let first = Keysym::XF86_Switch_VT_1.raw();
-                    if state.vt_switch.is_some() && (first..first + 12).contains(&sym) {
-                        state.keybinds.swallowed.push(code);
-                        return FilterResult::Intercept(Some(Intercepted::Vt(
-                            (sym - first + 1) as i32,
-                        )));
-                    }
-                    match keybinds::lookup(modifier, mods, key.raw_latin_sym_or_raw_current_sym()) {
-                        Some(action) => {
+            |state, mods, key| {
+                record!(
+                    state,
+                    "key",
+                    "pressed" => key_state == KeyState::Pressed,
+                    "key" => crate::record::key_label(
+                        key.modified_sym(),
+                        mods,
+                        state.recorder.as_ref().is_some_and(|r| r.keys_full()),
+                    ),
+                    "mods" => crate::record::mods_json(mods),
+                );
+                match key_state {
+                    KeyState::Pressed => {
+                        // Ctrl+Alt+F1..F12 (the keymap's VT switch keys) go to the session
+                        // first, so the keyboard can never be trapped (DRM backend only).
+                        let sym = key.modified_sym().raw();
+                        let first = Keysym::XF86_Switch_VT_1.raw();
+                        if state.vt_switch.is_some() && (first..first + 12).contains(&sym) {
                             state.keybinds.swallowed.push(code);
-                            FilterResult::Intercept(Some(Intercepted::Action(action)))
+                            return FilterResult::Intercept(Some(Intercepted::Vt(
+                                (sym - first + 1) as i32,
+                            )));
                         }
-                        None => {
-                            // A key press can justify a popup grab (keyboard menus).
-                            if let Some(focus) = &focus {
-                                state.popups.note_key_press(serial, focus.clone());
+                        // mod+F11 marks a bug for the debug recorder (never a client's key).
+                        #[cfg(feature = "debug-record")]
+                        if state.recorder.is_some()
+                            && modifier.held(mods)
+                            && key.modified_sym() == Keysym::F11
+                        {
+                            state.keybinds.swallowed.push(code);
+                            return FilterResult::Intercept(Some(Intercepted::DebugMark));
+                        }
+                        match keybinds::lookup(
+                            modifier,
+                            mods,
+                            key.raw_latin_sym_or_raw_current_sym(),
+                        ) {
+                            Some(action) => {
+                                state.keybinds.swallowed.push(code);
+                                FilterResult::Intercept(Some(Intercepted::Action(action)))
                             }
-                            FilterResult::Forward
+                            None => {
+                                // A key press can justify a popup grab (keyboard menus).
+                                if let Some(focus) = &focus {
+                                    state.popups.note_key_press(serial, focus.clone());
+                                }
+                                FilterResult::Forward
+                            }
                         }
                     }
-                }
-                KeyState::Released => {
-                    let swallowed = &mut state.keybinds.swallowed;
-                    match swallowed.iter().position(|c| *c == code) {
-                        Some(index) => {
-                            swallowed.swap_remove(index);
-                            FilterResult::Intercept(None)
+                    KeyState::Released => {
+                        let swallowed = &mut state.keybinds.swallowed;
+                        match swallowed.iter().position(|c| *c == code) {
+                            Some(index) => {
+                                swallowed.swap_remove(index);
+                                FilterResult::Intercept(None)
+                            }
+                            None => FilterResult::Forward,
                         }
-                        None => FilterResult::Forward,
                     }
                 }
             },
         );
         match action.flatten() {
-            Some(Intercepted::Action(action)) => self.run_action(action),
+            Some(Intercepted::Action(action)) => {
+                record!(self, "keybind", "action" => format!("{action:?}"));
+                self.run_action(action)
+            }
+            #[cfg(feature = "debug-record")]
+            Some(Intercepted::DebugMark) => crate::record::mark(self),
             Some(Intercepted::Vt(vt)) => {
                 if let Some(switch) = self.vt_switch.as_mut() {
                     tracing::info!(vt, "switching VT");
@@ -227,6 +273,7 @@ impl Sash {
                     == Some(Action::ClickFocus)
                     && let Some(window) = under
                 {
+                    record_context!(self, "click");
                     self.focus_window(window);
                 }
                 if let Some(focus) = pointer.current_focus() {
@@ -255,6 +302,14 @@ impl Sash {
         pointer.frame(self);
     }
 
+    /// Counts a pointer event from the backend (debug recording).
+    fn count_pointer_in(&self) {
+        #[cfg(feature = "debug-record")]
+        if let Some(recorder) = &self.recorder {
+            crate::record::Counters::bump(&recorder.counters.pointer_in);
+        }
+    }
+
     /// Forwards one input event from the backend to the focused clients.
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
         match event {
@@ -269,6 +324,8 @@ impl Sash {
                     return;
                 };
                 let location = event.position_transformed(area.size) + area.loc.to_f64();
+                self.count_pointer_in();
+                record!(self, "pointer_in", "type" => "absolute", "x" => event.x(), "y" => event.y());
                 self.pointer_moved_to(location, event.time_msec());
             }
             InputEvent::PointerMotion { event } => {
@@ -280,6 +337,16 @@ impl Sash {
                 let Some(area) = self.space.output_geometry(&output) else {
                     return;
                 };
+                self.count_pointer_in();
+                record!(
+                    self,
+                    "pointer_in",
+                    "type" => "relative",
+                    "dx" => event.delta_x(),
+                    "dy" => event.delta_y(),
+                    "dx_unaccel" => event.delta_x_unaccel(),
+                    "dy_unaccel" => event.delta_y_unaccel(),
+                );
                 let moved = pointer.current_location() + event.delta();
                 let x = moved
                     .x
@@ -290,9 +357,25 @@ impl Sash {
                 self.pointer_moved_to((x, y).into(), event.time_msec());
             }
             InputEvent::PointerButton { event } => {
+                self.count_pointer_in();
+                record!(
+                    self,
+                    "pointer_in",
+                    "type" => "button",
+                    "button" => event.button_code(),
+                    "pressed" => event.state() == ButtonState::Pressed,
+                );
                 self.pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event } => {
+                self.count_pointer_in();
+                record!(
+                    self,
+                    "pointer_in",
+                    "type" => "axis",
+                    "vertical" => event.amount(Axis::Vertical),
+                    "horizontal" => event.amount(Axis::Horizontal),
+                );
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };

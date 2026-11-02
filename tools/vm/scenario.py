@@ -451,6 +451,59 @@ try:
           f"reconnect logged {back}, frames after {frames2 - frames1}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
+    # 17. Debug recording (debug build with the debug-record feature, docs/DEBUG.md):
+    # the banner; pointer motion without windows; Super+F11 writes a bundle; a window
+    # opens (a layout change: an offscreen screenshot); "hunter2" is typed into it;
+    # Super+F11 again. Bundles are private, keep no typed text, and their screenshots
+    # come from the offscreen path.
+    RECORD_BIN = "/mnt/sash/sash-wm-debug-record"
+    sh(vm, "rm -rf /home/sash/rec")
+    start(vm, binary=RECORD_BIN, env="SASH_DEBUG_RECORD=/home/sash/rec", windows=0)
+    banner = count(vm, "DEBUG RECORDING IS ON")
+    for i in range(40):  # tablet: absolute motion
+        vm.pointer_abs(200 + 10 * i, 200 + 5 * i, W, H)
+        time.sleep(0.025)
+    for i in range(40):  # mouse: relative motion
+        vm.pointer_rel(-8, 4)
+        time.sleep(0.025)
+    time.sleep(1.5)
+    vm.keys("meta_l", "f11")
+    time.sleep(2)
+    sh(vm, "(/mnt/sash/foot.sh 1 &); sleep 2")
+    vm.type_text("hunter2")
+    time.sleep(1.2)
+    vm.keys("meta_l", "f11")
+    time.sleep(2.5)
+    bundles = sh(vm, "ls -d /home/sash/rec/bundle-* 2>/dev/null").split()
+    print("bundles:", bundles)
+    perms = sh(vm, "stat -c '%a %n' /home/sash/rec /home/sash/rec/bundle-* "
+                   "/home/sash/rec/bundle-*/* /home/sash/rec/bundle-*/screenshots/* | sort -u")
+    print(perms)
+    first_counters = sh(vm, f"grep counters_1s {bundles[0]}/events.jsonl" if bundles else "true")
+    print("counters, first bundle:\n" + first_counters)
+    leaked = sh(vm, "grep -rl hunter2 /home/sash/rec; grep -rhoE '\"key\":\"[hunter2]\"' /home/sash/rec | sort -u")
+    kinds = sh(vm, f"grep -oE '\"kind\":\"[a-z_0-9]+\"' {bundles[-1]}/events.jsonl | sort | uniq -c"
+               if bundles else "true")
+    print("event kinds, second bundle:\n" + kinds)
+    shots = sh(vm, f"ls {bundles[-1]}/screenshots" if bundles else "true").split()
+    print("screenshots, second bundle:", shots)
+    if shots:
+        encoded = sh(vm, f"base64 -w0 {bundles[-1]}/screenshots/{shots[-1]}", timeout=300)
+        with open(os.path.join(OUT, "17-recorded-" + shots[-1]), "wb") as f:
+            f.write(base64.b64decode(encoded))
+    modes_ok = all(line.split()[0] in ("700", "600") for line in perms.splitlines() if line.strip())
+    pointer_only = [l for l in first_counters.splitlines()
+                    if '"pointer_events_in":0' not in l and '"frames_rendered":0' in l]
+    # Note: the screenshots show window contents, so text a client echoes on screen is
+    # in them; "no typed text" is about the recorded data (events, state, log).
+    check("debug recording: banner, bundles on Super+F11, private files, no typed text in "
+          "events/state/log, offscreen screenshots (see 17-recorded-*)",
+          banner == 1 and len(bundles) == 2 and modes_ok and leaked.strip() == ""
+          and '"kind":"pointer_in"' in kinds and '"kind":"screenshot"' in kinds and bool(shots),
+          f"bundles {len(bundles)}, screenshots {len(shots)}, leaked {leaked.strip() or 'nothing'}")
+    print(f"seconds with pointer events in and no frame rendered: {len(pointer_only)}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
     # 16. tools/stage-c.sh on a console of the guest (the owner's stage C tool): escape
     # instructions first, Enter starts sash-wm with --exit-after, a client starts, the
     # log is written, the console comes back.

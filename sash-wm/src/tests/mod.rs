@@ -8,6 +8,8 @@ mod floating;
 mod gpu;
 mod harness;
 mod popups;
+#[cfg(feature = "debug-record")]
+mod record;
 mod snapping;
 mod tiled_resize;
 mod tiling;

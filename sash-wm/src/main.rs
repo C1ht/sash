@@ -1,5 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
+/// Records a debug event (feature `debug-record`, docs/DEBUG.md); expands to nothing
+/// without the feature. `record!(state, "kind", "field" => value, ...)`; the values
+/// are only evaluated while recording is on.
+macro_rules! record {
+    ($state:expr, $kind:expr $(, $key:literal => $value:expr)* $(,)?) => {
+        #[cfg(feature = "debug-record")]
+        {
+            if $state.recorder.is_some() {
+                let fields = vec![$(($key, crate::record::Json::from($value))),*];
+                if let Some(recorder) = $state.recorder.as_mut() {
+                    recorder.push($kind, fields);
+                }
+            }
+        }
+    };
+}
+
+/// Sets the reason the recorder gives for the next layout and focus changes (feature
+/// `debug-record`); nothing without the feature.
+macro_rules! record_context {
+    ($state:expr, $context:expr) => {
+        #[cfg(feature = "debug-record")]
+        {
+            if let Some(recorder) = $state.recorder.as_mut() {
+                recorder.set_context($context);
+            }
+        }
+    };
+}
+
 mod backend;
 #[cfg(debug_assertions)]
 mod capture;
@@ -12,6 +42,8 @@ mod keybinds;
 mod layout;
 mod output;
 mod popups;
+#[cfg(feature = "debug-record")]
+mod record;
 mod render;
 pub mod seat;
 mod server;
@@ -121,7 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    #[cfg(not(feature = "debug-record"))]
     tracing_subscriber::fmt().with_env_filter(filter).init();
+    // The log also goes to the recorder's ring (log.txt of a bundle).
+    #[cfg(feature = "debug-record")]
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(record::LogWriter::default)
+        .init();
 
     let args = parse_args(std::env::args().skip(1))?;
     let backend = choose_backend(args.backend, |name| std::env::var_os(name))?;
@@ -157,6 +196,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut server = Server::new(&event_loop, redraw, start_time, modifier)?;
     tracing::info!(socket = ?server.socket_name, "listening on wayland socket");
+    // Debug recording, if SASH_DEBUG_RECORD is set (feature debug-record).
+    #[cfg(feature = "debug-record")]
+    record::install(&mut server.state)?;
 
     match backend {
         Backend::Winit => backend::winit::start(&event_loop, &mut server.state, redraw_requests)?,
@@ -232,6 +274,25 @@ mod args_tests {
         } else {
             assert!(watchdog.is_err(), "debug builds only");
         }
+    }
+
+    /// Debug recording is never on unless asked for: the feature is not a default one.
+    #[test]
+    fn debug_recording_is_off_by_default() {
+        let manifest = include_str!("../Cargo.toml");
+        let features = manifest
+            .split("[features]")
+            .nth(1)
+            .expect("a [features] section")
+            .split("\n[")
+            .next()
+            .unwrap();
+        let default = features
+            .lines()
+            .find(|l| l.trim_start().starts_with("default"))
+            .expect("a default feature list");
+        assert_eq!(default.trim(), "default = []", "nothing is on by default");
+        assert!(features.contains("debug-record = []"));
     }
 
     #[test]

@@ -86,6 +86,9 @@ pub struct Sash {
     pub presentation: Option<PresentationState>,
     pub loop_handle: LoopHandle<'static, Server>,
     redraw: Ping,
+    /// Debug recording (feature `debug-record`), when SASH_DEBUG_RECORD is set.
+    #[cfg(feature = "debug-record")]
+    pub recorder: Option<crate::record::Recorder>,
 }
 
 impl Sash {
@@ -125,6 +128,8 @@ impl Sash {
             presentation: None,
             loop_handle,
             redraw,
+            #[cfg(feature = "debug-record")]
+            recorder: None,
         }
     }
 
@@ -137,6 +142,10 @@ impl Sash {
     /// Asks the backend for a new frame. Requests made before the frame is drawn
     /// are merged into one.
     pub fn request_redraw(&self) {
+        #[cfg(feature = "debug-record")]
+        if let Some(recorder) = &self.recorder {
+            crate::record::Counters::bump(&recorder.counters.redraws_requested);
+        }
         self.redraw.ping();
     }
 

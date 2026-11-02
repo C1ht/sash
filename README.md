@@ -15,6 +15,7 @@ cargo build
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cargo test
+cargo test --features debug-record
 cargo deny check
 ```
 
@@ -38,6 +39,14 @@ sash-wm --mode 5120x1440@60           # debug builds: this mode instead of the r
 SASH_DEBUG_REJECT_MODES=5120x1440@240 sash-wm   # debug builds: fail these test commits
 SASH_DEBUG_REJECT_ALL_MODES=1 sash-wm           # debug builds: fail every test commit
 tools/stage-c.sh 20 run1 --mode 5120x1440@60   # the owner's stage C runs
+```
+
+Debug recording for bugs on real hardware (feature `debug-record`, debug builds only;
+see docs/DEBUG.md):
+
+```sh
+cargo build -p sash-wm --features debug-record
+SASH_DEBUG_RECORD=~/.cache/sash/debug target/debug/sash-wm   # mod+F11 writes a bundle
 ```
 
 The backend is chosen from the environment: nested (winit) when `WAYLAND_DISPLAY` or

@@ -239,6 +239,16 @@ impl Sash {
         };
         let (id, window, mapped) = (managed.id, managed.window.clone(), managed.mapped);
         window.on_commit();
+        record!(
+            self,
+            "commit",
+            "window" => id,
+            "buffer" => has_buffer,
+            "geometry" => {
+                let g = window.geometry();
+                vec![g.loc.x.into(), g.loc.y.into(), g.size.w.into(), g.size.h.into()]
+            },
+        );
         let toplevel = window
             .toplevel()
             .expect("only toplevels are tracked")
@@ -252,6 +262,7 @@ impl Sash {
                 parent,
                 limits,
             };
+            record_context!(self, "open window");
             self.windows.layout.open(id, new);
             self.arrange();
             return;
@@ -264,6 +275,8 @@ impl Sash {
         if !mapped {
             if has_buffer {
                 self.windows.by_id_mut(id).expect("managed").mapped = true;
+                record!(self, "map", "window" => id);
+                record_context!(self, "map");
                 let geometry = window.geometry().size;
                 self.windows.layout.place(id, (geometry.w, geometry.h));
                 changed = true;
@@ -271,6 +284,7 @@ impl Sash {
         } else if !has_buffer {
             // A null buffer unmaps: leave the layout like a close; the client starts
             // over with an initial commit and is inserted as a new window.
+            record!(self, "unmap", "window" => id);
             self.leave_layout(id);
             return;
         } else {
@@ -355,11 +369,13 @@ impl Sash {
         let Some(id) = self.windows.by_surface(surface).map(|m| m.id) else {
             return;
         };
+        record!(self, "destroy", "window" => id);
         self.leave_layout(id);
         self.windows.list.retain(|m| m.id != id);
     }
 
     fn leave_layout(&mut self, id: WindowId) {
+        record_context!(self, "window left the layout");
         self.dismiss_popups(id);
         if self.dragged_window() == Some(id) {
             // The window is going away: no snap on the way out.
@@ -387,6 +403,7 @@ impl Sash {
     pub fn set_layout_area(&mut self, size: Size<i32, Logical>) {
         let area = Rect::new(0, 0, size.w, size.h);
         let changed = self.windows.layout.area() != area;
+        record_context!(self, "output size");
         self.windows.layout.set_area(area);
         self.arrange();
         if changed {
@@ -445,11 +462,22 @@ impl Sash {
                         want.resizing,
                     );
                 });
-                if toplevel.is_initial_configure_sent() {
-                    toplevel.send_pending_configure();
+                #[cfg_attr(not(feature = "debug-record"), expect(unused_variables))]
+                let serial = if toplevel.is_initial_configure_sent() {
+                    toplevel.send_pending_configure()
                 } else {
-                    toplevel.send_configure();
-                }
+                    Some(toplevel.send_configure())
+                };
+                record!(
+                    self,
+                    "configure",
+                    "window" => id,
+                    "serial" => serial.map(u32::from),
+                    "size" => presentation.size.map(|(w, h)| crate::record::Json::from(vec![w.into(), h.into()])),
+                    "maximized" => presentation.maximized,
+                    "fullscreen" => presentation.fullscreen,
+                    "resizing" => want.resizing,
+                );
             }
             self.position(id);
         }
@@ -458,6 +486,13 @@ impl Sash {
         self.reconstrain_popups(false);
         self.sync_keyboard_focus();
         self.request_redraw();
+        #[cfg(feature = "debug-record")]
+        if self.recorder.is_some() {
+            let now = crate::record::layout_json(self);
+            if let Some(recorder) = self.recorder.as_mut() {
+                recorder.layout_after_arrange(now);
+            }
+        }
     }
 
     /// Puts a mapped window at its rectangle in the space (output enter/leave, frame
@@ -484,11 +519,31 @@ impl Sash {
             .and_then(|id| self.windows.by_id(id))
             .filter(|m| m.mapped)
             .and_then(|m| m.window.toplevel().map(|t| t.wl_surface().clone()));
-        let target = self.popup_focus(focused.as_ref()).or(focused);
+        let popup_target = self.popup_focus(focused.as_ref());
+        #[cfg(feature = "debug-record")]
+        let popup = popup_target.is_some();
+        let target = popup_target.or(focused);
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
         if keyboard.current_focus() != target {
+            #[cfg(feature = "debug-record")]
+            if self.recorder.is_some() {
+                let window_of = |s: Option<&WlSurface>| {
+                    s.and_then(|s| self.windows.by_surface(s).map(|m| m.id))
+                };
+                let from = window_of(keyboard.current_focus().as_ref());
+                let to = window_of(target.as_ref());
+                let reason = self.recorder.as_ref().map(|r| r.context());
+                record!(
+                    self,
+                    "focus",
+                    "from" => from,
+                    "to" => to,
+                    "to_popup" => popup,
+                    "reason" => reason,
+                );
+            }
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         }
     }
@@ -629,7 +684,14 @@ impl Sash {
             pressed_at,
             zone: None,
         });
+        record!(self, "grab_start", "grab" => format!("{kind:?}"), "window" => id);
+        record_context!(self, format!("{kind:?} drag start"));
         self.arrange();
+        // The rest of the drag is one layout operation, recorded when it ends.
+        #[cfg(feature = "debug-record")]
+        if let Some(recorder) = self.recorder.as_mut() {
+            recorder.set_in_drag(true);
+        }
         true
     }
 
@@ -749,6 +811,18 @@ impl Sash {
         if let (DragKind::Move, Some(zone)) = (drag.kind, drag.zone) {
             self.windows.layout.snap(drag.window, zone);
         }
+        record!(
+            self,
+            "grab_end",
+            "grab" => format!("{:?}", drag.kind),
+            "window" => drag.window,
+            "snap_zone" => drag.zone.map(|z| format!("{z:?}")),
+        );
+        #[cfg(feature = "debug-record")]
+        if let Some(recorder) = self.recorder.as_mut() {
+            recorder.set_in_drag(false);
+            recorder.set_context(format!("{:?} drag", drag.kind));
+        }
         self.overlay.set_preview(None);
         self.windows.arrange_pending = false;
         self.arrange();
@@ -775,6 +849,7 @@ impl Sash {
         let Some(id) = self.windows.by_surface(surface).map(|m| m.id) else {
             return;
         };
+        record_context!(self, format!("client request {request:?}"));
         let layout = &mut self.windows.layout;
         match request {
             StateRequest::Maximize(on) => layout.set_maximized(id, on),
@@ -799,6 +874,7 @@ impl Sash {
     /// Runs a keybind action.
     pub fn run_action(&mut self, action: Action) {
         let start = Instant::now();
+        record_context!(self, format!("keybind {action:?}"));
         let focused = self.windows.layout.focused();
         // Every action first dismisses the focused window's popups, except a resize
         // (they follow it) and the default-mode toggle (nothing on screen changes).

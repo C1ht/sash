@@ -44,7 +44,9 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
   rendered, flips completed, cursor updates;
 - screenshots, through the same offscreen render path as `SIGUSR1` captures (never the
   screen): after each layout change (at most one per second, 100 per session) and when
-  the hotkey is pressed; scaled to at most 1920 px wide;
+  the hotkey is pressed; scaled to at most 1920 px wide. **They show window contents,
+  so any text a window displays (including what you typed into a terminal) is in
+  them.** Close or hide windows with private content before pressing the hotkey;
 - sash-wm's own log.
 
 ## The hotkey: mod+F11
@@ -57,14 +59,23 @@ A bundle is a directory `bundle-<UTC time>/` inside `SASH_DEBUG_RECORD`:
 - `events.jsonl`: one JSON object per line, `"t"` in microseconds of the monotonic clock
   since sash-wm started, `"kind"` and its fields;
 - `state.json`: the layout tree (split directions and ratios), every window's rectangle,
-  mode and title, the floating z-order, focus, the window under the pointer, the active
-  grab, the output mode;
+  mode and app_id (no titles: they can carry what was typed), the z-order, focus and
+  focus history, the window under the pointer, the active grab, the output mode;
 - `screenshots/*.png`;
 - `log.txt`: the last 60 seconds of sash-wm's log.
 
 ## Retention
 
 At startup, bundles and session directories older than 7 days are deleted.
+
+## Building and testing
+
+```sh
+cargo test -p sash-wm --features debug-record   # recorder tests included
+tools/check-release.sh                          # proves none of it is in release builds
+```
+
+The VM scenario (tools/vm/scenario.py, check 17) runs it on the DRM backend.
 
 ## Not yet
 

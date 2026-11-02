@@ -160,7 +160,7 @@ impl MonitorLayout {
         self.default_mode = mode;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "debug-record"))]
     pub fn tree(&self) -> &BspTree {
         &self.tree
     }
@@ -178,7 +178,7 @@ impl MonitorLayout {
         self.windows.get(&window).map(WindowState::mode)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "debug-record"))]
     pub fn is_forced(&self, window: WindowId) -> bool {
         self.windows.get(&window).is_some_and(|s| s.forced)
     }
@@ -1041,6 +1041,73 @@ mod tests {
 
     fn rect(layout: &MonitorLayout, n: u64) -> Rect {
         layout.rect_of(id(n)).expect("window has a rectangle")
+    }
+
+    /// The tree as indented text: "split left|right 1/2", "window 3 tiled".
+    fn tree_text(layout: &MonitorLayout) -> String {
+        let mut out = String::new();
+        for node in layout.tree().outline() {
+            match node {
+                crate::layout::OutlineNode::Split {
+                    depth,
+                    side_by_side,
+                    ratio,
+                } => {
+                    out += &format!(
+                        "{}split {} {}/{}\n",
+                        "  ".repeat(depth),
+                        if side_by_side {
+                            "left|right"
+                        } else {
+                            "top/bottom"
+                        },
+                        ratio.num(),
+                        ratio.den()
+                    )
+                }
+                crate::layout::OutlineNode::Leaf {
+                    depth,
+                    window,
+                    mode,
+                } => out += &format!("{}window {} {mode:?}\n", "  ".repeat(depth), window.0),
+            }
+        }
+        out
+    }
+
+    /// STEP 3b (owner, after stage C run 1): where the current rule puts 1 to 6 windows
+    /// on the owner's and other common outputs, focus following each new window. Run
+    /// with `cargo test new_window_placement_table -- --nocapture` to see the table.
+    #[test]
+    fn new_window_placement_table() {
+        for (w, h) in [(5120, 1440), (3440, 1440), (2560, 1440), (1920, 1080)] {
+            let mut layout = MonitorLayout::new(Rect::new(0, 0, w, h));
+            for n in 1..=6u64 {
+                layout.open(id(n), NewWindow::default());
+                assert_eq!(
+                    layout.focused(),
+                    Some(id(n)),
+                    "focus follows the new window"
+                );
+                println!("== {w}x{h}, {n} window(s)\n{}", tree_text(&layout));
+                let mut rects = layout.tiled_rects();
+                rects.sort_by_key(|(id, _)| id.0);
+                for (id, r) in rects {
+                    println!("  window {}: x={} y={} {}x{}", id.0, r.x, r.y, r.w, r.h);
+                }
+                layout.check_invariants();
+            }
+        }
+        // The owner's report: on 5120x1440 the first windows form a row, then new ones
+        // stack into the bottom-right corner (each splits the newest, focused window).
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 5120, 1440));
+        for n in 1..=4 {
+            layout.open(id(n), NewWindow::default());
+        }
+        assert_eq!(rect(&layout, 1), Rect::new(0, 0, 2560, 1440));
+        assert_eq!(rect(&layout, 2), Rect::new(2560, 0, 1280, 1440));
+        assert_eq!(rect(&layout, 3), Rect::new(3840, 0, 1280, 720));
+        assert_eq!(rect(&layout, 4), Rect::new(3840, 720, 1280, 720));
     }
 
     #[test]

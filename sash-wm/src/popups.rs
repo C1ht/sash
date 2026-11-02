@@ -231,6 +231,16 @@ impl Sash {
         match self.popups.manager.grab_popup(root, kind, &seat, serial) {
             Ok(grab) => {
                 self.popups.grab = Some(grab);
+                record!(
+                    self,
+                    "grab_start",
+                    "grab" => "popup",
+                    "window" => self
+                        .popups
+                        .grab_root()
+                        .and_then(|r| self.windows.by_surface(&r).map(|m| m.id)),
+                );
+                record_context!(self, "popup grab");
                 self.sync_keyboard_focus();
             }
             Err(err) => tracing::debug!(%err, "popup grab refused"),
@@ -241,6 +251,8 @@ impl Sash {
     pub fn dismiss_grab(&mut self) {
         if let Some(mut grab) = self.popups.grab.take() {
             grab.ungrab(PopupUngrabStrategy::All);
+            record!(self, "grab_end", "grab" => "popup");
+            record_context!(self, "popup grab end");
             self.sync_keyboard_focus();
         }
     }

@@ -55,6 +55,25 @@ impl XdgShellHandler for Sash {
         self.forget_toplevel(surface.wl_surface());
     }
 
+    /// Only recorded (debug recording); Smithay tracks acknowledged configures.
+    #[cfg_attr(not(feature = "debug-record"), expect(unused_variables))]
+    fn ack_configure(
+        &mut self,
+        surface: WlSurface,
+        configure: smithay::wayland::shell::xdg::Configure,
+    ) {
+        record!(
+            self,
+            "ack_configure",
+            "window" => self.windows.by_surface(&surface).map(|m| m.id),
+            "serial" => u32::from(match &configure {
+                smithay::wayland::shell::xdg::Configure::Toplevel(c) => c.serial,
+                smithay::wayland::shell::xdg::Configure::Popup(c) => c.serial,
+            }),
+            "popup" => matches!(configure, smithay::wayland::shell::xdg::Configure::Popup(_)),
+        );
+    }
+
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
         self.client_drag(&surface, &seat, serial, DragKind::Move);
     }

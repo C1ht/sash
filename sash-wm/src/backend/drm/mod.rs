@@ -535,6 +535,25 @@ struct OutputChoice {
     candidates: Vec<Mode>,
 }
 
+/// A libinput device's capabilities, for the debug recorder.
+#[cfg(feature = "debug-record")]
+fn device_capabilities(device: &smithay::reexports::input::Device) -> Vec<crate::record::Json> {
+    use smithay::reexports::input::DeviceCapability as Cap;
+    [
+        (Cap::Keyboard, "keyboard"),
+        (Cap::Pointer, "pointer"),
+        (Cap::Touch, "touch"),
+        (Cap::TabletTool, "tablet_tool"),
+        (Cap::TabletPad, "tablet_pad"),
+        (Cap::Gesture, "gesture"),
+        (Cap::Switch, "switch"),
+    ]
+    .into_iter()
+    .filter(|(cap, _)| device.has_capability(*cap))
+    .map(|(_, name)| name.into())
+    .collect()
+}
+
 /// A connector as mode.rs sees it.
 fn connector_info(handle: connector::Handle, info: &connector::Info) -> ConnectorInfo {
     ConnectorInfo {
@@ -633,11 +652,18 @@ fn insert_sources(
                 if for_input.borrow_mut().devices.added(&mut device) {
                     tracing::info!(name, "input device added");
                 }
+                record!(
+                    server.state,
+                    "input_device_added",
+                    "name" => name,
+                    "capabilities" => device_capabilities(&device),
+                );
             }
             InputEvent::DeviceRemoved { device } => {
                 if for_input.borrow_mut().devices.removed(&device) {
                     tracing::info!(name = device.name(), "input device removed");
                 }
+                record!(server.state, "input_device_removed", "name" => device.name());
             }
             event => server.state.handle_input(event),
         })
@@ -658,6 +684,7 @@ impl Drm {
         let start = Instant::now();
         // The pacer's schedule counts from the start of rendering, not its end.
         let started = now();
+        record!(state, "frame_start");
         let mut elements = render::cursor_elements(state, &mut self.renderer, 1.0);
         elements.extend(render::arrow_element(
             state,
@@ -671,6 +698,8 @@ impl Drm {
             render::CLEAR_COLOR,
             FrameFlags::DEFAULT,
         );
+        #[cfg(feature = "debug-record")]
+        let cursor_on_plane = result.as_ref().is_ok_and(|f| f.cursor_element.is_some());
         let queued = match result {
             Ok(frame) if frame.is_empty => false,
             Ok(_) => {
@@ -689,6 +718,8 @@ impl Drm {
             }
         };
         self.pacer.rendered(queued, started);
+        #[cfg(feature = "debug-record")]
+        self.record_frame(state, queued, cursor_on_plane, start.elapsed());
         if queued {
             self.queued = Some(QueuedFrame {
                 render_us: start.elapsed().as_micros() as u64,
@@ -697,6 +728,44 @@ impl Drm {
         } else {
             self.idle_frame_callbacks(state);
         }
+    }
+
+    /// Debug recording: the frame's end (where the cursor went), the counters, and a
+    /// screenshot if one is due.
+    #[cfg(feature = "debug-record")]
+    fn record_frame(&mut self, state: &mut Sash, queued: bool, on_plane: bool, took: Duration) {
+        if state.recorder.is_none() {
+            return;
+        }
+        let pointer = state.seat.get_pointer().map(|p| p.current_location());
+        let cursor = match (pointer, on_plane) {
+            (None, _) => "none",
+            (Some(_), true) => "plane",
+            (Some(_), false) => "composited",
+        };
+        if let Some(recorder) = state.recorder.as_mut() {
+            if queued {
+                crate::record::Counters::bump(&recorder.counters.frames_rendered);
+                if let Some(p) = pointer {
+                    recorder.cursor_drawn((p.x.round() as i32, p.y.round() as i32));
+                }
+            }
+            recorder.push(
+                "frame_end",
+                vec![
+                    ("queued", queued.into()),
+                    ("render_us", (took.as_micros() as u64).into()),
+                    ("cursor", cursor.into()),
+                    ("unpaced", self.pacer.is_unpaced().into()),
+                ],
+            );
+        }
+        let (w, h) = self.mode.size();
+        crate::record::after_frame::<_, smithay::backend::renderer::gles::GlesTexture>(
+            state,
+            &mut self.renderer,
+            (w as i32, h as i32).into(),
+        );
     }
 
     /// Nothing new went on screen: clients still get their frame callbacks, one refresh
@@ -738,6 +807,8 @@ impl Drm {
 
     /// The queued frame is on screen.
     fn flip_complete(&mut self, state: &mut Sash, metadata: Option<DrmEventMetadata>) {
+        #[cfg(feature = "debug-record")]
+        let metadata_present = metadata.is_some();
         let (time, sequence) = match metadata {
             Some(DrmEventMetadata {
                 time: DrmEventTime::Monotonic(time),
@@ -771,6 +842,17 @@ impl Drm {
             );
         }
         state.frame_presented(&self.output);
+        #[cfg(feature = "debug-record")]
+        if let Some(recorder) = &state.recorder {
+            crate::record::Counters::bump(&recorder.counters.flips_completed);
+        }
+        record!(
+            state,
+            "flip_complete",
+            "kernel_time_us" => time.as_micros() as u64,
+            "sequence" => sequence,
+            "kernel_timestamp" => metadata_present,
+        );
         let unpaced = self.pacer.is_unpaced();
         let next = self.pacer.flip_complete(time, now());
         if !unpaced && self.pacer.is_unpaced() {
