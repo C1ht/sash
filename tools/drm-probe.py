@@ -8,7 +8,7 @@
 # only state it sets is per-file client caps (universal planes, atomic), which affect
 # nothing outside its own file descriptor.
 #
-# Usage: python3 -I tools/drm-probe.py [/dev/dri/cardN ...]   (default: every card)
+# Usage: python3 -I tools/drm-probe.py [--all-modes] [/dev/dri/cardN ...]   (default: every card)
 
 import ctypes as C
 import glob
@@ -123,7 +123,10 @@ def in_formats(fd, blob_id):
 
 def mode_str(m):
     preferred = " preferred" if m.type & 0x8 else ""
-    return f"{m.hdisplay}x{m.vdisplay}@{m.vrefresh}Hz ({m.clock} kHz){preferred}"
+    interlaced = " interlaced" if m.flags & 0x10 else ""
+    exact = m.clock * 1000 / max(m.htotal * m.vtotal, 1)
+    return (f"{m.hdisplay}x{m.vdisplay}@{m.vrefresh}Hz ({exact:.3f} Hz, {m.clock} kHz)"
+            f"{interlaced}{preferred}")
 
 def probe(path):
     try:
@@ -164,10 +167,11 @@ def probe(path):
                   f" encoder {conn.encoder_id}")
             modes = [conn.modes[j] for j in range(conn.count_modes)]
             modes.sort(key=lambda m: (not m.type & 0x8, -m.hdisplay * m.vdisplay, -m.vrefresh))
-            for m in modes[:8]:
+            shown = modes if ALL_MODES else modes[:8]
+            for m in shown:
                 print("   ", mode_str(m))
-            if len(modes) > 8:
-                print(f"    ... {len(modes) - 8} more")
+            if len(modes) > len(shown):
+                print(f"    ... {len(modes) - 8} more (--all-modes lists them)")
         for i in range(r.count_crtcs):
             crtc = drm.drmModeGetCrtc(fd, r.crtcs[i]).contents
             mode = mode_str(crtc.mode) if crtc.mode_valid else "off"
@@ -191,7 +195,8 @@ def probe(path):
     finally:
         os.close(fd)
 
-paths = sys.argv[1:] or sorted(glob.glob("/dev/dri/card*"))
+ALL_MODES = "--all-modes" in sys.argv[1:]
+paths = [a for a in sys.argv[1:] if a != "--all-modes"] or sorted(glob.glob("/dev/dri/card*"))
 print("render nodes:", " ".join(sorted(glob.glob("/dev/dri/renderD*"))) or "none")
 for path in paths:
     probe(path)

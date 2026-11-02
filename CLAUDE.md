@@ -109,6 +109,13 @@ change this file without the owner's approval.
 - Floating windows draw above tiled ones, are not clipped to tiles, and
   keep at least min(64, size) px visible on the output on each axis
   when moved. An output resize clamps them back.
+- Top edge (owner, after M9 stage B): a floating window's top edge never
+  goes above the top of the output's usable area (the whole output
+  until layer-shell exclusive zones exist), in any operation: mouse
+  drag, keyboard move, resize, restore from a snap or maximize, client
+  move and resize requests, output resize. The sides and the bottom keep
+  the 64 px rule. A resize by the top edge stops there (the window gets
+  shorter; it is not pushed down).
 - Z-order: one list per monitor of floating windows. Focusing or
   clicking a window raises it. Pointer hit-testing uses the topmost.
 - Click-to-focus for all windows: a plain click focuses, raises and is
@@ -133,7 +140,7 @@ change this file without the owner's approval.
 - Swap works on tiled windows only: with a floating window focused it
   does nothing, and floating windows are never swap candidates.
 - An output resize clamps floating windows with the same 64 px rule
-  (moved just enough, size kept).
+  and the top-edge rule (moved just enough, size kept).
 - mod+Tab / mod+Shift+Tab: hold-to-cycle. While mod is held, each press
   steps through a frozen most-recently-used snapshot, focusing and
   raising as it goes; releasing mod commits the choice.
@@ -162,10 +169,12 @@ change this file without the owner's approval.
   the zone or the drag ends. Releasing inside a zone snaps the window;
   dragging a tiled window to a zone floats and snaps it.
 - A snapped window remembers its pre-snap floating rectangle and its
-  zone. Dragging it away restores that size, with the pointer at the
-  same relative position in the window. Tile-all then float again
-  restores the zone, recomputed from the current output size; an output
-  resize recomputes every snapped window from its zone.
+  zone. Dragging it away restores that size; the grab point keeps its
+  relative horizontal position under the pointer, and vertically the
+  window is clamped by the top-edge rule (owner, after M9 stage B).
+  Tile-all then float again restores the zone, recomputed from the
+  current output size; an output resize recomputes every snapped window
+  from its zone.
 - Edge snapping: during a mouse move or resize of a floating window,
   its edges snap to the output edges and to edges of other visible
   windows within 12 px (constant), nearest first. Shift held during the
@@ -407,8 +416,33 @@ change this file without the owner's approval.
   debug-only `--exit-after <seconds>` flag is an extra watchdog. Errors
   at startup restore the display and exit with a message; no panic may
   leave the device held.
-- Hotplug and monitor changes are out of scope, but unplugging must not
-  crash; report what happens.
+- Hotplug of other monitors and GPUs is out of scope. The connector in
+  use (owner, after M9 stage B): on every udev change event of the DRM
+  device it is re-probed. Disconnected (cable pulled, or a monitor that
+  drops hotplug when powered off): rendering and frame callbacks stop;
+  windows, layout and the output stay; client requests are served.
+  Connected again: the CRTC is cleared and a full modeset is committed
+  at the same mode, then the whole output is redrawn. A monitor that no
+  longer offers that mode stays dark, logged (mode changes wait for the
+  mode-selection rule). Never a panic. Stage C tests a monitor power
+  off/on and a cable pull; the VM test confirms that a udev event
+  arrives.
+- Backend selection (owner, after M9 stage B): DRM when neither
+  WAYLAND_DISPLAY nor DISPLAY is set and a login session exists
+  (XDG_SESSION_ID set); winit otherwise. `--backend winit|drm`
+  overrides. Neither a display nor a session: exit with a message.
+- Unpaced flips (owner, after M9 stage B): when page flips complete
+  without vblank pacing (two flips completing less than half a refresh
+  period apart, as on virtio-gpu), rendering is capped at the output's
+  nominal refresh rate: no frame is rendered less than one refresh
+  period after the previous one. With vblank pacing nothing changes.
+- Mode selection: today the connector's preferred mode. The owner's
+  monitor reports a non-native preferred mode, so a new rule is
+  proposed in docs/plan.md and is not built before the owner approves.
+- Stage C is run by the owner, never by Claude: tools/stage-c.sh (the
+  timeout wrapper, a fsynced log in ~/.cache/sash/stage-c/, the escape
+  instructions printed first) and docs/m9-stage-c.md. Nothing runs on
+  the real display.
 - Owner approvals (M9 stage B): Smithay features backend_drm,
   backend_gbm, backend_libinput, backend_udev, backend_session_libseat and
   their crates (drm, drm-ffi, drm-sys, gbm, gbm-sys, input, input-sys,

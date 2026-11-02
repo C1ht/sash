@@ -197,6 +197,8 @@ sash/
   - Stage A (host, read-only): a probe in tools/ listing DRM devices, connectors, modes, planes and plane formats with queries only; no DRM master, no mode set.
   - Stage B (VM only: QEMU/KVM, virtio-gpu, minimal Debian 13 guest, the release binary from the trixie container): Smithay's DRM/KMS path (libseat, udev, libinput, GBM/EGL, atomic modesetting on one connector at its preferred mode, page-flip pacing, presentation-time, hardware cursor with software fallback, VT switching via session pause/resume); modifier Super; mod+Shift+E; VT switches before anything else; debug-only `--exit-after <seconds>`; startup errors restore the display. Input per the owner's decision (fixed defaults, XKB_DEFAULT_* honoured). Hotplug out of scope; unplugging must not crash. Tests without GPU or session: mode selection, the pacing state machine, pause/resume sequences, input device add/remove with fakes; in the VM by script where possible. Measure in the VM (frame intervals under a drag, idle CPU and RAM); VM numbers do not predict NVIDIA hardware.
   - Docs: docs/m9-stage-c.md, the exact checklist for the first run on the real machine.
+  - After stage B (owner decisions, rules in CLAUDE.md): the top-edge rule for floating windows; automatic backend selection; a render cap at the nominal refresh when flips are not vblank-paced; same-connector disconnect/reconnect (stop, then clear and modeset at the same mode); tools/stage-c.sh and monitor power-off/on and cable-pull runs in docs/m9-stage-c.md; a VM check that a udev event arrives.
+  - Mode selection rule (proposal, not built; owner decides): see "Proposal: mode selection" below.
   - Stage C (first bare-metal run) only with the owner. Explicit sync (wp_linux_drm_syncobj_v1) is decided at that first bare-metal run (owner decision after M8).
 
 Proposals (no work until approved):
@@ -208,6 +210,8 @@ Roadmap after M9 (no work now), in order:
 3. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
 4. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.
 5. **XWayland.** Last: the largest piece, and only for legacy X11 apps. Splash windows (forced floating) come with it.
+
+Before daily use (owner, after M9 stage B): **Xcursor theme loading.** On DRM, sash-wm draws only its built-in arrow for every named cursor shape; client-chosen shapes (text beam, resize arrows, hand) need an Xcursor theme loaded from the system's icon theme directories.
 
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
@@ -221,6 +225,18 @@ On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itsel
   - Against: no way to change anything from the desktop. Anyone whose preferences differ from the defaults (very common for scrolling direction and speed) has no recourse without editing system files, which contradicts "the compositor owns all settings" in spirit.
 - **Middle ground to consider:** B now, with a fixed list of exactly which values would become settings under A, so the decision can be revisited at M9 when real devices exist.
 - **Owner decision (after M8): the middle ground.** Fixed defaults now; the keymap honours the XKB_DEFAULT_* environment variables and reads nothing from system configuration (not /etc/default/keyboard, not localed); the "input" group joins the closed settings list when the settings protocol is built. Recorded in CLAUDE.md ("Settings and configuration").
+
+### Proposal: mode selection (owner decides; nothing implemented)
+
+The owner's monitor (probe after M9 stage B, `tools/drm-probe.py --all-modes`) is a 1190x340 mm (32:9) panel on HDMI-A-1. Its EDID preferred mode is 3840x1080@120, which is not its native resolution; Hyprland runs it at 5120x1440@240. The largest mode by pixel count is 3840x2160 (a 16:9 scaled mode), so "largest" is wrong too.
+
+Proposed rule (no setting; "monitors" on the settings list overrides it later):
+1. Ignore interlaced modes.
+2. Native resolution: if the connector reports a physical size, the largest mode (by pixel count) whose aspect ratio is within 5% of the panel's physical aspect ratio. If none matches or the size is unknown (0x0 mm, as in VMs and some projectors): the preferred mode's resolution, else the largest mode.
+3. At that resolution, the highest refresh rate, compared by the exact rate (pixel clock / (htotal x vtotal)), not the kernel's rounded value.
+4. Ties: the first in the kernel's list.
+
+On the owner's monitor this picks 5120x1440 at 240.000 Hz.
 
 ### Verification
 Every milestone report includes: real command output (build/clippy/test), the trixie container build result,
