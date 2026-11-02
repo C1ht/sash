@@ -10,10 +10,16 @@ GPU (`/dev/dri/card1`, nvidia-drm); HDMI-A-1 connected to a 1190x340 mm (32:9)
 monitor, 26 modes; a hardware cursor plane (up to 256x256); atomic modesetting.
 Hyprland drives it at 5120x1440@240.
 
-**Mode:** sash-wm uses the monitor's EDID *preferred* mode, which on this monitor is
-**3840x1080@120**, not its native 5120x1440. The picture will look stretched or soft;
-that is expected until the mode-selection rule (proposal in docs/plan.md) is approved
-and built. If you approve the rule first, the runs below use 5120x1440@240 instead.
+**Mode:** the selection rule (CLAUDE.md) picks the native resolution from the panel's
+physical aspect, **5120x1440, at its highest rate, 240 Hz**, not the EDID's preferred
+3840x1080@120. Before anything is committed, every candidate is checked with an atomic
+TEST_ONLY commit, in this order: 5120x1440 at 240, 120, 60 Hz, then 3840x1080 at 240,
+120, 60 Hz. The log lists them (`mode candidates`) and says which passed
+(`mode candidate passed its test commit`) or why one was rejected (`mode candidate
+rejected ... reason=`). If none passes, sash-wm exits with a message and **does not
+touch the display**: the console stays as it is. Run 1 asks for the safest native mode
+instead (`--mode 5120x1440@60`, debug builds only); the later runs use the selected
+240 Hz mode.
 
 ## The tool
 
@@ -23,6 +29,7 @@ repository:
 - prints the escape instructions and waits for Enter (read them, then press Enter);
 - runs the debug build with `--backend drm --exit-after SECONDS`, inside `timeout`
   (SIGTERM 5 s after that, SIGKILL 5 s after the SIGTERM);
+- with `--mode WxH@R`, passes that on (a fixed mode instead of the selection rule);
 - writes the log, fsynced line by line, to
   `~/.cache/sash/stage-c/<timestamp>-<NAME>.log`, so it survives a hang or a power
   cycle;
@@ -64,24 +71,31 @@ between the steps:
 
 After every run, send me the log the tool printed.
 
-## Run 1: 20 seconds, no input (does the display come up and go back?)
+## Run 1: 20 seconds at 5120x1440@60, no input (does the display come up and go back?)
 
 On **tty3** (Ctrl+Alt+F3, logged in), in the repository:
 
 ```sh
-tools/stage-c.sh 20 run1
+tools/stage-c.sh 20 run1 --mode 5120x1440@60
 ```
 
-- [ ] Within 2 seconds the screen turns dark grey with a white arrow in the top left
-  corner.
+- [ ] Within 2 seconds the screen turns dark grey, sharp (native resolution), with a
+  white arrow in the top left corner.
 - [ ] After 20 seconds the console of tty3 is back and the tool prints exit status 0.
+- [ ] The log has `--mode: only the requested mode is tried` and
+  `mode candidate passed its test commit ... mode="5120x1440@60.000"`.
 
-## Run 2: input, VT switch, quit key (60 seconds)
+## Run 2: the selected mode (240 Hz); input, VT switch, quit key (60 seconds)
 
 ```sh
 tools/stage-c.sh 60 run2
 ```
 
+- [ ] The log has `mode candidates ... ["5120x1440@240.000", ...]` and
+  `mode candidate passed its test commit n=0 mode="5120x1440@240.000"`. If the first
+  candidates were rejected, the log says why and which one passed; that is a result to
+  send me, not a failure.
+- [ ] The arrow moves smoothly (240 Hz).
 - [ ] Move the mouse: the arrow follows.
 - [ ] Ctrl+Alt+F1: Hyprland appears and works. Ctrl+Alt+F3: sash-wm is back.
 - [ ] **Super+Shift+E** quits at once (before the 60 s); exit status 0.
@@ -141,7 +155,9 @@ Expected:
 - [ ] sash-wm keeps running: no crash, no panic.
 - [ ] The log shows `display disconnected: rendering stops, windows are kept` after the
   pull, and `display connected again: full modeset` after plugging back in (sash-wm
-  clears the CRTC and commits a full modeset, at the same mode).
+  clears the CRTC and commits a full modeset at the previous mode, or, if the monitor
+  no longer offers it, at the first mode of the selection rule that passes its test
+  commit; the windows are then re-clamped to the new size).
 - [ ] The picture comes back with the same windows in the same places, plus the third
   one opened while unplugged.
 - [ ] Not expected (report it): no picture after plugging back in. Super+Shift+E, then

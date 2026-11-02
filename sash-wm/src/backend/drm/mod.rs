@@ -5,7 +5,10 @@
 //!
 //! - Session: libseat (logind or seatd) opens the GPU and input devices; Ctrl+Alt+Fn
 //!   switch VTs through it before any keybind sees the keys (seat.rs).
-//! - One GPU (udev's primary GPU), one connector at its preferred mode (mode.rs).
+//! - One GPU (udev's primary GPU), one connector, its native mode (mode.rs). Every
+//!   candidate mode is validated with an atomic TEST_ONLY commit before anything is
+//!   committed; the device is opened without disabling outputs, so if no mode passes
+//!   the display is left untouched.
 //! - GBM + EGL + GLES render into a Smithay `DrmCompositor`, which uses atomic
 //!   modesetting when the driver has it and puts the cursor on the hardware cursor
 //!   plane when it fits (else it is drawn with everything else).
@@ -66,7 +69,7 @@ use smithay::{
             ping::PingSource,
             timer::{TimeoutAction, Timer},
         },
-        drm::control::{Device as ControlDevice, Mode, ModeTypeFlags, connector, crtc},
+        drm::control::{Device as ControlDevice, Mode, ModeFlags, ModeTypeFlags, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
         wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
@@ -81,6 +84,17 @@ use self::{
     session::{SessionTracker, Step},
 };
 use crate::{dmabuf, keybinds::Modifier, output, render, server::Server, state::Sash};
+
+#[cfg(debug_assertions)]
+pub use self::mode::ModeRequest;
+
+/// Start options of the DRM backend.
+#[derive(Debug, Default)]
+pub struct Options {
+    /// Debug builds: `--mode WxH@R` instead of the selection rule.
+    #[cfg(debug_assertions)]
+    pub mode: Option<ModeRequest>,
+}
 
 /// Keybind modifier on real hardware.
 pub const MODIFIER: Modifier = Modifier::Super;
@@ -136,6 +150,7 @@ pub fn start(
     event_loop: &EventLoop<'static, Server>,
     state: &mut Sash,
     redraw_requests: PingSource,
+    options: Options,
 ) -> Result<(), Box<dyn Error>> {
     let (mut session, session_events) = LibSeatSession::new()
         .map_err(|err| format!("could not open a seat session (libseat): {err}"))?;
@@ -151,8 +166,10 @@ pub fn start(
         )
         .map_err(|err| format!("could not open {}: {err}", path.display()))?;
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
+    // Outputs are not disabled on open: nothing is committed until a mode has passed
+    // its test commit.
     let (mut device, device_events) =
-        DrmDevice::new(fd.clone(), true).map_err(|err| format!("DRM device: {err}"))?;
+        DrmDevice::new(fd.clone(), false).map_err(|err| format!("DRM device: {err}"))?;
     let gbm = GbmDevice::new(fd.clone()).map_err(|err| format!("GBM device: {err}"))?;
     // Safety: the display and context live as long as the renderer that owns them.
     let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|err| format!("EGL: {err}"))?;
@@ -160,20 +177,49 @@ pub fn start(
     let mut renderer =
         unsafe { GlesRenderer::new(context) }.map_err(|err| format!("GLES renderer: {err}"))?;
 
-    let (connector, drm_mode, crtc) = choose_output(&device)?;
-    let info = device.get_connector(connector, false)?;
+    let OutputChoice {
+        connector,
+        info,
+        crtc,
+        candidates,
+    } = choose_output(&device, &options)?;
     let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
     let size_mm = info.size().map_or((0, 0), |(w, h)| (w as i32, h as i32));
+    tracing::info!(
+        connector = name,
+        size_mm = ?size_mm,
+        candidates = ?candidates.iter().map(mode_name).collect::<Vec<_>>(),
+        "mode candidates"
+    );
+    let surface = device
+        .create_surface(crtc, candidates[0], &[connector])
+        .map_err(|err| format!("DRM surface on {name}: {err}"))?;
+    let Some(drm_mode) = validate(&candidates, mode_name, |mode| surface.use_mode(mode)) else {
+        // Nothing was committed. Pausing the device first makes dropping the surface and
+        // the device commit nothing either: the display stays as it was.
+        device.pause();
+        drop(surface);
+        return Err(format!(
+            "no mode of {name} passed its test commit ({} tried, see the log); the display \
+             was left untouched",
+            candidates.len()
+        )
+        .into());
+    };
+    // A mode passed: now every output is turned off, and only ours comes back.
+    device
+        .reset_state()
+        .map_err(|err| format!("DRM state reset: {err}"))?;
+    if let Err(err) = surface.use_vrr(false) {
+        tracing::debug!(%err, "VRR could not be turned off (no VRR property?)");
+    }
     let (width, height) = drm_mode.size();
     tracing::info!(
         connector = name,
-        mode = format!("{width}x{height}@{}", drm_mode.vrefresh()),
+        mode = mode_name(&drm_mode),
         timings = ?drm_mode,
         "output"
     );
-    let surface = device
-        .create_surface(crtc, drm_mode, &[connector])
-        .map_err(|err| format!("DRM surface on {name}: {err}"))?;
     let output = output::create_physical(state, &name, size_mm, drm_mode.into());
     state.set_layout_area((width as i32, height as i32).into());
 
@@ -363,17 +409,57 @@ fn choose_gpu(seat: &str) -> Result<PathBuf, Box<dyn Error>> {
         .ok_or_else(|| format!("no GPU found on seat {seat}").into())
 }
 
-/// The connector, mode and CRTC to drive (see mode.rs for the choice).
+/// "WxH@R" with the exact refresh rate, for logs.
+fn mode_name(mode: &Mode) -> String {
+    let (width, height) = mode.size();
+    let hz = exact_refresh_mhz(mode) as f64 / 1000.0;
+    format!("{width}x{height}@{hz:.3}")
+}
+
+/// The exact refresh rate in mHz: pixel clock / (htotal x vtotal); the kernel's
+/// rounded rate if the timings are empty.
+fn exact_refresh_mhz(mode: &Mode) -> u32 {
+    let pixels = mode.hsync().2 as u64 * mode.vsync().2 as u64;
+    if pixels == 0 {
+        return mode.vrefresh() * 1000;
+    }
+    (mode.clock() as u64 * 1_000_000 / pixels) as u32
+}
+
+/// Tries the candidates in order with `test` (an atomic TEST_ONLY commit) and returns
+/// the first that passes. Logs every candidate and why it was rejected.
+fn validate<M: Copy, E: std::fmt::Display>(
+    candidates: &[M],
+    name: impl Fn(&M) -> String,
+    mut test: impl FnMut(M) -> Result<(), E>,
+) -> Option<M> {
+    for (n, &mode) in candidates.iter().enumerate() {
+        match test(mode) {
+            Ok(()) => {
+                tracing::info!(
+                    n,
+                    mode = name(&mode),
+                    "mode candidate passed its test commit"
+                );
+                return Some(mode);
+            }
+            Err(err) => tracing::warn!(
+                n,
+                mode = name(&mode),
+                reason = %err,
+                "mode candidate rejected"
+            ),
+        }
+    }
+    None
+}
+
+/// The connector to drive, its info, a CRTC for it and the modes to try in order (see
+/// mode.rs; with `--mode` in debug builds, only the requested one).
 fn choose_output(
     device: &DrmDevice,
-) -> Result<
-    (
-        connector::Handle,
-        smithay::reexports::drm::control::Mode,
-        crtc::Handle,
-    ),
-    Box<dyn Error>,
-> {
+    #[cfg_attr(not(debug_assertions), expect(unused_variables))] options: &Options,
+) -> Result<OutputChoice, Box<dyn Error>> {
     let resources = device
         .resource_handles()
         .map_err(|err| format!("DRM resources: {err}"))?;
@@ -386,9 +472,34 @@ fn choose_output(
         infos.push(connector_info(handle, &info));
         handles.push((handle, info));
     }
-    let (index, mode_index) = mode::choose(&infos).ok_or("no connected display")?;
-    let (handle, info) = &handles[index];
-    let drm_mode = info.modes()[mode_index];
+    let index = mode::choose_connector(&infos).ok_or("no connected display")?;
+    let (handle, info) = handles.swap_remove(index);
+    let connector = &infos[index];
+    let order = mode::candidates(connector);
+    #[cfg(debug_assertions)]
+    let order = match options.mode {
+        Some(request) => {
+            let found = mode::requested(connector, request);
+            if found.is_empty() {
+                let offered: Vec<String> = info.modes().iter().map(mode_name).collect();
+                return Err(format!(
+                    "--mode {}x{}@{} is not offered; offered: {}",
+                    request.width,
+                    request.height,
+                    request.refresh,
+                    offered.join(", ")
+                )
+                .into());
+            }
+            tracing::info!(?request, "--mode: only the requested mode is tried");
+            found
+        }
+        None => order,
+    };
+    if order.is_empty() {
+        return Err("the display offers no usable (non-interlaced) mode".into());
+    }
+    let candidates = order.iter().map(|&i| info.modes()[i]).collect();
     let crtc = info
         .encoders()
         .iter()
@@ -396,7 +507,21 @@ fn choose_output(
         .flat_map(|encoder| resources.filter_crtcs(encoder.possible_crtcs()))
         .next()
         .ok_or("no CRTC for the connector")?;
-    Ok((*handle, drm_mode, crtc))
+    Ok(OutputChoice {
+        connector: handle,
+        info,
+        crtc,
+        candidates,
+    })
+}
+
+/// What `choose_output` found.
+struct OutputChoice {
+    connector: connector::Handle,
+    info: connector::Info,
+    crtc: crtc::Handle,
+    /// The modes to test, in order.
+    candidates: Vec<Mode>,
 }
 
 /// A connector as mode.rs sees it.
@@ -404,14 +529,16 @@ fn connector_info(handle: connector::Handle, info: &connector::Info) -> Connecto
     ConnectorInfo {
         id: u32::from(handle),
         connected: info.state() == connector::State::Connected,
+        size_mm: info.size().unwrap_or((0, 0)),
         modes: info
             .modes()
             .iter()
             .map(|m| ModeInfo {
                 width: m.size().0,
                 height: m.size().1,
-                refresh: m.vrefresh(),
+                refresh_mhz: exact_refresh_mhz(m),
                 preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+                interlaced: m.flags().contains(ModeFlags::INTERLACE),
             })
             .collect(),
     }
@@ -685,12 +812,9 @@ impl Drm {
             }
             (false, true) => {
                 if !offers_mode {
-                    let infos = [connector_info(self.connector, &info)];
-                    let Some((_, index)) = mode::choose(&infos) else {
-                        tracing::warn!("the display offers no usable mode; it stays dark");
-                        return;
-                    };
-                    if !self.switch_mode(info.modes()[index], state) {
+                    let order = mode::candidates(&connector_info(self.connector, &info));
+                    let candidates: Vec<Mode> = order.iter().map(|&i| info.modes()[i]).collect();
+                    if !self.switch_mode(&candidates, state) {
                         return;
                     }
                 }
@@ -712,13 +836,20 @@ impl Drm {
         }
     }
 
-    /// Uses `mode` from the next frame on: the compositor, the output clients see, the
-    /// layout area and the pacing follow. Returns false if the CRTC cannot use it.
-    fn switch_mode(&mut self, mode: Mode, state: &mut Sash) -> bool {
-        if let Err(err) = self.compositor.use_mode(mode) {
-            tracing::warn!(%err, timings = ?mode, "the new mode cannot be used; the display stays dark");
+    /// The previous mode is gone: the first candidate that passes its test commit is used
+    /// from the next frame on; the compositor, the output clients see, the layout area
+    /// (the normal output-resize path) and the pacing follow. Returns false if none
+    /// passes (the display stays dark).
+    fn switch_mode(&mut self, candidates: &[Mode], state: &mut Sash) -> bool {
+        tracing::info!(
+            candidates = ?candidates.iter().map(mode_name).collect::<Vec<_>>(),
+            "the display no longer offers the mode in use; mode candidates"
+        );
+        let Some(mode) = validate(candidates, mode_name, |mode| self.compositor.use_mode(mode))
+        else {
+            tracing::warn!("no mode passed its test commit; the display stays dark");
             return false;
-        }
+        };
         tracing::info!(from = ?self.mode, to = ?mode, "the display no longer offers the mode in use; switching");
         self.mode = mode;
         self.refresh = refresh_period(&mode);
@@ -768,5 +899,33 @@ impl Drm {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate;
+
+    #[test]
+    fn validation_takes_the_first_candidate_that_passes_in_order() {
+        let name = |m: &u32| m.to_string();
+        let mut tried = Vec::new();
+        // The driver refuses 240 and 120 (e.g. link bandwidth); 60 passes.
+        let passed = validate(&[240, 120, 60, 30], name, |m| {
+            tried.push(m);
+            if m > 60 {
+                Err("test commit failed")
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(passed, Some(60));
+        assert_eq!(tried, vec![240, 120, 60], "stops at the first that passes");
+        // Nothing passes: None (the caller exits and leaves the display untouched).
+        assert_eq!(
+            validate(&[240, 120], name, |_| Err("test commit failed")),
+            None
+        );
+        assert_eq!(validate(&[], name, |_: u32| Ok::<(), &str>(())), None);
     }
 }

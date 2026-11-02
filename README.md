@@ -34,12 +34,15 @@ On the hardware, from a text console (M9; only by the owner's checklist
 ```sh
 sash-wm                               # mod is Super; Super+Shift+E quits
 sash-wm --exit-after 20               # debug builds: a watchdog that quits after 20 s
-tools/stage-c.sh 20 run1              # the owner's stage C runs: watchdogs, fsynced log
+sash-wm --mode 5120x1440@60           # debug builds: this mode instead of the rule
+tools/stage-c.sh 20 run1 --mode 5120x1440@60   # the owner's stage C runs
 ```
 
 The backend is chosen from the environment: nested (winit) when `WAYLAND_DISPLAY` or
-`DISPLAY` is set, DRM on a console with a login session (`XDG_SESSION_ID`).
-`--backend winit|drm` overrides it.
+`DISPLAY` is set, DRM in a local console session (`XDG_SESSION_ID`, `XDG_SEAT` and
+`XDG_VTNR` all set; a remote login is refused). `--backend winit|drm` overrides it.
+The mode is the panel's native resolution at its highest refresh rate, each candidate
+checked with a test commit first (rules in CLAUDE.md).
 
 The keyboard layout follows `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_VARIANT`,
 `XKB_DEFAULT_OPTIONS` (and the other `XKB_DEFAULT_*`); nothing is read from system

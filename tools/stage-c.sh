@@ -10,11 +10,12 @@
 # - Writes everything sash-wm logs to ${XDG_CACHE_HOME:-~/.cache}/sash/stage-c/
 #   <timestamp>-<name>.log, fsynced line by line, so a hang or a power cycle keeps it.
 # - Records sash-wm's PID for the escape steps.
+# - Optionally passes `--mode WxH@R` on (a fixed mode instead of the selection rule).
 # - Optionally starts one client once sash-wm is listening (everything after `--`), with
 #   a throwaway XDG_CONFIG_HOME; its output goes to the same log.
 #
-# Usage: tools/stage-c.sh SECONDS NAME [-- CLIENT ARGS...]
-#   e.g. tools/stage-c.sh 20 run1
+# Usage: tools/stage-c.sh SECONDS NAME [--mode WxH@R] [-- CLIENT ARGS...]
+#   e.g. tools/stage-c.sh 20 run1 --mode 5120x1440@60
 #        tools/stage-c.sh 120 run3 -- kitty --config NONE
 # Needs no sudo.
 set -u
@@ -25,6 +26,14 @@ BIN="${STAGE_C_BIN:-$ROOT/target/debug/sash-wm}"
 SECONDS_ARG=${1:-}
 NAME=${2:-}
 shift 2 2>/dev/null || true
+MODE=()
+if [ "${1:-}" = "--mode" ]; then
+    case "${2:-}" in
+        [0-9]*x[0-9]*@[0-9]*) MODE=(--mode "$2") ;;
+        *) echo "stage-c: --mode takes WxH@R, e.g. 5120x1440@60" >&2; exit 2 ;;
+    esac
+    shift 2
+fi
 CLIENT=()
 if [ "${1:-}" = "--" ]; then
     shift
@@ -36,7 +45,7 @@ fail() {
     exit 2
 }
 case "$SECONDS_ARG" in
-    '' | *[!0-9]*) fail "usage: tools/stage-c.sh SECONDS NAME [-- CLIENT ARGS...]" ;;
+    '' | *[!0-9]*) fail "usage: tools/stage-c.sh SECONDS NAME [--mode WxH@R] [-- CLIENT ARGS...]" ;;
 esac
 [ "$SECONDS_ARG" -ge 5 ] && [ "$SECONDS_ARG" -le 600 ] || fail "SECONDS must be 5..600"
 case "$NAME" in
@@ -60,7 +69,7 @@ TTY=$(tty)
 
 cat << EOF
 
-=== sash-wm stage C: $NAME, $SECONDS_ARG seconds ===
+=== sash-wm stage C: $NAME, $SECONDS_ARG seconds, mode: ${MODE[1]:-the selection rule} ===
 
 The screen will belong to sash-wm. It quits by itself after $SECONDS_ARG s; if it does not,
 SIGTERM follows 5 s later and SIGKILL 5 s after that. If the screen stays black or frozen,
@@ -99,11 +108,11 @@ rm -f "$FIFO"
 {
     echo "== stage C $NAME: $(date -Is), $SECONDS_ARG s, $TTY"
     echo "== $(uname -r); sash $(git -C "$ROOT" describe --always --dirty 2> /dev/null)"
-    echo "== client: ${CLIENT[*]:-none}"
+    echo "== client: ${CLIENT[*]:-none}; mode: ${MODE[1]:-the selection rule}"
 } >&3
 
 RUST_LOG=${RUST_LOG:-sash_wm=debug} timeout -k 5 -s TERM $((SECONDS_ARG + 5)) \
-    "$BIN" --backend drm --exit-after "$SECONDS_ARG" >&3 2>&3 &
+    "$BIN" --backend drm --exit-after "$SECONDS_ARG" "${MODE[@]}" >&3 2>&3 &
 TIMEOUT_PID=$!
 # sash-wm is the child of timeout: its PID is the one to signal.
 SASH_PID=""

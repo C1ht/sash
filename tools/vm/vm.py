@@ -6,6 +6,7 @@
 #
 # Used by tools/vm/scenario.py; see tools/vm/README.md.
 
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,59 @@ import shutil
 import socket
 import subprocess
 import time
+import urllib.request
+
+# Everything the VM tests keep lives here, not in a temporary directory: the image, the
+# guest's disk overlay and UEFI variables, the ISO, the throwaway SSH key, the results.
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+                     "sash", "vm")
+
+# The Debian 13 nocloud image, pinned to one dated build and its SHA512 (from that
+# build's SHA512SUMS). To move to a newer build, change all three together.
+IMAGE_VERSION = "20261026-2643"
+IMAGE_NAME = f"debian-13-nocloud-amd64-{IMAGE_VERSION}.qcow2"
+IMAGE_URL = f"https://cloud.debian.org/images/cloud/trixie/{IMAGE_VERSION}/{IMAGE_NAME}"
+IMAGE_SHA512 = ("129471badafeff16e59f7e95cb0fcc91828d570ecc7803ca06a05160176e65e6"
+                "1dd5c770310531cd68e6863b8dd102d939519002943e0bc77a4a5fe6a724f8a9")
+
+
+def sha512(path):
+    digest = hashlib.sha512()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def image_path():
+    """The verified image; raises if it is missing or does not match its checksum."""
+    path = os.path.join(CACHE, IMAGE_NAME)
+    if not os.path.exists(path):
+        raise RuntimeError(f"{path} is missing; run tools/vm/prepare.py first")
+    if sha512(path) != IMAGE_SHA512:
+        raise RuntimeError(f"{path} does not match its SHA512; delete it and run "
+                           "tools/vm/prepare.py again")
+    return path
+
+
+def fetch_image():
+    """Downloads the pinned image into CACHE unless it is there and verified."""
+    os.makedirs(CACHE, exist_ok=True)
+    path = os.path.join(CACHE, IMAGE_NAME)
+    if os.path.exists(path) and sha512(path) == IMAGE_SHA512:
+        print(f"image ok: {path}")
+        return path
+    part = path + ".part"
+    print(f"downloading {IMAGE_URL} (about 410 MB)")
+    with urllib.request.urlopen(IMAGE_URL) as response, open(part, "wb") as out:
+        shutil.copyfileobj(response, out, 1 << 20)
+    got = sha512(part)
+    if got != IMAGE_SHA512:
+        os.remove(part)
+        raise RuntimeError(f"SHA512 mismatch for {IMAGE_URL}: {got}")
+    os.replace(part, path)
+    print(f"image ok: {path}")
+    return path
 
 
 class VM:
@@ -22,7 +76,7 @@ class VM:
     PASSWORD = "sash"
 
     def __init__(self, workdir, image, iso, memory="4G", cpus=4, gpu="virtio-gpu-pci",
-                 cpu="kvm64", firmware="uefi"):
+                 cpu="kvm64", firmware="uefi", ssh_port=None):
         self.workdir = workdir
         # Socket paths must be short (108 bytes): they live in $XDG_RUNTIME_DIR.
         sockets = os.path.join(os.environ["XDG_RUNTIME_DIR"], "sash-vm")
@@ -41,7 +95,10 @@ class VM:
             "-device", "virtio-mouse-pci",
             "-drive", f"file={overlay},if=virtio,format=qcow2",
             "-drive", f"file={iso},media=cdrom,readonly=on",
-            "-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0",
+            # The guest's SSH port, if asked for, on the host's loopback only.
+            "-netdev", "user,id=net0" + (f",hostfwd=tcp:127.0.0.1:{ssh_port}-:22"
+                                          if ssh_port else ""),
+            "-device", "virtio-net-pci,netdev=net0",
             "-chardev", f"socket,id=ser0,path={self.serial_path},server=on,wait=off",
             "-serial", "chardev:ser0",
             "-qmp", f"unix:{self.qmp_path},server=on,wait=off",

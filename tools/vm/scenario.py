@@ -2,13 +2,15 @@
 #
 # M9 stage B: the DRM backend in a QEMU/KVM guest (virtio-gpu), scripted end to end.
 # Prints PASS/FAIL per check, writes the guest display's screenshots (QEMU screendump)
-# and sash-wm's log to OUTDIR. The guest must have been set up once with
-# tools/vm/guest-setup.sh (see tools/vm/README.md).
+# and sash-wm's log to OUTDIR. Everything is in ~/.cache/sash/vm: build the ISO with
+# tools/vm/build-iso.sh and set the guest up with tools/vm/prepare.py first (see
+# tools/vm/README.md). The image is checked against its SHA512 before every run.
 #
-# Usage: python3 -I tools/vm/scenario.py WORKDIR IMAGE ISO OUTDIR
+# Usage: python3 -I tools/vm/scenario.py [OUTDIR]   (default ~/.cache/sash/vm/out)
 
 import base64
 import gzip
+import hashlib
 import math
 import os
 import re
@@ -17,10 +19,19 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vm as vmlib  # noqa: E402
 from vm import VM  # noqa: E402
 
-WORKDIR, IMAGE, ISO, OUT = sys.argv[1:5]
+WORKDIR = os.path.join(vmlib.CACHE, "guest")
+IMAGE = vmlib.image_path()
+ISO = os.path.join(vmlib.CACHE, "sash.iso")
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(vmlib.CACHE, "out")
+if not os.path.exists(os.path.join(WORKDIR, "ready")):
+    sys.exit("the guest is not set up; run tools/vm/prepare.py first")
 os.makedirs(OUT, exist_ok=True)
+SSH_PORT = 22422
+SSH_KEY = os.path.join(vmlib.CACHE, "ssh", "id_ed25519")
+REMOTE_LOGIN = "DRM needs a local console session; this looks like a remote login"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RELEASE = "/mnt/sash/sash-wm-release"
 DEBUG = "/mnt/sash/sash-wm-debug"
@@ -68,12 +79,24 @@ def lines(vm):
 
 def count(vm, pattern):
     """Lines of sash-wm's log (colour codes removed) that match the regex."""
-    return int(sh(vm, f"sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -cE '{pattern}' || true"))
+    return int(sh(vm, f"sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -cE -e '{pattern}' || true"))
 
 
 def fetch_log(vm, name):
-    encoded = sh(vm, "gzip -c /tmp/sash.log | base64 -w0", timeout=300)
-    text = gzip.decompress(base64.b64decode(encoded)).decode(errors="replace")
+    """Copies the guest's log over the serial console, checked with md5 (retried)."""
+    for _ in range(3):
+        sh(vm, "cp /tmp/sash.log /tmp/sash.log.copy")
+        expected = sh(vm, "md5sum < /tmp/sash.log.copy | cut -d' ' -f1").strip()
+        encoded = sh(vm, "gzip -c /tmp/sash.log.copy | base64 -w0", timeout=300)
+        try:
+            data = gzip.decompress(base64.b64decode(encoded))
+        except (ValueError, OSError, EOFError):
+            continue
+        if hashlib.md5(data).hexdigest() == expected:
+            break
+    else:
+        raise RuntimeError("the log could not be copied intact over the serial console")
+    text = data.decode(errors="replace")
     path = os.path.join(OUT, f"{name}.log")
     with open(path, "w") as f:
         f.write(text)
@@ -81,18 +104,38 @@ def fetch_log(vm, name):
 
 
 def output_mode(vm):
-    log = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -o 'mode=\"[0-9x@]*\"' | tail -1")
-    found = re.search(r"(\d+)x(\d+)@(\d+)", log)
+    log = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -o 'mode=\"[0-9x@.]*\"' | tail -1")
+    found = re.search(r"(\d+)x(\d+)@([0-9.]+)", log)
     if not found:
         print(sh(vm, "systemctl status sash-session --no-pager | tail -5; head -c 2000 /tmp/sash.log"))
         raise RuntimeError("sash-wm did not start")
-    return int(found.group(1)), int(found.group(2)), int(found.group(3))
+    return int(found.group(1)), int(found.group(2)), float(found.group(3))
 
 
-vm = VM(WORKDIR, IMAGE, ISO)
+def ssh(command):
+    """Runs a command in the guest as \"sash\" over SSH (a remote login)."""
+    result = subprocess.run(
+        ["ssh", "-p", str(SSH_PORT), "-i", SSH_KEY, "-o", "BatchMode=yes",
+         "-o", "StrictHostKeyChecking=no",
+         "-o", f"UserKnownHostsFile={os.path.join(vmlib.CACHE, 'ssh', 'known_hosts')}",
+         "sash@127.0.0.1", command], capture_output=True, text=True, timeout=60)
+    return result.stdout + result.stderr
+
+
+def session_env(text):
+    """The XDG_ session variables in `env`-style output."""
+    found = dict(line.split("=", 1) for line in text.splitlines()
+                 if line.startswith("XDG_") and "=" in line)
+    return {k: found.get(k, "(unset)") for k in ("XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR",
+                                                 "XDG_SESSION_TYPE", "XDG_SESSION_CLASS")}
+
+
+vm = VM(WORKDIR, IMAGE, ISO, ssh_port=SSH_PORT)
 vm.start()
 try:
     vm.login()
+    # Kernel messages on the serial console would mix into command output.
+    sh(vm, "dmesg -n 1")
     sh(vm, "mkdir -p /mnt/sash; mountpoint -q /mnt/sash || mount -o ro /dev/sr0 /mnt/sash")
     print("guest:", sh(vm, "uname -r; cat /etc/debian_version").replace("\n", " "))
 
@@ -105,7 +148,31 @@ try:
           active(vm) == "active" and vt_mode(vm) == "graphics" and auto == 1,
           f"{W}x{H}@{HZ}, VT 2 {vt_mode(vm)}, auto-chosen: {auto}")
     print("renderer:", sh(vm, f"grep -oE '/usr/lib/[^ ]*(dri|gallium|llvm)[^ ]*' /proc/{pid(vm)}/maps | sort -u | tr '\\n' ' '"))
+    # What logind set for the local console session sash-wm runs in.
+    local = session_env(sh(vm, f"tr '\\0' '\\n' < /proc/{pid(vm)}/environ"))
+    print("console session (VT 2, PAM login, like a display manager):", local)
+    candidates = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep -E 'mode candidate|mode candidates|output connector' | cut -c28-300")
+    print(candidates)
+    check("mode chosen by the rule and validated with a test commit before use",
+          "passed its test commit" in candidates, "see the log lines above")
     shot(vm, "01-two-windows")
+
+    # 1b. Session detection: what logind sets for a serial-console root login and for an
+    # SSH login, and that sash-wm started over SSH refuses DRM (it must not touch the
+    # display) with the remote-login message.
+    serial = session_env(sh(vm, "env"))
+    serial_props = sh(vm, "loginctl show-session \"$XDG_SESSION_ID\" -p Type -p Seat -p VTNr -p TTY -p Remote -p Service")
+    print("serial console root login:", serial, serial_props.replace("\n", " "))
+    remote = ssh("env; loginctl show-session \"$XDG_SESSION_ID\" -p Type -p Seat -p VTNr "
+                 "-p TTY -p Remote -p Service; /mnt/sash/sash-wm-release; echo status=$?")
+    print("SSH login:", session_env(remote),
+          " ".join(l for l in remote.splitlines() if re.match(r"^(Type|Seat|VTNr|TTY|Remote|Service)=", l)))
+    refused = REMOTE_LOGIN in remote and "status=1" in remote
+    check("over SSH (no seat, no VT) sash-wm refuses DRM with the remote-login message; the "
+          "console session has all three variables",
+          refused and all(local[k] != "(unset)" for k in ("XDG_SESSION_ID", "XDG_SEAT", "XDG_VTNR"))
+          and active(vm) == "active",
+          f"SSH output ends: {remote.strip().splitlines()[-2:]}")
 
     # 2. Keyboard into the focused window (foot 2).
     vm.type_text("echo keyboard ok")
@@ -239,23 +306,65 @@ try:
           active(vm) != "active" and vt_mode(vm) == "text" and log.strip() == "1",
           f"unit {active(vm)}, VT 2 {vt_mode(vm)}")
 
+    # 13b. --mode (debug build): an offered mode is used (still validated); a mode that is
+    # not offered is refused before anything is committed (VT 2 stays in text mode).
+    start(vm, binary=DEBUG, args="--mode 1280x800@75", windows=0)
+    w, h, hz = output_mode(vm)
+    requested = count(vm, "--mode: only the requested mode is tried")
+    passed = count(vm, "mode candidate passed its test commit")
+    check("--mode 1280x800@75 (debug build): that mode, validated",
+          (w, h, round(hz)) == (1280, 800, 75) and requested == 1 and passed == 1
+          and active(vm) == "active", f"{w}x{h}@{hz}")
+    start(vm, binary=DEBUG, args="--mode 1234x567@60", windows=0)
+    refused = count(vm, "is not offered; offered:")
+    committed = count(vm, "passed its test commit|frame frame_time")
+    check("--mode with a mode that is not offered: refused, nothing committed",
+          refused == 1 and committed == 0 and active(vm) != "active" and vt_mode(vm) == "text",
+          f"unit {active(vm)}, VT 2 {vt_mode(vm)}")
+
     # 14. Started on a VT that is not in front: sash-wm waits until it is.
     start(vm, env="CHVT_DELAY=3", windows=1)
     waited = sh(vm, "grep -c 'waiting for the session to become active' /tmp/sash.log").strip()
     check("started before its VT is in front, it waits and then runs",
           active(vm) == "active" and waited == "1", f"waited: {waited}")
 
-    # 15. Unplug and plug back: the connector is forced off (sysfs), and the kernel sends
-    # a real hotplug uevent (debugfs trigger_hotplug, as a cable pull would); then the
-    # same with the connector back. sash-wm must see the udev event, stop rendering while
-    # disconnected, and do a full modeset and redraw on reconnect.
-    start(vm, windows=2)
+    # 15b. Replug when the previous mode is gone: started at 3840x2160@60 (--mode, debug
+    # build), which virtio-gpu no longer lists after the forced off/detect (so this runs
+    # before 15: the mode list stays changed). The selection rule picks the mode (tested
+    # again; on virtio its new preferred 1280x800), and the output and layout follow the
+    # new size through the output-resize path: the floated foot 2, at the right half of
+    # the 3840 px output, is re-clamped onto the smaller one. The connector is forced off
+    # (sysfs) and the kernel sends a change uevent: debugfs trigger_hotplug where the
+    # kernel has it, else udevadm trigger.
     connector = sh(vm, "ls -d /sys/class/drm/card0-*/ | head -1").strip().rstrip("/")
     name = connector.rsplit("card0-", 1)[1]
     trigger = sh(vm, f"mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; "
                      f"ls /sys/kernel/debug/dri/*/{name}/trigger_hotplug 2>/dev/null | head -1").strip()
     print("connector:", connector, "hotplug trigger:", trigger or "none")
     hotplug = f"echo 1 > {trigger}" if trigger else "udevadm trigger --action=change /sys/class/drm/card0"
+    start(vm, binary=DEBUG, args="--mode 3840x2160@60", windows=2)
+    vm.keys("meta_l", "f")  # foot 2 floats at its tile, x = 1920
+    time.sleep(0.5)
+    shot(vm, "11b-before-unplug-3840x2160")
+    sh(vm, f"echo off > {connector}/status; {hotplug}; sleep 2")
+    sh(vm, f"echo detect > {connector}/status; {hotplug}; sleep 3")
+    switched = count(vm, "no longer offers the mode in use; mode candidates")
+    tested = count(vm, "passed its test commit")
+    w, h, hz = output_mode(vm)
+    chosen = sh(vm, "sed 's/\\x1b\\[[0-9;]*m//g' /tmp/sash.log | grep 'passed its test commit' | tail -1 | grep -o 'mode=\"[0-9x]*'")
+    shot(vm, "12b-after-replug-new-mode")
+    check("replug without the previous mode: the rule's mode, tested, output and windows "
+          "follow the new size (see 11b, 12b)",
+          switched == 1 and tested == 2 and (w, h) != (3840, 2160)
+          and chosen.endswith(f"{w}x{h}") and active(vm) == "active",
+          f"3840x2160 -> {w}x{h}@{hz}, mode tests passed {tested}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 15. Unplug and plug back: the connector is forced off (sysfs), and the kernel sends
+    # a real hotplug uevent (debugfs trigger_hotplug, as a cable pull would); then the
+    # same with the connector back. sash-wm must see the udev event, stop rendering while
+    # disconnected, and do a full modeset and redraw on reconnect.
+    start(vm, windows=2)
     shot(vm, "11-before-unplug")
     events0 = count(vm, "udev event")
     sh(vm, f"echo off > {connector}/status; {hotplug}; sleep 2")
