@@ -525,6 +525,27 @@ try:
           f"{paths.strip().splitlines()[:1]} {sums}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
+    # 17b. Resume timing points (M9e): the recording build in session mode, one window,
+    # a VT switch away and back; the session's events split the resume into its parts.
+    sh(vm, "rm -rf /home/sash/rec17b")
+    start(vm, binary=RECORD_BIN,
+          env="SASH_DEBUG_RECORD=/home/sash/rec17b SASH_DEBUG_RECORD_SESSION=1", windows=1)
+    vm.keys("ctrl", "alt", "f1")
+    time.sleep(1.5)
+    vm.keys("ctrl", "alt", "f2")
+    time.sleep(2)
+    vm.pointer_rel(5, 5)
+    time.sleep(1)
+    steps = sh(vm, "grep -h resume_step /home/sash/rec17b/session-*/events.jsonl")
+    print("resume timing points:\n" + steps)
+    wanted = ["resume start", "activate(true)", "DRM state reset", "libinput restored",
+              "first frame start", "first frame drawn", "first frame committed (modeset)",
+              "first flip", "first input event"]
+    seen = [w for w in wanted if f'"step":"{w}"' in steps]
+    check("resume timing points: every step of a VT switch back is recorded (M9e)",
+          seen == wanted, f"{len(seen)} of {len(wanted)}: missing {sorted(set(wanted) - set(seen))}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
     # 18. A session recorded on the DRM backend for replay (tools/replay.sh): windows
     # spawned by Super+Return with the pointer in different places (rule A), a float, a
     # Super+drag, a snap, a close; Super+F11 writes the bundle. Nothing is typed. The

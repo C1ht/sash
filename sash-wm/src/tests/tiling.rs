@@ -7,10 +7,11 @@ use super::{
     client::TestClient,
     harness::{
         Harness,
-        keys::{ALT, H, J, K, L, Q, SHIFT},
+        keys::{ALT, H, J, K, L, Q, SHIFT, T},
     },
 };
 use crate::layout::{Rect, WindowId};
+use smithay::backend::input::KeyState;
 
 fn assert_tiles(h: &Harness, expected: &[(u64, Rect)]) {
     for &(id, rect) in expected {
@@ -344,14 +345,11 @@ fn an_unmoved_pointer_counts_as_no_pointer() {
     });
 }
 
-/// Focus on open (investigated after the real-hardware bundle; current behaviour, not
-/// a decision): between a new window's first commit and its first buffer the keyboard
-/// focus is on no surface, so a key typed then reaches neither the old window nor the
-/// new one.
+/// Focus on open (owner, M9e): until a new window maps (its first buffer), focus stays
+/// on the previous window and keys go there; when it maps, focus moves to it. Nothing
+/// is queued.
 #[test]
-fn a_key_before_the_new_windows_first_buffer_reaches_no_window() {
-    use crate::tests::harness::keys::T;
-    use smithay::backend::input::KeyState;
+fn keys_before_a_new_window_maps_go_to_the_previous_window() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
@@ -362,7 +360,7 @@ fn a_key_before_the_new_windows_first_buffer_reaches_no_window() {
         let seen = c2.events.configures;
         c2.dispatch_until("initial configure", |e| e.configures > seen);
         server.on_server(|h| {
-            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(2)));
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(1)));
             h.key(T, KeyState::Pressed);
             h.key(T, KeyState::Released);
         });
@@ -370,16 +368,169 @@ fn a_key_before_the_new_windows_first_buffer_reaches_no_window() {
         c2.roundtrip();
         assert_eq!(
             c1.events.keys_pressed,
-            Vec::<u32>::new(),
-            "not the old window"
+            vec![T],
+            "the previous window has it"
         );
-        assert_eq!(c2.events.keys_pressed, Vec::<u32>::new(), "not the new one");
-        c2.ack_and_commit(&w2);
+        assert!(c2.events.keys_pressed.is_empty());
+        c2.ack_and_commit(&w2); // maps
         c2.roundtrip();
-        assert!(
-            c2.events.keyboard_entered,
-            "focus arrives with the first buffer"
+        server.on_server(|h| {
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(2)));
+            h.key(T, KeyState::Pressed);
+            h.key(T, KeyState::Released);
+        });
+        c1.roundtrip();
+        c2.roundtrip();
+        assert!(c2.events.keyboard_entered, "focus moved with the map");
+        assert_eq!(
+            c2.events.keys_pressed,
+            vec![T],
+            "only the key after the map"
         );
-        assert_eq!(c2.events.keys_pressed, Vec::<u32>::new(), "the key is lost");
+        assert_eq!(
+            c1.events.keys_pressed,
+            vec![T],
+            "nothing more for the old window"
+        );
+    });
+}
+
+/// A new window closed, or whose client crashes, before it maps leaves focus where it
+/// was.
+#[test]
+fn a_window_closed_or_crashed_before_mapping_leaves_focus_alone() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        // Closed before mapping.
+        let mut c2 = TestClient::connect(&socket);
+        let w2 = c2.create_window();
+        let seen = c2.events.configures;
+        c2.dispatch_until("initial configure", |e| e.configures > seen);
+        c2.destroy(w2);
+        // Crashed before mapping: the connection goes away.
+        let mut c3 = TestClient::connect(&socket);
+        let _w3 = c3.create_window();
+        let seen = c3.events.configures;
+        c3.dispatch_until("initial configure", |e| e.configures > seen);
+        drop(c3);
+        server.on_server(|h| {
+            for _ in 0..5 {
+                h.step();
+            }
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(1)));
+            assert_eq!(h.mapped_windows(), 1);
+            h.key(T, KeyState::Pressed);
+            h.key(T, KeyState::Released);
+        });
+        c1.roundtrip();
+        assert_eq!(c1.events.keys_pressed, vec![T]);
+        server.on_server(|h| assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 800, 600))));
+    });
+}
+
+/// Two windows opening at once: focus ends on the one that mapped last, in either
+/// order.
+#[test]
+fn of_two_windows_opening_at_once_the_last_to_map_gets_focus() {
+    for second_maps_first in [true, false] {
+        let mut harness = Harness::new();
+        let socket = harness.socket_path();
+        harness.run_with_remote(move |server| {
+            let mut c1 = TestClient::connect(&socket);
+            let _w1 = c1.map_window();
+            let mut c2 = TestClient::connect(&socket);
+            let w2 = c2.create_window();
+            let mut c3 = TestClient::connect(&socket);
+            let w3 = c3.create_window();
+            for c in [&mut c2, &mut c3] {
+                let seen = c.events.configures;
+                c.dispatch_until("initial configure", |e| e.configures > seen);
+            }
+            server.on_server(|h| {
+                assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(1)));
+            });
+            let last = if second_maps_first {
+                c3.roundtrip();
+                c3.ack_and_commit(&w3);
+                c3.roundtrip();
+                c2.roundtrip();
+                c2.ack_and_commit(&w2);
+                c2.roundtrip();
+                2
+            } else {
+                c2.roundtrip();
+                c2.ack_and_commit(&w2);
+                c2.roundtrip();
+                c3.roundtrip();
+                c3.ack_and_commit(&w3);
+                c3.roundtrip();
+                3
+            };
+            server.on_server(move |h| {
+                assert_eq!(
+                    h.server.state.windows.layout.focused(),
+                    Some(WindowId(last))
+                );
+                h.key(T, KeyState::Pressed);
+                h.key(T, KeyState::Released);
+            });
+            c2.roundtrip();
+            c3.roundtrip();
+            let (got, other) = if last == 2 { (&c2, &c3) } else { (&c3, &c2) };
+            assert_eq!(got.events.keys_pressed, vec![T], "the last to map");
+            assert!(other.events.keys_pressed.is_empty());
+        });
+    }
+}
+
+/// mod+Return, then typing at once: the keys go to the previous window until the new
+/// terminal maps, then to the terminal. (Tests start no foot; a test client stands in.)
+/// mod+Return exists in debug builds only.
+#[cfg(debug_assertions)]
+#[test]
+fn typing_right_after_a_keybind_spawn_goes_to_the_previous_window_until_the_map() {
+    const RETURN: u32 = 28;
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        server.on_server(|h| {
+            h.chord(&[ALT, RETURN]);
+            let spawned = h.server.state.terminals_spawned.borrow().clone();
+            assert_eq!(
+                spawned,
+                vec![h.server.socket_name.clone()],
+                "foot, on our display"
+            );
+            h.key(T, KeyState::Pressed);
+            h.key(T, KeyState::Released);
+        });
+        // The terminal connects and opens its window; more typing before it maps.
+        let mut term = TestClient::connect(&socket);
+        let w = term.create_window();
+        let seen = term.events.configures;
+        term.dispatch_until("initial configure", |e| e.configures > seen);
+        server.on_server(|h| {
+            h.key(T, KeyState::Pressed);
+            h.key(T, KeyState::Released);
+        });
+        term.ack_and_commit(&w);
+        term.roundtrip();
+        server.on_server(|h| {
+            h.key(T, KeyState::Pressed);
+            h.key(T, KeyState::Released);
+        });
+        c1.roundtrip();
+        term.roundtrip();
+        assert_eq!(
+            c1.events.keys_pressed,
+            vec![ALT, T, T],
+            "mod+Return is not delivered; both keys before the map are"
+        );
+        assert_eq!(term.events.keys_pressed, vec![T], "the key after the map");
     });
 }

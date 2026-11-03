@@ -92,6 +92,9 @@ pub struct Sash {
     pub cursor_frames: crate::cursor::CursorFrames,
     /// The pointer has moved since startup; until then rule A ignores it.
     pub pointer_has_moved: bool,
+    /// Tests: the display of each terminal the keybind asked for (no foot is started).
+    #[cfg(test)]
+    pub terminals_spawned: std::cell::RefCell<Vec<std::ffi::OsString>>,
     /// Debug recording (feature `debug-record`), when SASH_DEBUG_RECORD is set.
     #[cfg(feature = "debug-record")]
     pub recorder: Option<crate::record::Recorder>,
@@ -137,6 +140,8 @@ impl Sash {
             draws_named_cursor: false,
             cursor_frames: Default::default(),
             pointer_has_moved: false,
+            #[cfg(test)]
+            terminals_spawned: Default::default(),
             #[cfg(feature = "debug-record")]
             recorder: None,
         }

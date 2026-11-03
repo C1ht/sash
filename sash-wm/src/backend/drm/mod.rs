@@ -141,11 +141,21 @@ struct Drm {
     /// Frames whose page flip was refused because DRM master was already gone (the
     /// session pausing), since the last session event.
     flips_refused: u64,
+    /// Timing points since the last resume (recorder and debug log only).
+    resume: Option<ResumeTrace>,
     /// For timers that call back into the backend.
     this: Weak<RefCell<Drm>>,
     /// Debug builds: test commits made to fail (fault injection).
     #[cfg(debug_assertions)]
     faults: mode::ModeFaults,
+}
+
+/// The firsts after a resume, for timing points (recorder and debug log only).
+struct ResumeTrace {
+    at: Instant,
+    frame_started: bool,
+    flipped: bool,
+    input_back: bool,
 }
 
 struct QueuedFrame {
@@ -291,6 +301,7 @@ pub fn start(
             modeset_pending: false,
             recheck: recheck::Recheck::default(),
             flips_refused: 0,
+            resume: None,
             this: this.clone(),
             #[cfg(debug_assertions)]
             faults,
@@ -651,8 +662,18 @@ fn insert_sources(
         .insert_source(session_events, move |event, _, server| {
             let mut drm = for_session.borrow_mut();
             let steps = match event {
-                SessionEvent::PauseSession => drm.tracker.pause(),
+                SessionEvent::PauseSession => {
+                    drm.resume = None;
+                    drm.tracker.pause()
+                }
                 SessionEvent::ActivateSession => {
+                    drm.resume = Some(ResumeTrace {
+                        at: Instant::now(),
+                        frame_started: false,
+                        flipped: false,
+                        input_back: false,
+                    });
+                    drm.timing_point(&mut server.state, "resume start", None);
                     drm.recheck.resumed(now());
                     drm.tracker.resume()
                 }
@@ -660,7 +681,18 @@ fn insert_sources(
             let flips_refused = std::mem::take(&mut drm.flips_refused);
             tracing::info!(?event, ?steps, flips_refused, "session");
             for step in steps {
+                let start = Instant::now();
                 drm.run(step, &mut server.state);
+                if drm.resume.is_some() {
+                    let name = match step {
+                        Step::ActivateDrm => "activate(true)",
+                        Step::ResetDrmState => "DRM state reset",
+                        Step::ResumeInput => "libinput restored",
+                        Step::RedrawAll => "redraw (includes the first frame)",
+                        _ => "pause step",
+                    };
+                    drm.timing_point(&mut server.state, name, Some(start.elapsed()));
+                }
             }
         })
         .map_err(|err| err.error)?;
@@ -672,6 +704,11 @@ fn insert_sources(
             // A connector re-check that waited for the input devices after a resume
             // runs once they are back.
             let mut drm = for_input.borrow_mut();
+            if let Some(resume) = drm.resume.as_mut()
+                && !std::mem::replace(&mut resume.input_back, true)
+            {
+                drm.timing_point(&mut server.state, "first input event", None);
+            }
             if drm.recheck.input_back(now()) {
                 drm.connector_changed(&mut server.state);
             }
@@ -724,6 +761,13 @@ impl Drm {
         let started = now();
         state.frame_started();
         record!(state, "frame_start");
+        let first_after_resume = self
+            .resume
+            .as_mut()
+            .is_some_and(|r| !std::mem::replace(&mut r.frame_started, true));
+        if first_after_resume {
+            self.timing_point(state, "first frame start", None);
+        }
         let mut elements = render::cursor_elements(state, &mut self.renderer, 1.0);
         elements.extend(render::arrow_element(
             state,
@@ -739,6 +783,7 @@ impl Drm {
             render::CLEAR_COLOR,
             FrameFlags::DEFAULT,
         );
+        let drawn = start.elapsed();
         #[cfg(feature = "debug-record")]
         let cursor_on_plane = result.as_ref().is_ok_and(|f| f.cursor_element.is_some());
         #[cfg(feature = "debug-record")]
@@ -773,9 +818,14 @@ impl Drm {
                 false
             }
         };
+        let committed = start.elapsed().saturating_sub(drawn);
+        if first_after_resume {
+            self.timing_point(state, "first frame drawn", Some(drawn));
+            self.timing_point(state, "first frame committed (modeset)", Some(committed));
+        }
         self.pacer.rendered(queued, started);
         #[cfg(feature = "debug-record")]
-        self.record_frame(state, queued, cursor, start.elapsed());
+        self.record_frame(state, queued, cursor, start.elapsed(), (drawn, committed));
         if queued {
             self.queued = Some(QueuedFrame {
                 render_us: start.elapsed().as_micros() as u64,
@@ -795,6 +845,7 @@ impl Drm {
         queued: bool,
         cursor: &'static str,
         took: Duration,
+        (drawn, committed): (Duration, Duration),
     ) {
         if state.recorder.is_none() {
             return;
@@ -813,6 +864,8 @@ impl Drm {
                 vec![
                     ("queued", queued.into()),
                     ("render_us", (took.as_micros() as u64).into()),
+                    ("draw_us", (drawn.as_micros() as u64).into()),
+                    ("commit_us", (committed.as_micros() as u64).into()),
                     ("cursor", cursor.into()),
                     ("unpaced", self.pacer.is_unpaced().into()),
                 ],
@@ -865,6 +918,11 @@ impl Drm {
 
     /// The queued frame is on screen.
     fn flip_complete(&mut self, state: &mut Sash, metadata: Option<DrmEventMetadata>) {
+        if let Some(resume) = self.resume.as_mut()
+            && !std::mem::replace(&mut resume.flipped, true)
+        {
+            self.timing_point(state, "first flip", None);
+        }
         #[cfg(feature = "debug-record")]
         let metadata_present = metadata.is_some();
         let (time, sequence) = match metadata {
@@ -936,6 +994,25 @@ impl Drm {
     }
 
     /// Renders at `at` (the refresh-rate cap). One timer at a time.
+    /// A timing point (recorder event `resume_step` and a debug line): the time since
+    /// the last resume, if any, and how long the step took, if it is one.
+    #[cfg_attr(not(feature = "debug-record"), expect(unused_variables))]
+    fn timing_point(&self, state: &mut Sash, step: &'static str, took: Option<Duration>) {
+        let since = self
+            .resume
+            .as_ref()
+            .map(|r| r.at.elapsed().as_micros() as u64);
+        let took = took.map(|t| t.as_micros() as u64);
+        tracing::debug!(step, since_resume_us = ?since, took_us = ?took, "timing");
+        record!(
+            state,
+            "resume_step",
+            "step" => step,
+            "since_resume_us" => since,
+            "took_us" => took,
+        );
+    }
+
     /// Arms the timer for a merged connector re-check (recheck.rs) at `at`.
     fn arm_recheck(&mut self, at: Duration, state: &mut Sash) {
         let this = self.this.clone();
@@ -988,7 +1065,10 @@ impl Drm {
     /// the one mode.rs chooses (the output and layout follow its size); then everything
     /// is redrawn.
     fn connector_changed(&mut self, state: &mut Sash) {
-        let info = match self.device.get_connector(self.connector, true) {
+        let probe = Instant::now();
+        let info = self.device.get_connector(self.connector, true);
+        self.timing_point(state, "connector re-check", Some(probe.elapsed()));
+        let info = match info {
             Ok(info) => info,
             Err(err) => {
                 tracing::warn!(%err, "could not probe the connector after a udev event");

@@ -139,8 +139,26 @@ fn opening_order(events: &[Json]) -> HashMap<i64, i64> {
     ids
 }
 
+/// A snapshot without its "focus" field.
+fn without_focus(snapshot: &Json) -> Json {
+    match snapshot {
+        Json::Obj(fields) => Json::Obj(
+            fields
+                .iter()
+                .filter(|(k, _)| k != "focus")
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// The layout snapshots of an event stream, normalized, repeats merged, empty
 /// desktops left out (startup order differs between a backend and the harness).
+/// Focus on open: before M9e a new window got focus when it opened, since M9e when it
+/// maps. So the focus of an "open window" snapshot is not compared, and a "map"
+/// snapshot that only moves focus is left out; bundles from before and after compare
+/// alike, and every other snapshot still compares focus.
 fn snapshots(events: &[Json]) -> Vec<(String, Json)> {
     let ids = opening_order(events);
     let mut out: Vec<(String, Json)> = Vec::new();
@@ -148,16 +166,22 @@ fn snapshots(events: &[Json]) -> Vec<(String, Json)> {
         let Some(after) = event.get("after") else {
             continue;
         };
-        let empty = matches!(after.get("windows"), Some(Json::Arr(w)) if w.is_empty());
-        let snapshot = normalized(after, &ids);
-        if empty || out.last().is_some_and(|(_, last)| *last == snapshot) {
-            continue;
-        }
         let op = event
             .get("op")
             .and_then(Json::as_str)
             .unwrap_or("?")
             .to_string();
+        let empty = matches!(after.get("windows"), Some(Json::Arr(w)) if w.is_empty());
+        let mut snapshot = normalized(after, &ids);
+        if op == "open window" {
+            snapshot = without_focus(&snapshot);
+        }
+        let repeat = out.last().is_some_and(|(_, last)| {
+            *last == snapshot || (op == "map" && without_focus(last) == without_focus(&snapshot))
+        });
+        if empty || repeat {
+            continue;
+        }
         out.push((op, snapshot));
     }
     out
@@ -558,4 +582,91 @@ fn the_owners_nvidia_session_replays() {
     assert_eq!(report.compared, 13, "snapshots 0 to 12: {report:?}");
     assert_eq!(report.replayed.get("pointer_button"), Some(&16));
     assert!(started.elapsed() < Duration::from_secs(10), "under 10 s");
+}
+
+/// The real-hardware fixtures hold only what the replay needs (owner, M9e): the listed
+/// event kinds, modifier keys only, and no app ids, titles, device names or typed keys,
+/// checked down to every field name.
+#[test]
+fn real_hardware_fixtures_hold_only_replay_data() {
+    const KINDS: [&str; 6] = [
+        "layout",
+        "commit",
+        "destroy",
+        "pointer_button",
+        "pointer_position",
+        "key",
+    ];
+    const FIELDS: [&str; 32] = [
+        "t_us",
+        "kind",
+        "op",
+        "before",
+        "after",
+        "output",
+        "focus",
+        "windows",
+        "tree",
+        "id",
+        "mapped",
+        "mode",
+        "forced_floating",
+        "rect",
+        "shown",
+        "snapped",
+        "maximized",
+        "fullscreen",
+        "depth",
+        "split",
+        "ratio",
+        "window",
+        "leaf",
+        "buffer",
+        "geometry",
+        "button",
+        "pressed",
+        "x",
+        "y",
+        "grabbed",
+        "key",
+        "mods",
+    ];
+    fn fields(value: &Json, out: &mut Vec<String>) {
+        match value {
+            Json::Obj(items) => {
+                for (k, v) in items {
+                    out.push(k.clone());
+                    fields(v, out);
+                }
+            }
+            Json::Arr(items) => items.iter().for_each(|v| fields(v, out)),
+            _ => {}
+        }
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/tests/fixtures/replay/nvidia-run4-20261103");
+    let text = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    for forbidden in ["app_id", "title", "\"name\"", "printable", "input_device"] {
+        assert!(
+            !text.contains(forbidden),
+            "the fixture contains {forbidden}"
+        );
+    }
+    for line in text.lines() {
+        let event = parse(line).unwrap();
+        let kind = kind(&event);
+        assert!(KINDS.contains(&kind), "event kind {kind}");
+        if kind == "key" {
+            let name = event.get("key").and_then(Json::as_str).unwrap_or("");
+            assert!(
+                modifier_code(name).is_some(),
+                "a key that is not a modifier: {name}"
+            );
+        }
+        let mut names = Vec::new();
+        fields(&event, &mut names);
+        for name in names {
+            assert!(FIELDS.contains(&name.as_str()), "field {name} in: {line}");
+        }
+    }
 }

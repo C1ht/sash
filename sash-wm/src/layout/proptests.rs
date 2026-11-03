@@ -20,6 +20,9 @@ enum Op {
         fixed: Option<(i32, i32)>,
         /// Where the pointer is (rule A), if anywhere.
         pointer: Option<(i32, i32)>,
+        /// It maps at once (focus moves to it); else focus stays until a later
+        /// `Focus` (its map, M9e).
+        mapped: bool,
     },
     /// Gives an unplaced floating window its size (the client's first buffer).
     Place(usize, (i32, i32)),
@@ -102,12 +105,14 @@ fn op() -> impl Strategy<Value = Op> {
             prop::option::of(any::<usize>()),
             prop::option::of(size()),
             prop::option::of((-500..4500i32, -500..4500i32)),
+            any::<bool>(),
         )
-            .prop_map(|(forced, parent, fixed, pointer)| Op::Open {
+            .prop_map(|(forced, parent, fixed, pointer, mapped)| Op::Open {
                 forced,
                 parent,
                 fixed,
                 pointer,
+                mapped,
             }),
         3 => (index, size()).prop_map(|(i, s)| Op::Place(i, s)),
         2 => index.prop_map(Op::Close),
@@ -150,6 +155,7 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
             parent,
             fixed,
             pointer,
+            mapped,
         } => {
             *next += 1;
             let limits = fixed
@@ -168,7 +174,11 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
             // its leaf becomes the new window's sibling.
             let under = pointer.and_then(|(x, y)| layout.tile_at(x, y));
             let focused = layout.focused();
-            layout.open(WindowId(*next), new);
+            if mapped {
+                layout.open(WindowId(*next), new);
+            } else {
+                layout.open_unfocused(WindowId(*next), new);
+            }
             let tiled = layout.mode(WindowId(*next)) == Some(Mode::Tiled);
             if let Some(target) = if tiled { under.or(focused) } else { focused } {
                 assert_eq!(
@@ -177,11 +187,15 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
                     "the new window splits the right leaf"
                 );
             }
-            assert_eq!(
-                layout.focused(),
-                Some(WindowId(*next)),
-                "a new window gets focus"
-            );
+            if mapped {
+                assert_eq!(
+                    layout.focused(),
+                    Some(WindowId(*next)),
+                    "a new window gets focus when it maps"
+                );
+            } else {
+                assert_eq!(layout.focused(), focused, "focus stays until the map");
+            }
         }
         Op::Place(i, size) => {
             if let Some(w) = pick(layout, i) {

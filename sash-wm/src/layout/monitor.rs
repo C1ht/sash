@@ -206,10 +206,18 @@ impl MonitorLayout {
         }
     }
 
-    /// Opens a window: its leaf splits the focused window's leaf; it starts in the
-    /// default mode (or floating if forced) and gets focus. A floating window has no
-    /// rectangle until `place` is called with the size the client chose.
+    /// Opens a window and focuses it, as if it mapped at once (tests).
+    #[cfg(test)]
     pub fn open(&mut self, window: WindowId, new: NewWindow) {
+        self.open_unfocused(window, new);
+        self.focus(window);
+    }
+
+    /// Opens a window: its leaf splits the tile under the pointer or the focused
+    /// window's leaf; it starts in the default mode (or floating if forced). Focus stays
+    /// where it is until the window maps. A floating window has no rectangle until
+    /// `place` is called with the size the client chose.
+    pub fn open_unfocused(&mut self, window: WindowId, new: NewWindow) {
         debug_assert!(!self.contains(window), "{window:?} opened twice");
         let state = WindowState {
             own_mode: self.default_mode,
@@ -231,7 +239,6 @@ impl MonitorLayout {
         };
         self.tree.insert_with_mode(window, next_to, state.mode());
         self.windows.insert(window, state);
-        self.focus(window);
     }
 
     /// The tiled window whose tile contains (x, y), whatever is drawn above it.
@@ -1010,7 +1017,11 @@ impl MonitorLayout {
         }
         match self.focused {
             Some(f) => assert!(self.contains(f), "focus on an unknown window"),
-            None => assert!(self.windows.is_empty(), "windows exist but none is focused"),
+            // Only windows that never had focus (opened, not mapped yet: M9e).
+            None => assert!(
+                self.windows.keys().all(|w| !self.history.contains(w)),
+                "windows that had focus exist but none is focused"
+            ),
         }
         for (window, state) in &self.windows {
             if let (Mode::Floating, Some(snap), Some(rect)) =

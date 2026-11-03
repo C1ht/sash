@@ -16,10 +16,9 @@
 //! Shift held) and, when the pointer is in a snap zone, shows a preview and snaps the
 //! window on release. Pulling a snapped window out restores its pre-snap size.
 
-use std::{
-    process::Command,
-    time::{Duration, Instant},
-};
+#[cfg(not(test))]
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use smithay::{
     desktop::{Window, WindowSurfaceType, utils::under_from_surface_tree},
@@ -277,7 +276,8 @@ impl Sash {
                 pointer,
             };
             record_context!(self, "open window");
-            self.windows.layout.open(id, new);
+            // Focus stays where it is until the window maps.
+            self.windows.layout.open_unfocused(id, new);
             self.arrange();
             return;
         }
@@ -293,6 +293,8 @@ impl Sash {
                 record_context!(self, "map");
                 let geometry = window.geometry().size;
                 self.windows.layout.place(id, (geometry.w, geometry.h));
+                // A new window gets focus when it maps (the last one to map wins).
+                self.windows.layout.focus(id);
                 changed = true;
             }
         } else if !has_buffer {
@@ -1023,6 +1025,7 @@ impl Sash {
         }
     }
 
+    #[cfg(not(test))]
     fn spawn_terminal(&self) {
         let spawned = Command::new("foot")
             .env("WAYLAND_DISPLAY", &self.keybinds.display_name)
@@ -1032,6 +1035,14 @@ impl Sash {
             Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
             Err(err) => tracing::warn!(%err, "could not start foot"),
         }
+    }
+
+    /// Tests start no foot: the display it would connect to is recorded.
+    #[cfg(test)]
+    fn spawn_terminal(&self) {
+        self.terminals_spawned
+            .borrow_mut()
+            .push(self.keybinds.display_name.clone());
     }
 }
 
