@@ -56,7 +56,8 @@ change this file without the owner's approval.
 - New window: splits the tiled window under the pointer, otherwise the
   focused leaf (owner, after stage C run 1: rule A), along the longer
   side of its rectangle, ratio 0.5; the new window becomes the second
-  child and gets focus. With no windows, it fills the output. "Under the
+  child and gets focus when it maps (see "Focus on open"). With no
+  windows, it fills the output. "Under the
   pointer" means the tile that contains the pointer position, also when a
   floating, maximized or fullscreen window is drawn above it; the
   pointer outside every tile (or no pointer) means the focused leaf. A
@@ -65,6 +66,13 @@ change this file without the owner's approval.
   spawned by a keybind. No preselect keys. A new window while the
   default mode is floating still gets its placeholder next to the
   focused leaf.
+- Focus on open (owner, M9e): focus (keyboard and keybind target) stays
+  on the previous window until the new window maps (its first buffer
+  commit), then moves to it. Keys typed before the map go to the old
+  window; nothing is queued. A window closed, or whose client crashes,
+  before it maps leaves focus where it was. Of several windows opening
+  at once, focus ends on the last one that mapped. Until the map, the
+  "focused leaf" of rule A is the previous window.
 - Rule A, documented behaviour (owner, after m9c; not bugs):
   - A pointer resting over another window decides keybind spawns too:
     mod+Return splits the tile under the pointer, not the window being
@@ -392,7 +400,9 @@ change this file without the owner's approval.
   pointer position before each button, key or window event, plus every
   25th motion during a drag), with no typed keys and no device names;
   under 200 KB and a test time under 10 s. The full bundle is never
-  copied into the repository.
+  copied into the repository. A test checks every real-hardware
+  fixture: only those event kinds, only modifier keys, no app ids,
+  titles or device names (owner, M9e).
 
 ## Keybinds
 
@@ -550,6 +560,14 @@ change this file without the owner's approval.
   Skipping the re-check when an event does not concern our connector
   is not possible with Smithay 0.7's udev events (they carry only the
   device number); open, for the owner.
+- Resume timing points (owner, M9e; recording and debug log only, no
+  behaviour change): `resume_step` events and debug lines for the
+  resume start, each resume step (activate, state reset, libinput
+  restored, redraw) with its duration, the first frame start, its draw
+  and commit times (the first modeset), the first flip, the first
+  input event, and every connector re-check with its duration; each
+  with the time since the resume began, so resume-to-first-frame splits
+  into its parts.
 - Page flips refused around a pause (owner, M9d): a frame whose commit
   fails with "Permission denied" (DRM master already gone while the
   session is pausing) is an expected race: logged at debug level and
