@@ -361,7 +361,8 @@ change this file without the owner's approval.
   prove the default bundle has no window contents and that typed text
   is in no file of it, pictures included.
 - Hotkey: mod+F11 (Super on DRM, Alt nested) marks a bug and writes a
-  bundle. It clashes with no keybind (a test checks the table) and is
+  bundle. Each press is logged, with where the bundle went, or why
+  writing it failed (owner, M9d). It clashes with no keybind (a test checks the table) and is
   never forwarded to clients. Not a keybind-table row: it exists only in
   builds with the feature.
 - A 60-second in-memory ring buffer; nothing is written until the
@@ -383,6 +384,15 @@ change this file without the owner's approval.
   test build), not as a sash-wm flag: the stand-in clients use the
   test-only Wayland client library. Bundles from real hardware become
   regression tests (fixtures with no typed text).
+- Replay harness (owner, M9d; test code only): the stand-ins read their
+  events while the replay runs; a replay has a longer timeout than
+  other harness tests; the replay's own recorder is not limited to
+  60 s. A fixture from real hardware keeps only the event kinds the
+  replay uses, up to the last matching snapshot, downsampled (the last
+  pointer position before each button, key or window event, plus every
+  25th motion during a drag), with no typed keys and no device names;
+  under 200 KB and a test time under 10 s. The full bundle is never
+  copied into the repository.
 
 ## Keybinds
 
@@ -525,6 +535,25 @@ change this file without the owner's approval.
   cursor plane is moved through that frame (only the cursor plane
   changes, nothing else is rendered again) when the driver gives a
   cursor plane; otherwise the arrow is composited.
+- Edge frames (owner, M9d): a pointer motion requests a frame only
+  when the final, clamped pointer position changed or the cursor image
+  changed. This holds during drags too: a motion that leaves the
+  clamped position where it was (the pointer pinned at a screen edge)
+  changes nothing and requests no frame.
+- Connector re-check after udev events (owner, M9d): udev change events
+  of the DRM device are merged: the first one arms a 200 ms window
+  (constant), and one re-check runs when it ends, whatever more events
+  arrive inside it. On resume, libinput is restored before any
+  re-check runs (a re-check pending at resume runs only after the input
+  devices are back). The re-check itself, a forced probe of the
+  connector, and the hotplug behaviour it drives are unchanged.
+  Skipping the re-check when an event does not concern our connector
+  is not possible with Smithay 0.7's udev events (they carry only the
+  device number); open, for the owner.
+- Page flips refused around a pause (owner, M9d): a frame whose commit
+  fails with "Permission denied" (DRM master already gone while the
+  session is pausing) is an expected race: logged at debug level and
+  counted; the count is logged with the next session pause or resume.
 - Mode selection (owner, after M9 stage B), no setting:
   1. Interlaced modes are ignored.
   2. Native resolution: if the physical size is known, the largest
