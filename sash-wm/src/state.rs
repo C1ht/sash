@@ -12,8 +12,7 @@ use smithay::{
     },
     wayland::{
         compositor::CompositorState, cursor_shape::CursorShapeManagerState,
-        presentation::PresentationState, selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState, shm::ShmState,
+        presentation::PresentationState, shell::xdg::XdgShellState, shm::ShmState,
     },
 };
 
@@ -35,7 +34,6 @@ pub struct Protocols {
     pub compositor: CompositorState,
     pub shm: ShmState,
     pub xdg_shell: XdgShellState,
-    pub data_device: DataDeviceState,
     pub seat: SeatState<Sash>,
     #[expect(
         dead_code,
@@ -51,7 +49,6 @@ impl Protocols {
             compositor: CompositorState::new::<Sash>(display),
             shm: ShmState::new::<Sash>(display, Vec::new()),
             xdg_shell: XdgShellState::new::<Sash>(display),
-            data_device: DataDeviceState::new::<Sash>(display),
             seat: SeatState::new(),
             cursor_shape: CursorShapeManagerState::new::<Sash>(display),
         }
@@ -71,6 +68,8 @@ pub struct Sash {
     pub output: Option<Output>,
     pub windows: Windows,
     pub popups: Popups,
+    /// Clipboard and drag and drop (M10).
+    pub clipboard: crate::data_device::DataDevices,
     pub dmabufs: Dmabufs,
     pub cursor: Cursor,
     /// Snap preview and fullscreen backdrop.
@@ -111,6 +110,7 @@ impl Sash {
         socket_name: OsString,
     ) -> Self {
         let mut protocols = Protocols::advertise(&display_handle);
+        let clipboard = crate::data_device::DataDevices::new(&display_handle);
         let mut seat = protocols.seat.new_wl_seat(&display_handle, "seat0");
         if let Err(err) =
             seat.add_keyboard(XkbConfig::default(), KEY_REPEAT_DELAY_MS, KEY_REPEAT_RATE)
@@ -127,6 +127,7 @@ impl Sash {
             output: None,
             windows: Windows::new(),
             popups: Popups::default(),
+            clipboard,
             dmabufs: Dmabufs::default(),
             cursor: Cursor::default(),
             overlay: Overlay::new(),
@@ -179,6 +180,9 @@ impl Sash {
         }
         if let Some((surface, _)) = self.cursor_surface() {
             send_frames_surface_tree(&surface, output, time, None, |_, _| Some(output.clone()));
+        }
+        if let Some((icon, _)) = self.drag_icon() {
+            send_frames_surface_tree(&icon, output, time, None, |_, _| Some(output.clone()));
         }
         self.space.refresh();
     }

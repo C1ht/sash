@@ -64,6 +64,21 @@ pub enum Action {
     ClickFocus,
 }
 
+impl Action {
+    /// Whether the action moves keyboard focus (it cancels a drag and drop first).
+    pub fn changes_focus(self) -> bool {
+        matches!(
+            self,
+            Action::Focus(_)
+                | Action::CycleNext
+                | Action::CyclePrevious
+                | Action::CloseFocused
+                | Action::Swap(_)
+                | Action::Quit
+        )
+    }
+}
+
 /// Which modifiers a binding needs, besides nothing else being held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mods {

@@ -47,6 +47,8 @@ use wayland_protocols::xdg::shell::client::{
     xdg_wm_base::{self, XdgWmBase},
 };
 
+pub mod data;
+
 pub const WINDOW_SIZE: (i32, i32) = (100, 100);
 
 /// Globals the client bound and the events it saw.
@@ -113,6 +115,8 @@ pub struct Events {
     /// main_device of the default dmabuf feedback.
     pub dmabuf_main_device: Option<u64>,
     pub dmabuf_feedback_done: bool,
+    /// Clipboard and drag and drop (client/data.rs).
+    pub data: data::DataEvents,
 }
 
 /// What a test popup asks for (an xdg_positioner).
@@ -672,6 +676,9 @@ impl Dispatch<WlRegistry, ()> for Events {
             "xdg_wm_base" => events.wm_base = Some(registry.bind(name, version.min(3), qh, ())),
             "wl_seat" => {
                 events.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ()));
+            }
+            "wl_data_device_manager" => {
+                events.data.manager = Some(registry.bind(name, version.min(3), qh, ()))
             }
             _ => {}
         }

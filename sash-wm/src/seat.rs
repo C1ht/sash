@@ -35,6 +35,8 @@ enum Intercepted {
     /// mod+F11 with debug recording on: mark a bug and write a bundle.
     #[cfg(feature = "debug-record")]
     DebugMark,
+    /// Escape during a drag and drop: cancel it.
+    CancelDrag,
 }
 
 impl SeatHandler for Sash {
@@ -48,6 +50,11 @@ impl SeatHandler for Sash {
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.set_cursor(image);
+    }
+
+    /// Keyboard focus moved: the selection is offered to the newly focused client only.
+    fn focus_changed(&mut self, _seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        self.data_focus_changed(crate::data_device::client_of(focused));
     }
 }
 
@@ -167,6 +174,11 @@ impl Sash {
                                 (sym - first + 1) as i32,
                             )));
                         }
+                        // Escape cancels a drag and drop (never delivered).
+                        if state.clipboard.drag.is_some() && key.modified_sym() == Keysym::Escape {
+                            state.keybinds.swallowed.push(code);
+                            return FilterResult::Intercept(Some(Intercepted::CancelDrag));
+                        }
                         // mod+F11 marks a bug for the debug recorder (never a client's key).
                         #[cfg(feature = "debug-record")]
                         if state.recorder.is_some()
@@ -210,8 +222,13 @@ impl Sash {
         match action.flatten() {
             Some(Intercepted::Action(action)) => {
                 record!(self, "keybind", "action" => format!("{action:?}"));
+                // A keybind that changes focus cancels a drag and drop first.
+                if action.changes_focus() {
+                    self.cancel_drag("focus keybind");
+                }
                 self.run_action(action)
             }
+            Some(Intercepted::CancelDrag) => self.cancel_drag("Escape"),
             #[cfg(feature = "debug-record")]
             Some(Intercepted::DebugMark) => crate::record::mark(self),
             Some(Intercepted::Vt(vt)) => {

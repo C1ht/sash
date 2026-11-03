@@ -43,6 +43,8 @@ impl CompositorHandler for Sash {
             self.popup_committed(&root);
         } else if self.cursor.is_surface(&root) {
             self.request_redraw();
+        } else if self.drag_icon_committed(&root) {
+            // The drag icon: drawn at the pointer, redrawn.
         } else {
             self.root_committed(&root);
         }

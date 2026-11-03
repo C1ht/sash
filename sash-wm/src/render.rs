@@ -250,6 +250,18 @@ where
     let scale = Scale::from(scale);
     let dragged = state.dragged_window();
     let mut elements = Vec::new();
+    // A drag-and-drop icon is above everything: windows, popups and overlays.
+    if let Some((icon, origin)) = state.drag_icon() {
+        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+            renderer,
+            &icon,
+            origin.to_physical_precise_round(scale),
+            scale,
+            1.0,
+            Kind::Unspecified,
+        );
+        elements.extend(surfaces.into_iter().map(OutputElement::Window));
+    }
     let mut preview_drawn = false;
     let visible_windows = state.visible_windows();
     let popup_elements = |renderer: &mut R, visible: &Visible<'_>| {

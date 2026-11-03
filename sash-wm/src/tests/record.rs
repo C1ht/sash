@@ -45,7 +45,8 @@ fn type_keys(h: &mut Harness, keys: &[u32]) {
 /// events, but no file contains the text, nor any of its letters as a key name.
 #[test]
 fn a_typed_password_never_reaches_a_bundle() {
-    let dir = record::tests::scratch_dir("hunter2");
+    // Not named after the password: the directory's name is in the log.
+    let dir = record::tests::scratch_dir("typed-password");
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     let bundle_dir = dir.clone();
@@ -235,5 +236,122 @@ fn a_bundle_that_cannot_be_written_is_reported_and_the_hotkey_still_works() {
     record::flush_bundle(&mut harness.server.state);
     let bundles = fs::read_dir(&dir).unwrap().count();
     assert_eq!(bundles, 1, "the next press writes a bundle");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Clipboard and drag-and-drop data never reach a bundle (owner, M10): a marker in a
+/// copied payload and in a MIME type name, copied, pasted, dragged and dropped with
+/// every log line captured at trace level, is in no bundle file (events, state, log,
+/// screenshots); the recorder still saw that a selection and a drop happened.
+#[test]
+fn clipboard_and_drag_data_never_reach_a_bundle() {
+    use std::io::Read;
+
+    use smithay::backend::input::ButtonState;
+    use wayland_client::protocol::wl_data_device_manager::DndAction;
+
+    use crate::seat::BTN_LEFT;
+
+    const MIME: &str = "x-sash/MIME-MARKER-91c4";
+    const PAYLOAD: &[u8] = b"PAYLOAD-MARKER-91c4";
+    // One global subscriber for the test binary (a thread-local one misses callsites
+    // other tests hit first); in tests it writes only to the recording thread's log.
+    static LOG: std::sync::Once = std::sync::Once::new();
+    LOG.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("sash_wm=trace,smithay=debug")
+            .with_writer(record::LogWriter::default)
+            .try_init();
+    });
+    let dir = record::tests::scratch_dir("clipboard-marker");
+    let mut harness = Harness::new();
+    let config = Config {
+        dir: dir.clone(),
+        session: false,
+        keys_full: false,
+        screenshots_full: false,
+    };
+    harness.server.state.recorder = Some(Recorder::new(config, Instant::now()).unwrap());
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        c1.data_device();
+        let w1 = c1.map_window();
+        c1.copy(&[MIME, "text/plain"], PAYLOAD.to_vec());
+        let mut c2 = TestClient::connect(&socket);
+        c2.data_device();
+        let _w2 = c2.map_window();
+        // Paste in c2 (focused).
+        let offer = c2.events.data.selection_offer().unwrap();
+        let mut reader = c2.receive(&offer, MIME);
+        c2.roundtrip();
+        c1.roundtrip();
+        let mut got = Vec::new();
+        reader.read_to_end(&mut got).unwrap();
+        assert_eq!(got, PAYLOAD);
+        // Drag from c1 to c2 and drop.
+        server.on_server(|h| {
+            h.pointer_to(100.0, 100.0);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+        });
+        c1.roundtrip();
+        let serial = c1.events.button_serial.unwrap();
+        let source = c1.new_source(&[MIME], PAYLOAD.to_vec(), Some(DndAction::Copy));
+        c1.start_drag(Some(&source), &w1.surface, None, serial);
+        server.on_server(|h| h.pointer_to(600.0, 300.0));
+        c2.roundtrip();
+        let drag = c2.events.data.drag_offer().unwrap();
+        drag.accept(0, Some(MIME.into()));
+        drag.set_actions(DndAction::Copy, DndAction::Copy);
+        c2.roundtrip();
+        server.on_server(|h| h.button(BTN_LEFT, ButtonState::Released));
+        c2.roundtrip();
+        let mut reader = c2.receive(&drag, MIME);
+        c2.roundtrip();
+        c1.roundtrip();
+        let mut got = Vec::new();
+        reader.read_to_end(&mut got).unwrap();
+        assert_eq!(got, PAYLOAD);
+        drag.finish();
+        c2.roundtrip();
+        c1.join_writers();
+        server.on_server(|h| {
+            h.chord(&[KEY_ALT, KEY_F11]);
+            record::flush_bundle(&mut h.server.state);
+        });
+    });
+    let mut files = Vec::new();
+    files_under(&dir, &mut files);
+    assert!(files.iter().any(|f| f.ends_with("log.txt")));
+    assert!(
+        files
+            .iter()
+            .any(|f| f.extension().is_some_and(|e| e == "png"))
+    );
+    let mut events = String::new();
+    for file in &files {
+        let bytes = fs::read(file).unwrap();
+        for marker in [&b"MARKER-91c4"[..], b"x-sash/", b"text/plain"] {
+            assert!(
+                !bytes.windows(marker.len()).any(|w| w == marker),
+                "{} contains {:?}",
+                file.display(),
+                String::from_utf8_lossy(marker)
+            );
+        }
+        if file.ends_with("events.jsonl") {
+            events = String::from_utf8_lossy(&bytes).into_owned();
+        }
+        if file.ends_with("log.txt") {
+            let log = String::from_utf8_lossy(&bytes);
+            assert!(log.contains("debug hotkey"), "the log was captured");
+        }
+    }
+    for kind in ["selection_set", "dnd_start", "dnd_drop"] {
+        assert!(
+            events.contains(&format!(r#""kind":"{kind}""#)),
+            "{kind} recorded"
+        );
+    }
     let _ = fs::remove_dir_all(&dir);
 }

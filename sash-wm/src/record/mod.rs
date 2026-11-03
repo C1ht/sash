@@ -24,7 +24,7 @@ use std::{
     io::{self, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::Mutex,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -327,9 +327,20 @@ struct LogTee {
     session: Option<File>,
 }
 
+#[cfg(not(test))]
 fn log_tee() -> &'static Mutex<Option<LogTee>> {
-    static TEE: OnceLock<Mutex<Option<LogTee>>> = OnceLock::new();
+    static TEE: std::sync::OnceLock<Mutex<Option<LogTee>>> = std::sync::OnceLock::new();
     TEE.get_or_init(|| Mutex::new(None))
+}
+
+/// Tests: one tee per thread (each test's server runs on its own thread), so tests
+/// running at the same time do not take over each other's log.
+#[cfg(test)]
+fn log_tee() -> &'static Mutex<Option<LogTee>> {
+    thread_local! {
+        static TEE: &'static Mutex<Option<LogTee>> = Box::leak(Box::new(Mutex::new(None)));
+    }
+    TEE.with(|tee| *tee)
 }
 
 /// The tracing writer: stderr, plus the recorder's log ring while recording is on.
@@ -340,6 +351,8 @@ pub struct LogWriter {
 
 impl Write for LogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Tests keep stderr quiet; the tee still gets every line.
+        #[cfg(not(test))]
         io::stderr().write_all(buf)?;
         self.line.extend_from_slice(buf);
         Ok(buf.len())
