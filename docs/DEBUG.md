@@ -42,6 +42,9 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
 - grabs (moves, resizes, popup grabs) starting and ending;
 - windows: map, unmap, configure sent, configure acknowledged, commit;
 - every layout operation, with the layout before and after;
+- clipboard and drag and drop (M10): `selection_set` and `selection_cleared` (with the
+  window and a reason), `dnd_start`, `dnd_drop` (window, action) and `dnd_cancel` (a
+  reason); never MIME type names, sizes or the data itself;
 - frames: start and end, page flip completed, whether the cursor went to the hardware
   cursor plane, was composited or was hidden (`frame_end`, field `cursor`); on DRM a
   `cursor_path` event each time that changes (`path`, and the `before` path);

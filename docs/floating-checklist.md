@@ -338,3 +338,36 @@ Setup as above (debug build, mod = Alt). Open two windows (foot).
 - [ ] **Keys stay with sash-wm.** None of Y, U, B, N reaches the app when pressed with Alt.
 
 Notes:
+
+## 15. Clipboard and drag and drop (M10)
+
+Setup as above (debug build, mod = Alt, nested). Use throwaway profiles only and keep
+anything private off the screen: `foot`, `pavucontrol` with `XDG_CONFIG_HOME` set to a
+fresh temporary directory, and Firefox with `--profile` on a new empty directory and a
+local test page (no network). Rules: CLAUDE.md, "Clipboard and drag and drop (M10)".
+
+### Clipboard
+
+- [ ] **Text, foot to foot.** Select text in one foot, Ctrl+Shift+C; focus another foot, Ctrl+Shift+V: the text is pasted.
+- [ ] **Text, foot to Firefox and back.** Copy in foot, paste into a text field on the test page (Ctrl+V); copy in the page (Ctrl+C), paste into foot.
+- [ ] **Image.** Right-click an image on the test page, "Copy Image"; paste into the page's editable area (or another app that takes images): the image arrives.
+- [ ] **Only the focused app reads it.** Copy in foot; the clipboard is not offered to an app until it has keyboard focus (paste works right after focusing it, never in a window you did not focus).
+- [ ] **The copying app closes.** Copy in foot, close that foot (Alt+Q): pasting elsewhere gives nothing (the selection ended with its app), and nothing hangs.
+- [ ] **Large copy.** Copy a big block (for example the output of `seq 1000000` selected in foot): pasting does not freeze sash-wm (the pointer keeps moving smoothly while it transfers).
+- [ ] **No middle-click paste.** Selecting text and middle-clicking elsewhere pastes nothing (no primary selection, a privacy decision).
+- [ ] **Nested limit.** Copying in Hyprland and pasting into a window inside sash-wm does nothing, and the other way round (no host clipboard bridge).
+
+### Drag and drop
+
+- [ ] **A file name.** Drag a file from a file list (or a link from the test page) into foot or a text field: its name or address is inserted.
+- [ ] **Text between apps.** Select text on the test page and drag it into foot or another text field.
+- [ ] **The icon.** While dragging, the drag image (if the app provides one) follows the pointer, above every window, popup and the snap preview; it never blocks the window under it from receiving the drop.
+- [ ] **Escape.** Start a drag, press Escape: the drag ends, nothing is dropped, Escape does not reach the app.
+- [ ] **A focus keybind.** Start a drag, press Alt+H (or Alt+Tab): the drag ends and focus moves.
+- [ ] **Drop on nothing.** Drop on an empty part of the output (with floating windows) or on a window that does not take the data: nothing happens, both apps keep working.
+- [ ] **Edge.** Drag to the very edge of the output over a window and drop: it goes to that window.
+- [ ] **Popups.** Drag over an open menu of another app: the menu gets the drag (only if it accepts drops; otherwise the drop is cancelled).
+- [ ] **Alt+drag is separate.** Alt+drag still moves windows and shows the snap preview as before; a drag and drop cannot start during it, and Alt+drag does nothing during a drag and drop.
+- [ ] **An app closes mid-drag.** Start a drag from foot to Firefox, close the source (from another terminal: `kill <pid of that foot>`) or the target: the drag ends, the pointer works again at once.
+
+Notes:

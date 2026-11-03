@@ -662,6 +662,10 @@ change this file without the owner's approval.
   only from the client that got that press. Any other start_drag is
   ignored, as the protocol allows. (A touch down will count the same
   once sash-wm handles touch input; it has none yet.)
+- A source used again (set_selection or start_drag) is accepted: the
+  protocol only says used_source "may" be sent, and Firefox sets the
+  same source again (found in the M10 by-hand run; sending it crashed
+  Firefox). set_actions after a source was used stays an error.
 - Drag icon: a surface with the dnd_icon role (another role gives the
   protocol's role error). Drawn above every window, popup and overlay
   (the snap preview included), at the pointer plus its offset (the

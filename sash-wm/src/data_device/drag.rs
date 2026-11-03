@@ -118,14 +118,8 @@ impl Sash {
             device.post_error(wl_data_device::Error::Role, "the icon has another role");
             return;
         }
-        if let Some(source) = &source
-            && !source_data(source).take_use()
-        {
-            device.post_error(
-                wl_data_device::Error::UsedSource,
-                "the source was already used",
-            );
-            return;
+        if let Some(source) = &source {
+            source_data(source).mark_used();
         }
         let Some(start) = pointer.grab_start_data() else {
             return;
@@ -204,13 +198,14 @@ impl Sash {
                 device.motion(time, at.x, at.y);
             }
         }
-        // The icon follows the pointer.
+        // The icon follows the pointer (and the input-to-frame latency is logged).
         if self
             .clipboard
             .drag
             .as_ref()
             .is_some_and(|d| d.icon.is_some())
         {
+            self.windows.note_input(std::time::Instant::now());
             self.request_redraw();
         }
     }

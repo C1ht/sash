@@ -482,14 +482,18 @@ fn data_device_protocol_errors() {
         let s = c.new_source(&[TEXT], vec![], Some(DndAction::Copy));
         device.set_selection(Some(&s), 0);
         expect_error(&mut c, "wl_data_source", 1);
-        // A source used twice: used_source (1) on the device.
+        // A source used twice is accepted (the protocol says used_source "may" be sent;
+        // Firefox sets the same source again), but set_actions after use is an error.
         let mut c = TestClient::connect(&socket);
         let _w = c.map_window();
         let device = c.data_device();
         let s = c.new_source(&[TEXT], vec![], None);
         device.set_selection(Some(&s), 0);
         device.set_selection(Some(&s), 0);
-        expect_error(&mut c, "wl_data_device", 1);
+        c.roundtrip();
+        assert!(c.conn.protocol_error().is_none(), "reuse is no error");
+        s.set_actions(DndAction::Copy);
+        expect_error(&mut c, "wl_data_source", 1);
         // finish on a selection offer: invalid_finish (0); set_actions: invalid_offer (3).
         for (finish, code) in [(true, 0), (false, 3)] {
             let mut c = TestClient::connect(&socket);
@@ -538,5 +542,47 @@ fn data_device_protocol_errors() {
         let mut c = TestClient::connect(&socket);
         let _w = c.map_window();
         server.on_server(|h| assert!(h.mapped_windows() >= 1));
+    });
+}
+
+/// Measurement (M10): during a drag with an icon, the time from a pointer motion to
+/// the frame that shows the icon at the new position, as sash-wm sees it (headless: no
+/// GPU, so this is sash-wm's own share of pointer-to-frame latency).
+#[test]
+fn pointer_to_frame_latency_during_a_drag() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut t = two_windows(&socket);
+        let serial = press(&server, &mut t.c1, 100.0, 100.0);
+        let source =
+            t.c1.new_source(&[TEXT], b"x".to_vec(), Some(DndAction::Copy));
+        let icon = t.c1.icon_surface((32, 32));
+        let origin = t.w1.surface.clone();
+        t.c1.start_drag(Some(&source), &origin, Some(&icon), serial);
+        server.on_server(|h| {
+            let mut samples = Vec::new();
+            for i in 0..500 {
+                let x = 100.0 + (i % 600) as f64;
+                let start = std::time::Instant::now();
+                let frames = h.frames;
+                h.pointer_to(x, 300.0);
+                while h.frames == frames {
+                    h.step();
+                }
+                samples.push(start.elapsed());
+            }
+            samples.sort();
+            let p = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize];
+            println!(
+                "pointer to frame during a drag (headless, {} motions): p50 {:?} p99 {:?} max {:?}",
+                samples.len(),
+                p(0.5),
+                p(0.99),
+                p(1.0)
+            );
+            assert!(p(0.5) < std::time::Duration::from_millis(5));
+        });
+        release(&server);
     });
 }

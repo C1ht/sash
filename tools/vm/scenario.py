@@ -546,6 +546,27 @@ try:
           seen == wanted, f"{len(seen)} of {len(wanted)}: missing {sorted(set(wanted) - set(seen))}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
+    # 17c. Clipboard (M10): copy in one client, paste in another, on the DRM backend.
+    # wl-copy and wl-paste (wl-clipboard, apt in the guest; owner, M10) each map a small
+    # window to get keyboard focus, since sash-wm offers no data-control protocol.
+    if sh(vm, "command -v wl-copy || true").strip() == "":
+        sh(vm, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "
+               "wl-clipboard >/dev/null 2>&1; true", timeout=600)
+    start(vm, windows=1)
+    as_user = ("runuser -u sash -- env XDG_RUNTIME_DIR=/run/user/$(id -u sash) "
+               "WAYLAND_DISPLAY=wayland-1")
+    sh(vm, f"cd /tmp && printf 'sash-vm-clipboard-check' | {as_user} timeout 10 wl-copy; sleep 1")
+    pasted = sh(vm, f"cd /tmp && {as_user} timeout 10 wl-paste -n 2>&1; true")
+    sh(vm, f"cd /tmp && printf 'second copy' | {as_user} timeout 10 wl-copy; sleep 1")
+    pasted2 = sh(vm, f"cd /tmp && {as_user} timeout 10 wl-paste -n 2>&1; true")
+    check("clipboard: wl-copy then wl-paste between two clients on DRM; a second copy "
+          "replaces the first",
+          pasted.strip() == "sash-vm-clipboard-check" and pasted2.strip() == "second copy"
+          and active(vm) == "active",
+          f"pasted {pasted.strip()!r}, then {pasted2.strip()!r}")
+    # wl-copy, serving the selection in the background, exits with the session.
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
     # 18. A session recorded on the DRM backend for replay (tools/replay.sh): windows
     # spawned by Super+Return with the pointer in different places (rule A), a float, a
     # Super+drag, a snap, a close; Super+F11 writes the bundle. Nothing is typed. The

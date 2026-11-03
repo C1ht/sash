@@ -182,9 +182,11 @@ impl SourceData {
         self.mimes.lock().unwrap().contains(name)
     }
 
-    /// Marks the source used; false if it was used before.
-    fn take_use(&self) -> bool {
-        !std::mem::replace(&mut *self.used.lock().unwrap(), true)
+    /// Marks the source used (set_actions is refused after that). A source used again
+    /// is accepted: the protocol only says used_source "may" be sent, and Firefox sets
+    /// the same source as the selection again.
+    fn mark_used(&self) {
+        *self.used.lock().unwrap() = true;
     }
 }
 
@@ -472,13 +474,7 @@ impl Dispatch<WlDataDevice, ()> for Sash {
                         );
                         return;
                     }
-                    if !data.take_use() {
-                        device.post_error(
-                            wl_data_device::Error::UsedSource,
-                            "the source was already used",
-                        );
-                        return;
-                    }
+                    data.mark_used();
                 }
                 state.set_selection(source);
             }
