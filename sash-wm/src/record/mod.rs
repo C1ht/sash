@@ -126,6 +126,9 @@ pub struct Counters {
     pub frames_rendered: Cell<u64>,
     pub flips_completed: Cell<u64>,
     pub cursor_updates: Cell<u64>,
+    pub cursor_plane_frames: Cell<u64>,
+    pub cursor_composited_frames: Cell<u64>,
+    pub pointer_frame_requests: Cell<u64>,
 }
 
 impl Counters {
@@ -133,7 +136,7 @@ impl Counters {
         counter.set(counter.get() + 1);
     }
 
-    fn take(&self) -> [(&'static str, u64); 6] {
+    fn take(&self) -> [(&'static str, u64); 9] {
         [
             ("pointer_events_in", self.pointer_in.take()),
             ("position_updates", self.position_updates.take()),
@@ -141,6 +144,12 @@ impl Counters {
             ("frames_rendered", self.frames_rendered.take()),
             ("flips_completed", self.flips_completed.take()),
             ("cursor_updates", self.cursor_updates.take()),
+            ("cursor_plane_frames", self.cursor_plane_frames.take()),
+            (
+                "cursor_composited_frames",
+                self.cursor_composited_frames.take(),
+            ),
+            ("pointer_frame_requests", self.pointer_frame_requests.take()),
         ]
     }
 }
@@ -405,6 +414,7 @@ pub struct Recorder {
     last_layout: Option<Json>,
     in_drag: bool,
     last_cursor: Option<(i32, i32)>,
+    last_cursor_path: Option<&'static str>,
     shot_seq: u32,
 }
 
@@ -451,6 +461,7 @@ impl Recorder {
             last_layout: None,
             in_drag: false,
             last_cursor: None,
+            last_cursor_path: None,
             shot_seq: 0,
         };
         recorder.banner(pruned);
@@ -561,6 +572,27 @@ impl Recorder {
         if self.last_cursor != Some(at) {
             self.last_cursor = Some(at);
             Counters::bump(&self.counters.cursor_updates);
+        }
+    }
+
+    /// A frame went on screen with the cursor drawn by `path` (DRM: "plane",
+    /// "composited" or "hidden"): counts plane and composited frames, and logs a
+    /// `cursor_path` event when the path changes.
+    pub fn cursor_path(&mut self, path: &'static str) {
+        match path {
+            "plane" => Counters::bump(&self.counters.cursor_plane_frames),
+            "composited" => Counters::bump(&self.counters.cursor_composited_frames),
+            _ => {}
+        }
+        if self.last_cursor_path != Some(path) {
+            let before = self.last_cursor_path.replace(path);
+            self.push(
+                "cursor_path",
+                vec![
+                    ("path", path.into()),
+                    ("before", before.map_or(Json::Null, Json::from)),
+                ],
+            );
         }
     }
 

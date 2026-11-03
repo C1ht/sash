@@ -694,6 +694,8 @@ impl Drm {
             &mut self.renderer,
             &self.arrow,
         ));
+        #[cfg(feature = "debug-record")]
+        let cursor_shown = !elements.is_empty();
         elements.extend(render::output_elements(state, &mut self.renderer, 1.0));
         let result = self.compositor.render_frame(
             &mut self.renderer,
@@ -703,6 +705,12 @@ impl Drm {
         );
         #[cfg(feature = "debug-record")]
         let cursor_on_plane = result.as_ref().is_ok_and(|f| f.cursor_element.is_some());
+        #[cfg(feature = "debug-record")]
+        let cursor = match (cursor_shown, cursor_on_plane) {
+            (false, _) => "hidden",
+            (true, true) => "plane",
+            (true, false) => "composited",
+        };
         let queued = match result {
             Ok(frame) if frame.is_empty => false,
             Ok(_) => {
@@ -722,7 +730,7 @@ impl Drm {
         };
         self.pacer.rendered(queued, started);
         #[cfg(feature = "debug-record")]
-        self.record_frame(state, queued, cursor_on_plane, start.elapsed());
+        self.record_frame(state, queued, cursor, start.elapsed());
         if queued {
             self.queued = Some(QueuedFrame {
                 render_us: start.elapsed().as_micros() as u64,
@@ -736,22 +744,24 @@ impl Drm {
     /// Debug recording: the frame's end (where the cursor went), the counters, and a
     /// screenshot if one is due.
     #[cfg(feature = "debug-record")]
-    fn record_frame(&mut self, state: &mut Sash, queued: bool, on_plane: bool, took: Duration) {
+    fn record_frame(
+        &mut self,
+        state: &mut Sash,
+        queued: bool,
+        cursor: &'static str,
+        took: Duration,
+    ) {
         if state.recorder.is_none() {
             return;
         }
         let pointer = state.seat.get_pointer().map(|p| p.current_location());
-        let cursor = match (pointer, on_plane) {
-            (None, _) => "none",
-            (Some(_), true) => "plane",
-            (Some(_), false) => "composited",
-        };
         if let Some(recorder) = state.recorder.as_mut() {
             if queued {
                 crate::record::Counters::bump(&recorder.counters.frames_rendered);
                 if let Some(p) = pointer {
                     recorder.cursor_drawn((p.x.round() as i32, p.y.round() as i32));
                 }
+                recorder.cursor_path(cursor);
             }
             recorder.push(
                 "frame_end",

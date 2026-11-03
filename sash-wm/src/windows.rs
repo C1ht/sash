@@ -257,11 +257,16 @@ impl Sash {
 
         if !mapped && !toplevel.is_initial_configure_sent() {
             // Initial commit (also after an unmap): enter the layout.
-            // Rule A: a new tiled window splits the tile under the pointer.
-            let pointer = self.seat.get_pointer().map(|p| {
-                let at = p.current_location();
-                (at.x.floor() as i32, at.y.floor() as i32)
-            });
+            // Rule A: a new tiled window splits the tile under the pointer; a pointer
+            // that has not moved since startup counts as none.
+            let pointer = self
+                .seat
+                .get_pointer()
+                .filter(|_| self.pointer_has_moved)
+                .map(|p| {
+                    let at = p.current_location();
+                    (at.x.floor() as i32, at.y.floor() as i32)
+                });
             let new = NewWindow {
                 forced,
                 parent,

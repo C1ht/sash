@@ -70,6 +70,7 @@ impl Sash {
         }
         let previous = pointer.current_focus();
         let moved = pointer.current_location() != location;
+        self.pointer_has_moved |= moved;
         let motion = MotionEvent {
             location,
             serial: SERIAL_COUNTER.next_serial(),
@@ -100,6 +101,10 @@ impl Sash {
             CursorImageStatus::Hidden => false,
         };
         if moved && drawn && self.cursor_frames.moved() {
+            #[cfg(feature = "debug-record")]
+            if let Some(recorder) = &self.recorder {
+                crate::record::Counters::bump(&recorder.counters.pointer_frame_requests);
+            }
             self.request_redraw();
         }
     }

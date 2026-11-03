@@ -296,3 +296,40 @@ fn config_from_the_environment() {
         "only \"1\" and \"full\" switch them on; screenshots are outlines by default"
     );
 }
+
+#[test]
+fn the_cursor_path_is_counted_and_logged_when_it_changes() {
+    let dir = scratch_dir("cursor-path");
+    let config = Config {
+        dir: dir.clone(),
+        session: false,
+        keys_full: false,
+        screenshots_full: false,
+    };
+    let mut recorder = Recorder::new(config, Instant::now()).unwrap();
+    for path in [
+        "composited",
+        "composited",
+        "plane",
+        "plane",
+        "hidden",
+        "plane",
+    ] {
+        recorder.cursor_path(path);
+    }
+    let counts = recorder.counters.take();
+    let count = |name| counts.iter().find(|(n, _)| *n == name).unwrap().1;
+    assert_eq!(count("cursor_plane_frames"), 3);
+    assert_eq!(count("cursor_composited_frames"), 2);
+    let events: Vec<String> = recorder
+        .event_lines()
+        .into_iter()
+        .filter(|l| l.contains(r#""kind":"cursor_path""#))
+        .collect();
+    assert_eq!(events.len(), 4, "{events:#?}");
+    assert!(events[0].contains(r#""path":"composited","before":null"#));
+    assert!(events[1].contains(r#""path":"plane","before":"composited""#));
+    assert!(events[2].contains(r#""path":"hidden","before":"plane""#));
+    assert!(events[3].contains(r#""path":"plane","before":"hidden""#));
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -503,6 +503,21 @@ try:
           and '"kind":"pointer_in"' in kinds and '"kind":"screenshot"' in kinds and bool(shots),
           f"bundles {len(bundles)}, screenshots {len(shots)}, leaked {leaked.strip() or 'nothing'}")
     print(f"seconds with pointer events in and no frame rendered: {len(pointer_only)}")
+    # The cursor path (plane or composited) and the per-second cursor counters.
+    paths = sh(vm, f"grep -h cursor_path {' '.join(b + '/events.jsonl' for b in bundles)}" if bundles else "true")
+    print("cursor path events:\n" + paths)
+    sums = {}
+    for line in first_counters.splitlines():
+        for name in ("cursor_plane_frames", "cursor_composited_frames", "pointer_frame_requests"):
+            m = re.search(rf'"{name}":(\d+)', line)
+            if m:
+                sums[name] = sums.get(name, 0) + int(m.group(1))
+    print("cursor counters, first bundle:", sums)
+    check("debug recording: cursor_path event and cursor counters on DRM",
+          '"kind":"cursor_path"' in paths and len(sums) == 3
+          and sums["cursor_plane_frames"] + sums["cursor_composited_frames"] > 0
+          and sums["pointer_frame_requests"] > 0,
+          f"{paths.strip().splitlines()[:1]} {sums}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
     # 18. A session recorded on the DRM backend for replay (tools/replay.sh): windows

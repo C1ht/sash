@@ -43,9 +43,12 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
 - windows: map, unmap, configure sent, configure acknowledged, commit;
 - every layout operation, with the layout before and after;
 - frames: start and end, page flip completed, whether the cursor went to the hardware
-  cursor plane or was composited;
+  cursor plane, was composited or was hidden (`frame_end`, field `cursor`); on DRM a
+  `cursor_path` event each time that changes (`path`, and the `before` path);
 - counters per second: pointer events in, position updates, redraws requested, frames
-  rendered, flips completed, cursor updates;
+  rendered, flips completed, cursor updates, frames with the cursor on the plane
+  (`cursor_plane_frames`), frames with it composited (`cursor_composited_frames`), and
+  frame requests caused by pointer motion (`pointer_frame_requests`);
 - screenshots after each layout change (at most one per second, 100 per session) and
   when the hotkey is pressed, at most 1920 px wide. By default they show **window
   outlines only**: each window as a flat box (tiled and floating in different shades),

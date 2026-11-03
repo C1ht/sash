@@ -90,6 +90,8 @@ pub struct Sash {
     pub draws_named_cursor: bool,
     /// Frames requested because the cursor sash-wm draws moved.
     pub cursor_frames: crate::cursor::CursorFrames,
+    /// The pointer has moved since startup; until then rule A ignores it.
+    pub pointer_has_moved: bool,
     /// Debug recording (feature `debug-record`), when SASH_DEBUG_RECORD is set.
     #[cfg(feature = "debug-record")]
     pub recorder: Option<crate::record::Recorder>,
@@ -134,6 +136,7 @@ impl Sash {
             redraw,
             draws_named_cursor: false,
             cursor_frames: Default::default(),
+            pointer_has_moved: false,
             #[cfg(feature = "debug-record")]
             recorder: None,
         }

@@ -181,3 +181,34 @@ fn without_the_variable_nothing_records() {
         assert_eq!(c.events.keys_pressed, vec![KEY_ALT, KEY_F11]);
     });
 }
+
+/// The frame requests caused by pointer motion are counted (merged ones once).
+#[test]
+fn pointer_frame_requests_are_counted() {
+    let dir = record::tests::scratch_dir("pointer-frames");
+    let mut harness = Harness::new();
+    let config = Config {
+        dir: dir.clone(),
+        session: false,
+        keys_full: false,
+        screenshots_full: false,
+    };
+    harness.server.state.recorder = Some(Recorder::new(config, Instant::now()).unwrap());
+    harness.server.state.draws_named_cursor = true;
+    for _ in 0..5 {
+        harness.step();
+    }
+    let requests = |h: &Harness| {
+        let r = h.server.state.recorder.as_ref().unwrap();
+        r.counters.pointer_frame_requests.get()
+    };
+    assert_eq!(requests(&harness), 0, "no motion, no request");
+    for i in 0..50 {
+        harness.pointer_to(100.0 + i as f64, 100.0);
+    }
+    assert_eq!(requests(&harness), 1, "merged until the frame starts");
+    harness.step();
+    harness.pointer_to(300.0, 300.0);
+    assert_eq!(requests(&harness), 2);
+    let _ = fs::remove_dir_all(&dir);
+}

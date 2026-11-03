@@ -296,3 +296,50 @@ fn a_new_window_splits_the_tile_under_the_pointer() {
         });
     });
 }
+
+/// Rule A: until the pointer has moved, it counts as no pointer and the focused window
+/// is split (the startup pointer at 0,0 would split the top-left tile); after it moves,
+/// the tile under it is split.
+#[test]
+fn an_unmoved_pointer_counts_as_no_pointer() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        server.on_server(|h| {
+            // The same position again is no motion.
+            h.pointer_to(0.0, 0.0);
+            assert!(!h.server.state.pointer_has_moved);
+        });
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        let mut c2 = TestClient::connect(&socket);
+        let _w2 = c2.map_window();
+        let mut c3 = TestClient::connect(&socket);
+        let _w3 = c3.map_window(); // focus 2 split, not window 1 under (0, 0)
+        server.on_server(|h| {
+            assert_tiles(
+                h,
+                &[
+                    (1, Rect::new(0, 0, 400, 600)),
+                    (2, Rect::new(400, 0, 400, 300)),
+                    (3, Rect::new(400, 300, 400, 300)),
+                ],
+            );
+            h.pointer_to(100.0, 100.0);
+            assert!(h.server.state.pointer_has_moved);
+        });
+        let mut c4 = TestClient::connect(&socket);
+        let _w4 = c4.map_window();
+        server.on_server(|h| {
+            assert_tiles(
+                h,
+                &[
+                    (1, Rect::new(0, 0, 400, 300)),
+                    (4, Rect::new(0, 300, 400, 300)),
+                    (2, Rect::new(400, 0, 400, 300)),
+                    (3, Rect::new(400, 300, 400, 300)),
+                ],
+            );
+        });
+    });
+}
