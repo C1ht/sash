@@ -618,6 +618,12 @@ impl Recorder {
     }
 
     /// The events in the ring, as written to events.jsonl (replay tests).
+    /// Keeps every event, not only the last 60 s (replays run longer than that).
+    #[cfg(test)]
+    pub fn keep_everything(&mut self) {
+        self.events = Ring::new(Duration::MAX, usize::MAX);
+    }
+
     #[cfg(test)]
     pub fn event_lines(&self) -> Vec<String> {
         self.events.iter().map(|(_, line)| line.clone()).collect()
@@ -696,6 +702,7 @@ pub fn mark(state: &mut Sash) {
     let Some(recorder) = state.recorder.as_mut() else {
         return;
     };
+    tracing::warn!(dir = %recorder.dir.display(), "debug hotkey (mod+F11): writing a bundle");
     recorder.push("mark", vec![]);
     recorder.shot_request = Some("hotkey".into());
     recorder.bundle_pending = true;

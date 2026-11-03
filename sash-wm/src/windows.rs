@@ -93,6 +93,9 @@ pub struct Drag {
     pressed_at: Point<f64, Logical>,
     /// The snap zone the pointer is in (moves only).
     zone: Option<ZoneId>,
+    /// The last motion handled, with Shift's state: a motion that changes neither
+    /// (the pointer pinned at a screen edge) changes nothing and draws no frame.
+    last: Option<(Point<f64, Logical>, bool)>,
 }
 
 pub struct Windows {
@@ -694,6 +697,7 @@ impl Sash {
             from,
             pressed_at,
             zone: None,
+            last: None,
         });
         record!(self, "grab_start", "grab" => format!("{kind:?}"), "window" => id);
         record_context!(self, format!("{kind:?} drag start"));
@@ -716,6 +720,9 @@ impl Sash {
         let id = drag.window;
         if !layout.contains(id) {
             return false;
+        }
+        if drag.last.replace((now, free)) == Some((now, free)) {
+            return true;
         }
         let (px, py) = (now.x.floor() as i32, now.y.floor() as i32);
         let grabbed = (

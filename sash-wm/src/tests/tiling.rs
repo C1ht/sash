@@ -343,3 +343,43 @@ fn an_unmoved_pointer_counts_as_no_pointer() {
         });
     });
 }
+
+/// Focus on open (investigated after the real-hardware bundle; current behaviour, not
+/// a decision): between a new window's first commit and its first buffer the keyboard
+/// focus is on no surface, so a key typed then reaches neither the old window nor the
+/// new one.
+#[test]
+fn a_key_before_the_new_windows_first_buffer_reaches_no_window() {
+    use crate::tests::harness::keys::T;
+    use smithay::backend::input::KeyState;
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        let mut c2 = TestClient::connect(&socket);
+        let w2 = c2.create_window(); // initial commit, no buffer yet
+        let seen = c2.events.configures;
+        c2.dispatch_until("initial configure", |e| e.configures > seen);
+        server.on_server(|h| {
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(2)));
+            h.key(T, KeyState::Pressed);
+            h.key(T, KeyState::Released);
+        });
+        c1.roundtrip();
+        c2.roundtrip();
+        assert_eq!(
+            c1.events.keys_pressed,
+            Vec::<u32>::new(),
+            "not the old window"
+        );
+        assert_eq!(c2.events.keys_pressed, Vec::<u32>::new(), "not the new one");
+        c2.ack_and_commit(&w2);
+        c2.roundtrip();
+        assert!(
+            c2.events.keyboard_entered,
+            "focus arrives with the first buffer"
+        );
+        assert_eq!(c2.events.keys_pressed, Vec::<u32>::new(), "the key is lost");
+    });
+}

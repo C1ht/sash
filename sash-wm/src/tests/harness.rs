@@ -54,6 +54,8 @@ pub struct Harness {
     pub presenting: bool,
     /// Frames presented so far.
     pub frames: u32,
+    /// How long `run_until` waits (TIMEOUT; longer for replays).
+    pub timeout: Duration,
     redraw_requested: Rc<Cell<bool>>,
 }
 
@@ -99,6 +101,7 @@ impl Harness {
             output,
             presenting: true,
             frames: 0,
+            timeout: TIMEOUT,
             redraw_requested,
         }
     }
@@ -132,7 +135,7 @@ impl Harness {
 
     /// Steps until `done` returns true; panics after a timeout.
     pub fn run_until(&mut self, what: &str, mut done: impl FnMut(&mut Self) -> bool) {
-        let deadline = Instant::now() + TIMEOUT;
+        let deadline = Instant::now() + self.timeout;
         while !done(self) {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             self.step();

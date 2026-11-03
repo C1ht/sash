@@ -212,3 +212,28 @@ fn pointer_frame_requests_are_counted() {
     assert_eq!(requests(&harness), 2);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// mod+F11 when the bundle cannot be written (the directory went away): nothing
+/// panics, the failure is logged, and the next press works once the directory is back.
+#[test]
+fn a_bundle_that_cannot_be_written_is_reported_and_the_hotkey_still_works() {
+    let dir = record::tests::scratch_dir("unwritable");
+    let mut harness = Harness::new();
+    let config = Config {
+        dir: dir.clone(),
+        session: false,
+        keys_full: false,
+        screenshots_full: false,
+    };
+    harness.server.state.recorder = Some(Recorder::new(config, Instant::now()).unwrap());
+    fs::remove_dir_all(&dir).unwrap();
+    harness.chord(&[KEY_ALT, KEY_F11]);
+    record::flush_bundle(&mut harness.server.state);
+    assert!(!dir.exists(), "nothing written");
+    record::prepare_dir(&dir).unwrap();
+    harness.chord(&[KEY_ALT, KEY_F11]);
+    record::flush_bundle(&mut harness.server.state);
+    let bundles = fs::read_dir(&dir).unwrap().count();
+    assert_eq!(bundles, 1, "the next press writes a bundle");
+    let _ = fs::remove_dir_all(&dir);
+}

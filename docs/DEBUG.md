@@ -101,15 +101,30 @@ every difference.
   acceleration does not matter), modifier keys, keybind actions (Super+Return by the
   window it opened), windows opening, committing at their recorded sizes, unmapping
   and closing (stand-in test clients), output size changes.
-- Not replayed: printable keys (only recorded as "printable"), client requests
-  (title-bar moves and resizes, fullscreen and maximize asked by a client), popups,
-  frames, flips and pacing (DRM timing).
+- Not replayed: printable keys (only recorded as "printable") and other keys that are
+  not modifiers (keybinds are replayed as actions), client requests (title-bar moves
+  and resizes, fullscreen and maximize asked by a client, e.g. a double-click on
+  foot's title bar), popups, frames, flips and pacing (DRM timing), session pauses
+  and VT switches, input devices coming and going. Once a client request changed the
+  layout, the snapshots after it differ.
+- The stand-in windows read their events every 200 pointer positions (a fast mouse
+  would otherwise fill their sockets), a replay may take up to 300 s, and the
+  replay's own recorder keeps everything (a long session replays in over 60 s; the
+  owner's 60-second session with an 8 kHz mouse takes about 70 s).
 - A bundle that starts with windows already open is refused: the 60-second ring cut
   their opening. Record from an empty desktop, or with `SASH_DEBUG_RECORD_SESSION=1`.
 - Window ids are matched by order of opening; the "mapped" flag is not compared
   (it depends on client timing); repeated and empty-desktop snapshots are merged.
 
-A bundle that shows a bug becomes a regression test: copy its `events.jsonl` and
-`state.json` (check that they contain no typed text: no `"printable"` keys) into
-`sash-wm/src/tests/fixtures/replay/<name>/` and add a test like
-`the_drm_session_recorded_in_the_vm_replays` in `sash-wm/src/tests/replay.rs`.
+A bundle that shows a bug becomes a regression test, never the whole bundle:
+
+```sh
+python3 -I tools/replay-fixture.py <bundle> sash-wm/src/tests/fixtures/replay/<name> <cut seconds>
+```
+
+keeps the events before the cut (end it before the first snapshot the replay cannot
+reproduce), only the kinds the replay uses, downsampled (the last pointer position
+before each button, key or window event, the first and every 25th during a drag), with
+no typed keys and no device names. Aim for under 200 KB and a test under 10 s. Add a
+README and a test like `the_owners_nvidia_session_replays` in
+`sash-wm/src/tests/replay.rs`.

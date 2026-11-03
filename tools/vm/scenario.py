@@ -476,6 +476,8 @@ try:
     time.sleep(2.5)
     bundles = sh(vm, "ls -d /home/sash/rec/bundle-* 2>/dev/null").split()
     print("bundles:", bundles)
+    hotkey_lines = count(vm, "debug hotkey")
+    written_lines = count(vm, "debug bundle written")
     perms = sh(vm, "stat -c '%a %n' /home/sash/rec /home/sash/rec/bundle-* "
                    "/home/sash/rec/bundle-*/* /home/sash/rec/bundle-*/screenshots/* | sort -u")
     print(perms)
@@ -503,6 +505,9 @@ try:
           and '"kind":"pointer_in"' in kinds and '"kind":"screenshot"' in kinds and bool(shots),
           f"bundles {len(bundles)}, screenshots {len(shots)}, leaked {leaked.strip() or 'nothing'}")
     print(f"seconds with pointer events in and no frame rendered: {len(pointer_only)}")
+    check("debug recording: each Super+F11 is logged with where its bundle went (DRM)",
+          hotkey_lines == 2 and written_lines == 2,
+          f"hotkey lines {hotkey_lines}, bundle-written lines {written_lines}")
     # The cursor path (plane or composited) and the per-second cursor counters.
     paths = sh(vm, f"grep -h cursor_path {' '.join(b + '/events.jsonl' for b in bundles)}" if bundles else "true")
     print("cursor path events:\n" + paths)

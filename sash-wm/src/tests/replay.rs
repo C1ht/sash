@@ -5,7 +5,8 @@
 //! a regression test.
 //!
 //! Replayed: pointer positions and buttons (as sash-wm processed them, so acceleration
-//! does not matter); modifier keys; keybind actions (a terminal spawn by its window
+//! does not matter; the stand-ins read their events every READ_EVERY positions, so a
+//! fast mouse cannot fill their sockets); modifier keys; keybind actions (a terminal spawn by its window
 //! instead); windows opening, committing at their recorded sizes, unmapping and closing,
 //! with stand-in test clients; output size changes. Not replayed: printable keys
 //! (recorded as "printable" only), client requests (title-bar moves and resizes,
@@ -19,7 +20,7 @@ use std::{
     fs,
     path::Path,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use smithay::backend::input::{ButtonState, KeyState};
@@ -33,6 +34,11 @@ use crate::{
     keybinds::{self, Action, Modifier},
     record::{self, Config, Json, Recorder, json::parse},
 };
+
+/// A replay may run long (a real session has tens of thousands of pointer events).
+const REPLAY_TIMEOUT: Duration = Duration::from_secs(300);
+/// The stand-ins read their events after this many pointer positions.
+const READ_EVERY: usize = 200;
 
 /// What a replay found.
 #[derive(Debug, Default)]
@@ -198,8 +204,10 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
     };
 
     let mut harness = Harness::with_modifier(modifier);
+    harness.timeout = REPLAY_TIMEOUT;
     let socket = harness.socket_path();
     let replay_dir = record::tests::scratch_dir("replay");
+    let remove = replay_dir.clone();
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let out = lines.clone();
     let recorded = events.clone();
@@ -214,12 +222,15 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
                 keys_full: false,
                 screenshots_full: false,
             };
-            h.server.state.recorder = Some(Recorder::new(config, Instant::now()).unwrap());
+            let mut recorder = Recorder::new(config, Instant::now()).unwrap();
+            recorder.keep_everything();
+            h.server.state.recorder = Some(recorder);
         });
         // Recorded window id -> stand-in client, its window, and where it is.
         let mut windows: HashMap<i64, (TestClient, Option<TestWindow>, Stage)> = HashMap::new();
         // The last configure serial each stand-in acked.
         let mut acked: HashMap<i64, u32> = HashMap::new();
+        let mut positions = 0;
         for event in &events {
             let kind = kind(event).to_string();
             let mut done = true;
@@ -228,6 +239,12 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
                     let x = event.get("x").and_then(Json::as_f64).unwrap_or(0.0);
                     let y = event.get("y").and_then(Json::as_f64).unwrap_or(0.0);
                     server.on_server(move |h| h.pointer_to(x, y));
+                    positions += 1;
+                    if positions % READ_EVERY == 0 {
+                        for (client, _, _) in windows.values_mut() {
+                            client.roundtrip();
+                        }
+                    }
                 }
                 "pointer_button" => {
                     let button = event.get("button").and_then(Json::as_i64).unwrap_or(0) as u32;
@@ -362,7 +379,7 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
         });
         report
     });
-    let _ = fs::remove_dir_all(record::tests::scratch_dir("replay"));
+    let _ = fs::remove_dir_all(remove);
 
     let mut report = report;
     let replayed: Vec<Json> = lines
@@ -525,4 +542,20 @@ fn the_drm_session_recorded_in_the_vm_replays() {
     assert_eq!(report.replayed.get("keybind"), Some(&3));
     assert_eq!(report.skipped.get("keybind"), Some(&3));
     assert_eq!(report.replayed.get("pointer_button"), Some(&4));
+}
+
+/// The owner's first real-hardware session (NVIDIA, 5120x1440, stage C run 4), cut
+/// before foot's first maximize request and downsampled (tools/replay-fixture.py):
+/// four windows under rule A and nine drags, three of them snapping, replay to the
+/// same layouts.
+#[test]
+fn the_owners_nvidia_session_replays() {
+    let bundle = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/tests/fixtures/replay/nvidia-run4-20261103");
+    let started = Instant::now();
+    let report = replay(&bundle).unwrap();
+    assert!(report.mismatches.is_empty(), "{:#?}", report.mismatches);
+    assert_eq!(report.compared, 13, "snapshots 0 to 12: {report:?}");
+    assert_eq!(report.replayed.get("pointer_button"), Some(&16));
+    assert!(started.elapsed() < Duration::from_secs(10), "under 10 s");
 }

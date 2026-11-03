@@ -27,6 +27,7 @@
 mod input;
 mod mode;
 mod pacing;
+mod recheck;
 mod session;
 
 use std::{
@@ -44,8 +45,8 @@ use smithay::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmEventTime,
-            compositor::{DrmCompositor, FrameFlags},
+            DrmDevice, DrmDeviceFd, DrmError, DrmEvent, DrmEventMetadata, DrmEventTime,
+            compositor::{DrmCompositor, FrameError, FrameFlags},
             exporter::gbm::GbmFramebufferExporter,
         },
         egl::{EGLContext, EGLDisplay},
@@ -135,6 +136,11 @@ struct Drm {
     cap_timer: bool,
     /// The connector came back: the next frame is a full modeset.
     modeset_pending: bool,
+    /// When the connector is re-checked after udev events (merged, input first).
+    recheck: recheck::Recheck,
+    /// Frames whose page flip was refused because DRM master was already gone (the
+    /// session pausing), since the last session event.
+    flips_refused: u64,
     /// For timers that call back into the backend.
     this: Weak<RefCell<Drm>>,
     /// Debug builds: test commits made to fail (fault injection).
@@ -283,6 +289,8 @@ pub fn start(
             idle_callbacks: Rc::new(Cell::new(false)),
             cap_timer: false,
             modeset_pending: false,
+            recheck: recheck::Recheck::default(),
+            flips_refused: 0,
             this: this.clone(),
             #[cfg(debug_assertions)]
             faults,
@@ -326,8 +334,9 @@ pub fn start(
                     let mut drm = for_udev.borrow_mut();
                     if let UdevEvent::Changed { device_id } = event
                         && device_id == drm.device.device_id()
+                        && let Some(at) = drm.recheck.changed(now())
                     {
-                        drm.connector_changed(&mut server.state);
+                        drm.arm_recheck(at, &mut server.state);
                     }
                 })
                 .map_err(|err| err.error)?;
@@ -338,6 +347,12 @@ pub fn start(
     // The first frame.
     drm.borrow_mut().render(state);
     Ok(())
+}
+
+/// A commit refused because this process is no longer DRM master (EACCES): the
+/// session is pausing.
+fn master_gone(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(nix::errno::Errno::EACCES as i32)
 }
 
 /// One refresh period at `mode`, from its exact timings (the kernel's vrefresh is
@@ -637,9 +652,13 @@ fn insert_sources(
             let mut drm = for_session.borrow_mut();
             let steps = match event {
                 SessionEvent::PauseSession => drm.tracker.pause(),
-                SessionEvent::ActivateSession => drm.tracker.resume(),
+                SessionEvent::ActivateSession => {
+                    drm.recheck.resumed(now());
+                    drm.tracker.resume()
+                }
             };
-            tracing::info!(?event, ?steps, "session");
+            let flips_refused = std::mem::take(&mut drm.flips_refused);
+            tracing::info!(?event, ?steps, flips_refused, "session");
             for step in steps {
                 drm.run(step, &mut server.state);
             }
@@ -648,29 +667,46 @@ fn insert_sources(
 
     let for_input = drm.clone();
     handle
-        .insert_source(input_backend, move |event, _, server| match event {
-            InputEvent::DeviceAdded { mut device } => {
-                let name = device.name().to_string();
-                if for_input.borrow_mut().devices.added(&mut device) {
-                    tracing::info!(name, "input device added");
-                }
-                record!(
-                    server.state,
-                    "input_device_added",
-                    "name" => name,
-                    "capabilities" => device_capabilities(&device),
-                );
+        .insert_source(input_backend, move |event, _, server| {
+            input_event(&for_input, event, server);
+            // A connector re-check that waited for the input devices after a resume
+            // runs once they are back.
+            let mut drm = for_input.borrow_mut();
+            if drm.recheck.input_back(now()) {
+                drm.connector_changed(&mut server.state);
             }
-            InputEvent::DeviceRemoved { device } => {
-                if for_input.borrow_mut().devices.removed(&device) {
-                    tracing::info!(name = device.name(), "input device removed");
-                }
-                record!(server.state, "input_device_removed", "name" => device.name());
-            }
-            event => server.state.handle_input(event),
         })
         .map_err(|err| err.error)?;
     Ok(())
+}
+
+/// One libinput event: device bookkeeping, or input for the compositor.
+fn input_event(
+    drm: &Rc<RefCell<Drm>>,
+    event: InputEvent<LibinputInputBackend>,
+    server: &mut Server,
+) {
+    match event {
+        InputEvent::DeviceAdded { mut device } => {
+            let name = device.name().to_string();
+            if drm.borrow_mut().devices.added(&mut device) {
+                tracing::info!(name, "input device added");
+            }
+            record!(
+                server.state,
+                "input_device_added",
+                "name" => name,
+                "capabilities" => device_capabilities(&device),
+            );
+        }
+        InputEvent::DeviceRemoved { device } => {
+            if drm.borrow_mut().devices.removed(&device) {
+                tracing::info!(name = device.name(), "input device removed");
+            }
+            record!(server.state, "input_device_removed", "name" => device.name());
+        }
+        event => server.state.handle_input(event),
+    }
 }
 
 impl Drm {
@@ -717,6 +753,15 @@ impl Drm {
                 let feedback = self.presentation_feedback(state);
                 match self.compositor.queue_frame(Some(feedback)) {
                     Ok(()) => true,
+                    Err(FrameError::DrmError(DrmError::Access(access)))
+                        if master_gone(&access.source) =>
+                    {
+                        // The session is pausing and DRM master is already gone: an
+                        // expected race, counted and logged with the session event.
+                        self.flips_refused += 1;
+                        tracing::debug!(err = %access.source, "page flip refused: DRM master gone");
+                        false
+                    }
                     Err(err) => {
                         tracing::warn!(%err, "queueing the frame failed");
                         false
@@ -891,6 +936,30 @@ impl Drm {
     }
 
     /// Renders at `at` (the refresh-rate cap). One timer at a time.
+    /// Arms the timer for a merged connector re-check (recheck.rs) at `at`.
+    fn arm_recheck(&mut self, at: Duration, state: &mut Sash) {
+        let this = self.this.clone();
+        let timer = Timer::from_duration(at.saturating_sub(now()));
+        let inserted = state.loop_handle.insert_source(timer, move |_, _, server| {
+            if let Some(drm) = this.upgrade() {
+                let mut drm = drm.borrow_mut();
+                match drm.recheck.fired(now()) {
+                    recheck::Fired::Run => drm.connector_changed(&mut server.state),
+                    recheck::Fired::WaitUntil(at) => drm.arm_recheck(at, &mut server.state),
+                    recheck::Fired::Nothing => {}
+                }
+            }
+            TimeoutAction::Drop
+        });
+        if let Err(err) = inserted {
+            // No timer: re-check now rather than not at all.
+            tracing::warn!(%err, "no timer for the connector re-check");
+            if self.recheck.fired(at) == recheck::Fired::Run {
+                self.connector_changed(state);
+            }
+        }
+    }
+
     fn arm_cap_timer(&mut self, at: Duration, state: &mut Sash) {
         if self.cap_timer {
             return;
@@ -1047,7 +1116,24 @@ impl Drm {
 
 #[cfg(test)]
 mod tests {
-    use super::validate;
+    use super::{master_gone, validate};
+
+    /// The race at a session pause (stage C run 4): "Permission denied (os error 13)"
+    /// is the expected refusal; other errors are not.
+    #[test]
+    fn a_flip_refused_with_eacces_is_the_pause_race() {
+        use std::io::Error;
+        assert!(master_gone(&Error::from_raw_os_error(13)));
+        assert!(
+            !master_gone(&Error::from_raw_os_error(16)),
+            "EBUSY is a real error"
+        );
+        assert!(
+            !master_gone(&Error::from_raw_os_error(22)),
+            "EINVAL is a real error"
+        );
+        assert!(!master_gone(&Error::other("not an OS error")));
+    }
 
     #[test]
     fn validation_takes_the_first_candidate_that_passes_in_order() {

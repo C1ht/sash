@@ -109,6 +109,25 @@ impl Sash {
         }
     }
 
+    /// Relative motion (libinput): moves the pointer by `delta`, kept on the output. At
+    /// an edge the clamped position stays where it was, which is no motion.
+    pub fn pointer_moved_by(&mut self, delta: Point<f64, Logical>, time_msec: u32) {
+        let (Some(pointer), Some(output)) = (self.seat.get_pointer(), self.output.clone()) else {
+            return;
+        };
+        let Some(area) = self.space.output_geometry(&output) else {
+            return;
+        };
+        let moved = pointer.current_location() + delta;
+        let x = moved
+            .x
+            .clamp(area.loc.x as f64, (area.loc.x + area.size.w) as f64 - 1.0);
+        let y = moved
+            .y
+            .clamp(area.loc.y as f64, (area.loc.y + area.size.h) as f64 - 1.0);
+        self.pointer_moved_to((x, y).into(), time_msec);
+    }
+
     /// Handles a key press or release: runs a keybind, or forwards it to the focused
     /// client. A key whose press ran a keybind has its release swallowed too.
     pub fn key(&mut self, code: Keycode, key_state: KeyState, time_msec: u32) {
@@ -349,14 +368,6 @@ impl Sash {
                 self.pointer_moved_to(location, event.time_msec());
             }
             InputEvent::PointerMotion { event } => {
-                // Relative motion (libinput): moves the pointer, kept on the output.
-                let (Some(pointer), Some(output)) = (self.seat.get_pointer(), self.output.clone())
-                else {
-                    return;
-                };
-                let Some(area) = self.space.output_geometry(&output) else {
-                    return;
-                };
                 self.count_pointer_in();
                 record!(
                     self,
@@ -367,14 +378,7 @@ impl Sash {
                     "dx_unaccel" => event.delta_x_unaccel(),
                     "dy_unaccel" => event.delta_y_unaccel(),
                 );
-                let moved = pointer.current_location() + event.delta();
-                let x = moved
-                    .x
-                    .clamp(area.loc.x as f64, (area.loc.x + area.size.w) as f64 - 1.0);
-                let y = moved
-                    .y
-                    .clamp(area.loc.y as f64, (area.loc.y + area.size.h) as f64 - 1.0);
-                self.pointer_moved_to((x, y).into(), event.time_msec());
+                self.pointer_moved_by(event.delta(), event.time_msec());
             }
             InputEvent::PointerButton { event } => {
                 self.count_pointer_in();

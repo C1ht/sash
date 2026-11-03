@@ -673,3 +673,66 @@ fn window_larger_than_the_output_and_tiny_output() {
         });
     });
 }
+
+/// Edge frames: a drag with the pointer pinned at a screen edge (relative motion
+/// clamped to the output) requests no frames; a stationary pointer none either; real
+/// motion at most one per frame.
+#[test]
+fn a_pointer_pinned_at_an_edge_during_a_drag_requests_no_frames() {
+    let mut harness = Harness::new();
+    harness.server.state.draws_named_cursor = true; // the arrow is drawn, as on DRM
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        // (push direction, a point inside the output)
+        let edges = [
+            ((-50.0, 0.0), (400.0, 300.0)), // left
+            ((50.0, 0.0), (400.0, 300.0)),  // right
+            ((0.0, -50.0), (400.0, 300.0)), // top
+            ((0.0, 50.0), (400.0, 300.0)),  // bottom
+        ];
+        for (push, start) in edges {
+            server.on_server(move |h| {
+                h.key(ALT, KeyState::Pressed);
+                h.pointer_to(start.0, start.1);
+                h.button(BTN_LEFT, ButtonState::Pressed);
+                // Into the edge, then let the frame for that motion happen.
+                for _ in 0..40 {
+                    h.server.state.pointer_moved_by(push.into(), 0);
+                }
+                for _ in 0..5 {
+                    h.step();
+                }
+                let rect = h.rect_of(1);
+                let frames = h.frames;
+                // Pinned: 1000 more pushes into the edge and many steps.
+                for _ in 0..1000 {
+                    h.server.state.pointer_moved_by(push.into(), 0);
+                }
+                for _ in 0..20 {
+                    h.step();
+                }
+                assert_eq!(h.frames, frames, "pinned at the edge {push:?}: no frames");
+                assert_eq!(h.rect_of(1), rect, "nothing moved");
+                // Stationary: no motion, no frame.
+                for _ in 0..20 {
+                    h.step();
+                }
+                assert_eq!(h.frames, frames, "stationary: no frames");
+                // Real motion: 50 motions before the next frame are one frame.
+                for i in 1..=50 {
+                    let back = (-push.0.signum() * i as f64, -push.1.signum() * i as f64);
+                    h.server.state.pointer_moved_by(back.into(), 0);
+                }
+                h.step();
+                assert_eq!(h.frames, frames + 1, "real motion: one frame");
+                h.button(BTN_LEFT, ButtonState::Released);
+                h.key(ALT, KeyState::Released);
+                for _ in 0..5 {
+                    h.step();
+                }
+            });
+        }
+    });
+}
