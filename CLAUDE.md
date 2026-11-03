@@ -59,9 +59,20 @@ change this file without the owner's approval.
   child and gets focus. With no windows, it fills the output. "Under the
   pointer" means the tile that contains the pointer position, also when a
   floating, maximized or fullscreen window is drawn above it; the
-  pointer outside every tile (or no pointer) means the focused leaf. This
-  holds for every new tiled window, also one spawned by a keybind. No
-  preselect keys. A new window while the default mode is floating still
+  pointer outside every tile (or no pointer) means the focused leaf. A
+  pointer that has not moved since sash-wm started counts as no pointer
+  (owner, after m9c). This holds for every new tiled window, also one
+  spawned by a keybind. No preselect keys.
+- Rule A, documented behaviour (owner, after m9c; not bugs):
+  - A pointer resting over another window decides keybind spawns too:
+    mod+Return splits the tile under the pointer, not the window being
+    typed in, and focus moves to the new window there.
+  - Repeated spawns with a parked pointer keep cutting the same area:
+    the new window is the second (right or lower) child, a point on a
+    split line belongs to it, so the pointer stays in the newest tile
+    while other tiles stay large.
+  - Recorded alternative, not implemented: use the pointer only if it
+    moved in the last few seconds, else the focused leaf. A new window while the default mode is floating still
   gets its placeholder next to the focused leaf.
 - Integer geometry only: the first child gets the floor, the second the
   remainder, so rectangles cover the output exactly.
@@ -356,6 +367,11 @@ change this file without the owner's approval.
   hotkey, unless `SASH_DEBUG_RECORD_SESSION=1` (then everything is
   written as it happens).
 - Retention: bundles older than 7 days are deleted at startup.
+- Cursor path (owner, after m9c; recording only, no behaviour change):
+  on DRM, a `cursor_path` event each time the way the cursor is drawn
+  changes (hardware cursor plane, or composited into the frame), and per
+  second the frames with the cursor on the plane, the frames with it
+  composited, and the frame requests caused by pointer motion.
 - docs/DEBUG.md describes it; docs/v1.md has the gate "debug recording
   removed or proven compiled out"; tools/check-release.sh fails if any
   of it is in the release binary.
