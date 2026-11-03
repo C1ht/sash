@@ -675,8 +675,9 @@ change this file without the owner's approval.
   target's accepted actions and preference (copy, move, ask). A drop on
   a target that accepted a MIME type and an action is a drop (the source
   is told dropped, then finished when the target finishes); a drop on
-  nothing, on a target that accepted nothing, or at an output edge is a
-  cancel. Escape cancels (the key is not delivered). A keybind that
+  nothing or on a target that accepted nothing is a cancel. At an output
+  edge (the pointer pinned there) the surface under the pointer decides,
+  as anywhere else. Escape cancels (the key is not delivered). A keybind that
   changes focus (focus moves, mod+Tab, close, swap, quit) cancels the
   drag first. A mod+drag cannot start during a drag and a drag cannot
   start during a mod+drag (no press reached a client). A source or
