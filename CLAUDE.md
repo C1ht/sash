@@ -62,7 +62,9 @@ change this file without the owner's approval.
   pointer outside every tile (or no pointer) means the focused leaf. A
   pointer that has not moved since sash-wm started counts as no pointer
   (owner, after m9c). This holds for every new tiled window, also one
-  spawned by a keybind. No preselect keys.
+  spawned by a keybind. No preselect keys. A new window while the
+  default mode is floating still gets its placeholder next to the
+  focused leaf.
 - Rule A, documented behaviour (owner, after m9c; not bugs):
   - A pointer resting over another window decides keybind spawns too:
     mod+Return splits the tile under the pointer, not the window being
@@ -72,8 +74,7 @@ change this file without the owner's approval.
     split line belongs to it, so the pointer stays in the newest tile
     while other tiles stay large.
   - Recorded alternative, not implemented: use the pointer only if it
-    moved in the last few seconds, else the focused leaf. A new window while the default mode is floating still
-  gets its placeholder next to the focused leaf.
+    moved in the last few seconds, else the focused leaf.
 - Integer geometry only: the first child gets the floor, the second the
   remainder, so rectangles cover the output exactly.
 - Close: the sibling takes the parent's place. Focus goes to the most
