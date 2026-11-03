@@ -209,8 +209,23 @@ sash/
 Proposals (no work until approved):
 - **Offscreen capture (debug builds only).** On SIGUSR1, sash-wm renders the current output once more into an offscreen GLES texture with the same render elements, reads it back and writes a PNG to `$XDG_RUNTIME_DIR/sash-wm-capture-<n>.png`. Screenshots then never touch the host screen and work while the nested window is hidden. Needs a PNG encoder dependency (the `png` crate, MIT OR Apache-2.0), which would be a new dependency to approve.
 
+- **M10 Clipboard and drag and drop.** In progress. Rules: CLAUDE.md ("Clipboard and drag and drop (M10)").
+  - sash-wm's own wl_data_device_manager (v3), wl_data_source, wl_data_device and wl_data_offer: Smithay 0.7's implementation cannot cap offers per client or rate-limit receive requests.
+  - Selection offered only to the keyboard-focused client; receive refused for a client without keyboard focus; the selection ends with its source.
+  - Limits (owner): 32 MIME types, 256 bytes per MIME string and 4096 bytes of MIME names per source; 16 live offers per client; 16 receive requests per offer per second (sliding window; beyond, the fd is closed and counted). Ignored and logged, no disconnect.
+  - Drag and drop with icon (above everything, hotspot, no pointer focus), copy/move/ask, drop/finish/cancel, Escape and focus keybinds cancel, serial from the implicit grab's press only.
+  - Privacy decisions (owner): no wlr-data-control, ext-data-control or other clipboard-manager protocol (any holder reads everything copied); decided later. No primary selection for now (below).
+  - Nested: no host clipboard bridge (known limit).
+  - Recorder: events without data or MIME names; marker test over every bundle file.
+  - Tests: headless copy/paste (small and 10 MB, event-loop latency measured during the transfer), selection replace/clear/source and destination disconnect/focus rules; drags (between windows, to a popup, to nothing, at an edge, Escape, focus keybind, disconnects, icon hotspot, invalid serial); protocol errors; the receive rate (40 pastes over 10 s succeed; 100 in one second get end of file beyond the 16th); property tests with selections and drags keeping every layout invariant; VM copy and paste with wl-clipboard (apt in the guest).
+  - By hand (throwaway profiles): foot, pavucontrol, a local Firefox test page (text, an image, a dragged file name). Checklist: docs/floating-checklist.md.
+  - Primary selection (zwp_primary_selection_device_manager_v1), pros and cons for a privacy-first desktop. Owner decision (M10): left out for now.
+    - For: middle-click paste is a strong habit for terminal and X11 users; foot, Firefox and GTK/Qt apps support it; it needs no keyboard shortcut.
+    - Against: every highlighted text becomes readable by the next focused client without any copy action, so text selected only to read it (a password in a terminal, a private message) leaks with one stray middle-click; it doubles the selection state to explain and to protect; it is easy to paste by accident.
+    - If built later: the same focus rule as the clipboard (offered only to the keyboard-focused client, no data-control).
+
 Roadmap after M9 (no work now), in order:
-1. **Clipboard and drag-and-drop.** Turns the `wl_data_device_manager` stub into a working clipboard (selection follows keyboard focus), then drag-and-drop.
+1. **Clipboard and drag-and-drop.** M10 (above).
 2. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).
 3. **layer-shell.** For the shell (panel, launcher, notifications), which is a sash-ui client.
 4. **fractional-scale and viewporter.** HiDPI monitors; together, since fractional scaling relies on viewporter.

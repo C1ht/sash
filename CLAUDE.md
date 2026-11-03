@@ -620,6 +620,77 @@ change this file without the owner's approval.
   libvirt, no window on the real display), and about 150 MB of runtime
   packages installed by apt inside the guest.
 
+## Clipboard and drag and drop (M10)
+
+- The `wl_data_device_manager` stub is replaced by a real implementation
+  (version 3): clipboard selection between clients, and drag and drop
+  with a drag icon, MIME lists, copy/move/ask actions, finish and cancel.
+  sash-wm implements wl_data_device_manager, wl_data_source,
+  wl_data_device and wl_data_offer itself: Smithay 0.7's data device has
+  no hook for the limits below. Smithay's seat, pointer grabs and
+  surface roles are used. The originality rule applies.
+- Selection: only the client with keyboard focus can set or clear it (a
+  request from any other client is ignored). It is offered only to the
+  client with keyboard focus: when keyboard focus moves to a client, that
+  client gets the current selection (a new offer, or none); a client
+  without keyboard focus gets no selection offer, and a receive request
+  on any offer from a client without keyboard focus is refused (the fd
+  is closed at once). No client can read the clipboard otherwise.
+- The selection survives its source losing focus. It ends when replaced,
+  cleared, or when its source is destroyed or its client disconnects;
+  then the focused client is told there is no selection.
+- Transfers go through client pipes: a receive request's fd is passed to
+  the source client's send event and sash-wm closes its copy. sash-wm
+  never reads, writes or waits on a payload and never blocks on one.
+- Limits (constants, owner, M10). Beyond a limit the excess is ignored
+  and logged at debug level; no client is disconnected for it:
+  - 32 MIME types per source; a MIME string of at most 256 bytes; at
+    most 4096 bytes of MIME names per source;
+  - 16 live offers per client: a client holding 16 offers gets no new
+    ones (selection or drag) until it destroys some;
+  - 16 receive requests per offer per second (sliding window); beyond
+    that the fd is closed at once (the reader sees end of file) and the
+    refusal is counted.
+- No data-control (owner, M10, a deliberate privacy decision):
+  wlr-data-control, ext-data-control and every other clipboard-manager
+  protocol are not implemented, because any client holding one can read
+  everything that is copied. The owner decides later.
+- No primary selection (zwp_primary_selection_device_manager_v1, middle-
+  click paste) for now (owner, M10); pros and cons in docs/plan.md.
+- Drag and drop starts only with a start_drag whose serial is the one
+  of the pointer button press that began the current implicit grab, and
+  only from the client that got that press. Any other start_drag is
+  ignored, as the protocol allows. (A touch down will count the same
+  once sash-wm handles touch input; it has none yet.)
+- Drag icon: a surface with the dnd_icon role (another role gives the
+  protocol's role error). Drawn above every window, popup and overlay
+  (the snap preview included), at the pointer plus its offset (the
+  hotspot, kept up to date from its attach and offset requests), for
+  shm and dmabuf buffers. It never takes pointer focus and is never hit
+  by hit-testing.
+- During a drag: the target is found by the normal hit-testing (windows
+  and popups); the target gets enter, motion and leave with an offer
+  listing the source's MIME types (the limits apply). Actions follow the
+  protocol: the action is chosen from the source's actions and the
+  target's accepted actions and preference (copy, move, ask). A drop on
+  a target that accepted a MIME type and an action is a drop (the source
+  is told dropped, then finished when the target finishes); a drop on
+  nothing, on a target that accepted nothing, or at an output edge is a
+  cancel. Escape cancels (the key is not delivered). A keybind that
+  changes focus (focus moves, mod+Tab, close, swap, quit) cancels the
+  drag first. A mod+drag cannot start during a drag and a drag cannot
+  start during a mod+drag (no press reached a client). A source or
+  target that disconnects mid-drag ends it cleanly on the other side.
+- Nested winit backend: no bridge to the host's clipboard (known
+  limit). Copy and paste work between sash-wm's own clients only.
+- Debug recorder (owner, M10): `selection_set`, `selection_cleared`,
+  `dnd_start`, `dnd_drop` and `dnd_cancel` events with window ids and
+  the action only; never MIME names, sizes or payloads. A test puts a
+  marker in a copied payload and in a MIME name and proves it is in no
+  bundle file, screenshots and log included.
+- VM scenario: copy and paste between two clients on DRM with
+  wl-clipboard installed in the guest by apt (owner, M10).
+
 ## Protocol support and known limits
 
 - xdg popups are supported from M7 (see "Popups (M7)").
@@ -628,9 +699,9 @@ change this file without the owner's approval.
   count nor the modifier, so sash-wm pre-checks zwp_linux_buffer_params_v1
   creates (incomplete, invalid_format) before Smithay sees them. No explicit
   sync (wp_linux_drm_syncobj_v1).
-- `wl_data_device_manager` is a stub: advertised because some clients
-  (foot) refuse to start without it. No clipboard or drag-and-drop
-  logic yet.
+- `wl_data_device_manager` (version 3) from M10: clipboard and drag and
+  drop (see "Clipboard and drag and drop (M10)"). No primary selection,
+  no data-control.
 - xdg-shell protocol errors are limited by Smithay 0.7, which does not
   expose a toplevel's `xdg_surface`:
   - a buffer before the first `ack_configure` gets
