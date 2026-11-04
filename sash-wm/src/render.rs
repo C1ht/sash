@@ -93,7 +93,9 @@ pub fn arrow_buffer() -> MemoryRenderBuffer {
     )
 }
 
-/// The built-in arrow at the pointer, for a named cursor shape (DRM backend).
+/// A named cursor shape at the pointer (DRM backend): the theme's image (the current
+/// frame of an animation) at the pointer minus its hotspot, or the built-in arrow when
+/// the theme has none.
 pub fn arrow_element<R>(
     state: &Sash,
     renderer: &mut R,
@@ -107,10 +109,23 @@ where
         return None;
     }
     let location = state.seat.get_pointer()?.current_location();
+    let themed = state.themed_cursor();
+    let (buffer, at) = match &themed {
+        Some(image) => {
+            let (index, _) = image.frame_at(state.cursor.shown_for());
+            let frame = &image.frames[index];
+            let at = (
+                location.x - frame.hotspot.0 as f64,
+                location.y - frame.hotspot.1 as f64,
+            );
+            (&frame.buffer, at)
+        }
+        None => (arrow, (location.x, location.y)),
+    };
     MemoryRenderBufferRenderElement::from_buffer(
         renderer,
-        (location.x, location.y),
-        arrow,
+        at,
+        buffer,
         None,
         None,
         None,

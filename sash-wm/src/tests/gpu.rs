@@ -309,3 +309,111 @@ fn gpu_dmabuf_windows_and_popup() {
         "the dmabuf window is clipped to its tile"
     );
 }
+
+/// Renders the output and the cursor (as the DRM backend composes a frame) into an
+/// offscreen buffer and returns its RGBA pixels.
+#[cfg(debug_assertions)]
+fn frame_with_cursor(renderer: &mut GlesRenderer, state: &crate::state::Sash) -> Vec<u8> {
+    use smithay::backend::renderer::ExportMem;
+    use smithay::utils::{Buffer, Physical, Rectangle};
+    let size: Size<i32, Physical> = (800, 600).into();
+    let buffer_size = Size::<i32, Buffer>::from((800, 600));
+    let mut target: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, buffer_size)
+        .expect("offscreen buffer");
+    let mut elements = render::cursor_elements(state, renderer, 1.0);
+    elements.extend(render::output_elements(state, renderer, 1.0));
+    let mapping = {
+        let mut framebuffer = renderer.bind(&mut target).expect("bind");
+        let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+        damage
+            .render_output(
+                renderer,
+                &mut framebuffer,
+                0,
+                &elements,
+                render::CLEAR_COLOR,
+            )
+            .expect("render");
+        renderer
+            .copy_framebuffer(
+                &framebuffer,
+                Rectangle::from_size(buffer_size),
+                Fourcc::Abgr8888,
+            )
+            .expect("copy")
+    };
+    renderer.map_texture(&mapping).expect("map").to_vec()
+}
+
+/// Renderer recovery (M11a): after the renderer is rebuilt (a new EGL context and
+/// renderer on the same display, the old one dropped), a shm window, a dmabuf window and
+/// a client cursor surface are drawn exactly as before, with no client committing
+/// anything in between. Run: `cargo test -p sash-wm -- --ignored gpu_rebuild`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_rebuild_restores_windows_and_cursor_without_client_help() {
+    use smithay::backend::renderer::ImportDma;
+    let device = EGLDevice::enumerate()
+        .expect("EGL device enumeration")
+        .find(|d| d.render_device_path().is_ok())
+        .expect("a GPU render node");
+    // Safety: the display outlives every context made on it in this test.
+    let display = unsafe { EGLDisplay::new(device) }.expect("EGL display");
+    let new_renderer = || {
+        let context = EGLContext::new(&display).expect("EGL context");
+        unsafe { GlesRenderer::new(context) }.expect("GLES renderer")
+    };
+    // The client's GPU work happens on a renderer of its own.
+    let mut client_gpu = new_renderer();
+    let red = colour_dmabuf(&mut client_gpu, (400, 600), [1.0, 0.0, 0.0, 1.0]);
+    let mut first = new_renderer();
+    let formats = first.dmabuf_formats().into_iter().collect();
+    let mut harness = Harness::with_dmabuf_formats(formats);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let w1 = c1.create_window_without_commit();
+        w1.surface.commit();
+        c1.dispatch_until("configure", |e| e.configures >= 1);
+        c1.ack_and_commit(&w1);
+        let mut c2 = TestClient::connect(&socket);
+        let mut w2 = c2.create_window_without_commit();
+        w2.color = 0xff_00_ff_00; // green, wl_shm
+        w2.surface.commit();
+        c2.dispatch_until("configure", |e| e.configures >= 1);
+        c2.ack_and_commit(&w2); // 1 | 2
+        c1.roundtrip();
+        let serial = c1.events.configure_serial.expect("configured");
+        w1.xdg_surface.ack_configure(serial);
+        let buffer = c1.dmabuf_buffer(&red);
+        w1.surface.attach(Some(&buffer), 0, 0);
+        w1.surface.damage_buffer(0, 0, 400, 600);
+        w1.surface.commit();
+        c1.roundtrip();
+        // A white 16x16 cursor surface over window 1, hotspot at its top left.
+        server.on_server(|h| h.pointer_to(100.0, 100.0));
+        c1.roundtrip();
+        let _cursor = c1.set_cursor_surface((16, 16), (0, 0));
+        std::mem::forget((c1, c2, w1, w2, _cursor));
+    });
+    for _ in 0..5 {
+        harness.step();
+    }
+    let state = &harness.server.state;
+    let before = frame_with_cursor(&mut first, state);
+    drop(first); // the old renderer, with every texture it imported, is gone
+    let mut rebuilt = new_renderer();
+    let after = frame_with_cursor(&mut rebuilt, state);
+    let at = |pixels: &[u8], x: usize, y: usize| {
+        let i = (y * 800 + x) * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    for pixels in [&before, &after] {
+        assert_eq!(at(pixels, 200, 300), [255, 0, 0], "dmabuf window");
+        assert_eq!(at(pixels, 600, 300), [0, 255, 0], "shm window");
+        assert_eq!(at(pixels, 105, 105), [255, 255, 255], "cursor surface");
+    }
+    assert!(before == after, "the rebuilt renderer draws the same frame");
+}

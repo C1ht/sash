@@ -31,6 +31,13 @@ markers=(
     "DEBUG RECORDING"
     "sash_wm::record"
     "debug bundle"
+    # M11a: the debug-only cursor theme override (XCURSOR_THEME and XCURSOR_SIZE
+    # themselves are in every build: winit's client-side cursor code reads them) and
+    # the renderer fault injection.
+    "cursor theme override"
+    SASH_DEBUG_FAIL_SWAPS
+    SASH_DEBUG_CONTEXT_LOST
+    SASH_DEBUG_STOP_FLIPS
 )
 found=0
 for marker in "${markers[@]}"; do

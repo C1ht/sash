@@ -35,6 +35,7 @@ mod backend;
 mod capture;
 mod clients;
 mod cursor;
+mod cursor_theme;
 mod data_device;
 mod dmabuf;
 mod grab;
@@ -240,6 +241,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     event_loop.run(None, &mut server, Server::flush)?;
+    if let Some(reason) = server.state.fatal.take() {
+        // Everything is dropped on the way out (the session gives the display back).
+        tracing::error!("sash-wm stopped: {reason}");
+        return Err(reason.into());
+    }
     tracing::info!("sash-wm stopped");
     Ok(())
 }

@@ -6,27 +6,52 @@
 //! holds redraws back until the host's frame callback for the previous frame
 //! arrives, so a hidden window draws nothing and clients get no frame callbacks.
 
-use std::{cell::RefCell, rc::Rc, time::Instant};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+    time::{Duration, Instant},
+};
 
 use smithay::{
     backend::{
-        egl::ffi::egl,
+        SwapBuffersError,
+        egl::{
+            EGLContext,
+            context::{GlAttributes, PixelFormatRequirements},
+            ffi::egl,
+        },
         renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
     input::pointer::CursorImageStatus,
     output::Output,
     reexports::{
-        calloop::{EventLoop, ping::PingSource},
+        calloop::{
+            EventLoop, LoopHandle,
+            ping::PingSource,
+            timer::{TimeoutAction, Timer},
+        },
         winit::{dpi::LogicalSize, platform::wayland::WindowAttributesExtWayland, window::Window},
     },
     utils::{Physical, Size, Transform},
 };
 
+use super::recovery::{self, Failure, Recovery};
+#[cfg(debug_assertions)]
+use super::recovery::{Faults, Injected};
 use crate::{dmabuf, keybinds::Modifier, output, render, server::Server, state::Sash};
 
 /// Keybind modifier when nested: the host compositor usually captures Super.
 pub const MODIFIER: Modifier = Modifier::Alt;
+
+/// Recovery failed: nested sash-wm exits with `reason` as its error (the host is
+/// unaffected).
+fn give_up(state: &mut Sash, reason: &str) {
+    tracing::error!(reason, "the renderer could not be recovered; exiting");
+    record!(state, "renderer_gave_up");
+    state.fatal = Some(format!("the renderer could not be recovered: {reason}"));
+    state.loop_signal.stop();
+}
 
 /// Counts used to check that every resize leads to a rendered frame.
 #[derive(Debug, Default)]
@@ -47,6 +72,44 @@ struct Nested {
     /// Number of offscreen captures written (debug builds).
     #[cfg(debug_assertions)]
     captures: u32,
+    /// Renderer recovery (CLAUDE.md): the failure episode and its retry timer. There is
+    /// no flip watchdog nested: a hidden host window and a stall look the same.
+    recovery: Recovery,
+    retry_armed: bool,
+    this: Weak<RefCell<Nested>>,
+    loop_handle: LoopHandle<'static, Server>,
+    /// Debug builds: injected renderer faults (SASH_DEBUG_FAIL_SWAPS and friends).
+    #[cfg(debug_assertions)]
+    render_faults: Faults,
+}
+
+/// A fault injected into a frame (debug builds), as an error of the frame.
+#[derive(Debug)]
+struct InjectedFault(Failure);
+
+impl std::fmt::Display for InjectedFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "injected renderer fault: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for InjectedFault {}
+
+/// Why a nested frame failed: Smithay's own "context lost", an EGL context-lost error
+/// anywhere in the chain, or an injected fault; anything else is a failed frame.
+fn classify(err: &(dyn std::error::Error + 'static)) -> Failure {
+    if let Some(InjectedFault(failure)) = err.downcast_ref::<InjectedFault>() {
+        return *failure;
+    }
+    if matches!(
+        err.downcast_ref::<SwapBuffersError>(),
+        Some(SwapBuffersError::ContextLost(_))
+    ) || recovery::context_lost(err)
+    {
+        Failure::ContextLost
+    } else {
+        Failure::Frame
+    }
 }
 
 /// The GL framebuffer of the winit window is upside down relative to the output.
@@ -99,15 +162,23 @@ pub fn start(
     let size = backend.window_size();
     let output = output::create(state, "nested", size);
     state.set_layout_area(size.to_logical(1));
-    let nested = Rc::new(RefCell::new(Nested {
-        output,
-        damage: damage_tracker(size),
-        backend,
-        counters: Counters::default(),
-        cursor_applied: None,
-        #[cfg(debug_assertions)]
-        captures: 0,
-    }));
+    let nested = Rc::new_cyclic(|this| {
+        RefCell::new(Nested {
+            output,
+            damage: damage_tracker(size),
+            backend,
+            counters: Counters::default(),
+            cursor_applied: None,
+            #[cfg(debug_assertions)]
+            captures: 0,
+            recovery: Recovery::default(),
+            retry_armed: false,
+            this: this.clone(),
+            loop_handle: event_loop.handle(),
+            #[cfg(debug_assertions)]
+            render_faults: Faults::from_env(|name| std::env::var(name).ok()),
+        })
+    });
 
     let offer = dmabuf::offer(nested.borrow_mut().backend.renderer());
     if let Some((main_device, formats)) = offer {
@@ -192,43 +263,128 @@ impl Nested {
             }
             WinitEvent::Redraw => {
                 self.counters.redraws_received += 1;
-                state.flush_pending_arrange();
-                let input_since = state.windows.input_pending_since.take();
-                state.frame_started();
-                record!(state, "frame_start");
-                let times = match self.render(state) {
-                    Ok(times) => times,
-                    Err(err) => {
-                        tracing::error!(%err, counters = ?self.counters, "rendering failed");
-                        return;
-                    }
-                };
-                self.counters.frames_rendered += 1;
-                // From sash-wm handling the input (a drag motion, a keybind) to the frame
-                // showing its effect being submitted, including the wait for the host.
-                let input_to_frame_us = input_since.map(|t| t.elapsed().as_micros() as u64);
-                tracing::debug!(
-                    frame_time_us = times.total_us(),
-                    render_us = times.render_us,
-                    submit_us = times.submit_us,
-                    input_to_frame_us,
-                    counters = ?self.counters,
-                    "frame"
-                );
-                if self.counters.frames_rendered == 1 {
-                    tracing::info!(
-                        startup_ms = state.started.elapsed().as_secs_f64() * 1000.0,
-                        "first frame submitted"
-                    );
-                }
-                #[cfg(feature = "debug-record")]
-                self.record_frame(state, &times);
-                state.frame_presented(&self.output);
+                self.redraw(state);
             }
             WinitEvent::Input(event) => state.handle_input(event),
             WinitEvent::CloseRequested => state.loop_signal.stop(),
             WinitEvent::Focus(_) => {}
         }
+    }
+
+    /// Draws and submits a frame (a host redraw event, or a recovery retry).
+    fn redraw(&mut self, state: &mut Sash) {
+        state.flush_pending_arrange();
+        let input_since = state.windows.input_pending_since.take();
+        state.frame_started();
+        record!(state, "frame_start");
+        let times = match self.render(state) {
+            Ok(times) => times,
+            Err(err) => {
+                tracing::error!(%err, counters = ?self.counters, "rendering failed");
+                let failure = classify(err.as_ref());
+                self.renderer_failed(failure, state);
+                return;
+            }
+        };
+        if self.recovery.active() {
+            tracing::info!("renderer recovered");
+            record!(state, "renderer_recovered");
+        }
+        self.recovery.succeeded();
+        self.counters.frames_rendered += 1;
+        // From sash-wm handling the input (a drag motion, a keybind) to the frame
+        // showing its effect being submitted, including the wait for the host.
+        let input_to_frame_us = input_since.map(|t| t.elapsed().as_micros() as u64);
+        tracing::debug!(
+            frame_time_us = times.total_us(),
+            render_us = times.render_us,
+            submit_us = times.submit_us,
+            input_to_frame_us,
+            counters = ?self.counters,
+            "frame"
+        );
+        if self.counters.frames_rendered == 1 {
+            tracing::info!(
+                startup_ms = state.started.elapsed().as_secs_f64() * 1000.0,
+                "first frame submitted"
+            );
+        }
+        #[cfg(feature = "debug-record")]
+        self.record_frame(state, &times);
+        state.frame_presented(&self.output);
+    }
+
+    /// A frame failed: retry on a timer, rebuild the renderer, or give up.
+    fn renderer_failed(&mut self, failure: Failure, state: &mut Sash) {
+        let next = self.recovery.failed(failure);
+        tracing::warn!(?failure, ?next, "renderer failure");
+        record!(
+            state,
+            "renderer_failure",
+            "failure" => format!("{failure:?}"),
+            "next" => format!("{next:?}"),
+        );
+        match next {
+            recovery::Next::RetryIn(delay) => self.arm_retry(delay),
+            recovery::Next::RebuildThenRetryIn(delay) => match self.rebuild_renderer() {
+                Ok(()) => {
+                    tracing::warn!("renderer rebuilt");
+                    record!(state, "renderer_rebuilt");
+                    self.arm_retry(delay);
+                }
+                Err(err) => give_up(state, &format!("rebuilding the renderer failed: {err}")),
+            },
+            recovery::Next::GiveUp => {
+                give_up(state, "frames still fail after the renderer was rebuilt")
+            }
+        }
+    }
+
+    /// A new EGL context and renderer for the same window (the same configuration as
+    /// Smithay's winit backend uses, so the window's surface fits it), the swap interval
+    /// set to 0 again, and a full redraw. Window buffers and cursor surfaces are imported
+    /// into the new renderer as they are drawn: no client has to commit.
+    fn rebuild_renderer(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let display = self.backend.renderer().egl_context().display().clone();
+        let attributes = GlAttributes {
+            version: (3, 0),
+            profile: None,
+            debug: cfg!(debug_assertions),
+            vsync: false,
+        };
+        let context =
+            EGLContext::new_with_config(&display, attributes, PixelFormatRequirements::_10_bit())
+                .or_else(|_| {
+                EGLContext::new_with_config(&display, attributes, PixelFormatRequirements::_8_bit())
+            })?;
+        *self.backend.renderer() = unsafe { GlesRenderer::new(context) }?;
+        disable_swap_wait(&mut self.backend)?;
+        self.damage = damage_tracker(self.backend.window_size());
+        Ok(())
+    }
+
+    /// The failed frame is tried again after `delay`, from a timer: a host redraw event
+    /// would wait for a frame callback that never comes (the frame was not committed).
+    fn arm_retry(&mut self, delay: Duration) {
+        if self.retry_armed {
+            return;
+        }
+        let this = self.this.clone();
+        let inserted =
+            self.loop_handle
+                .insert_source(Timer::from_duration(delay), move |_, _, server| {
+                    if let Some(nested) = this.upgrade() {
+                        let mut nested = nested.borrow_mut();
+                        nested.retry_armed = false;
+                        tracing::info!("renderer retry");
+                        record!(server.state, "renderer_retry");
+                        let size = nested.backend.window_size();
+                        nested.damage = damage_tracker(size);
+                        nested.redraw(&mut server.state);
+                    }
+                    TimeoutAction::Drop
+                });
+        self.retry_armed = inserted.is_ok();
     }
 
     /// Debug recording: the frame's end and a screenshot if one is due. Nested, a named
@@ -305,6 +461,14 @@ impl Nested {
             result.damage.cloned()
         };
         let rendered = Instant::now();
+        #[cfg(debug_assertions)]
+        match self.render_faults.swap() {
+            Some(Injected::Fail) => return Err(Box::new(InjectedFault(Failure::Frame))),
+            Some(Injected::ContextLost) => {
+                return Err(Box::new(InjectedFault(Failure::ContextLost)));
+            }
+            None => {}
+        }
         self.backend.submit(damage.as_deref())?;
         Ok(FrameTimes {
             render_us: (rendered - start).as_micros() as u64,

@@ -22,6 +22,8 @@ nix = { version = "0.31", default-features = false, features = ["signal"] }
 smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit", "desktop", "wayland_frontend", "backend_drm", "backend_gbm", "backend_libinput", "backend_udev", "backend_session_libseat"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Cursor theme files (owner, M11a; MIT, already in the tree through Smithay).
+xcursor = "=0.3.11"
 
 [dev-dependencies]
 proptest = "1"

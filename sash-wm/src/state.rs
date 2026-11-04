@@ -72,6 +72,10 @@ pub struct Sash {
     pub clipboard: crate::data_device::DataDevices,
     pub dmabufs: Dmabufs,
     pub cursor: Cursor,
+    /// Set when sash-wm must exit with an error (renderer recovery gave up).
+    pub fatal: Option<String>,
+    /// The cursor theme (Adwaita, size 24; shapes loaded on first use).
+    pub cursor_theme: crate::cursor_theme::CursorTheme,
     /// Snap preview and fullscreen backdrop.
     pub overlay: Overlay,
     pub keybinds: Keybinds,
@@ -130,6 +134,8 @@ impl Sash {
             clipboard,
             dmabufs: Dmabufs::default(),
             cursor: Cursor::default(),
+            cursor_theme: crate::cursor_theme::CursorTheme::system(),
+            fatal: None,
             overlay: Overlay::new(),
             keybinds: Keybinds::new(modifier, socket_name),
             started,

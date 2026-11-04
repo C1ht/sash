@@ -16,7 +16,14 @@ use smithay::{
     wayland::{compositor, tablet_manager::TabletSeatHandler},
 };
 
-use crate::state::Sash;
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+
+use crate::{cursor_theme::CursorImage, state::Sash};
 
 /// Frames for a moving cursor sash-wm draws: one request until the next frame starts,
 /// so however many motion events arrive, at most one frame per frame (the backend
@@ -55,6 +62,10 @@ pub struct Cursor {
     image: CursorImageStatus,
     /// Bumped on every change, so the backend can apply a change once.
     generation: u64,
+    /// When the image last changed (an animated shape starts at its first frame).
+    since: Instant,
+    /// A timer for the next frame of an animated shape is armed.
+    animation_armed: bool,
 }
 
 impl Default for Cursor {
@@ -62,6 +73,8 @@ impl Default for Cursor {
         Self {
             image: CursorImageStatus::Named(CursorIcon::Default),
             generation: 0,
+            since: Instant::now(),
+            animation_armed: false,
         }
     }
 }
@@ -81,6 +94,11 @@ impl Cursor {
         self.generation
     }
 
+    /// How long the current image has been shown.
+    pub fn shown_for(&self) -> Duration {
+        self.since.elapsed()
+    }
+
     /// Whether `surface` is the current cursor surface.
     pub fn is_surface(&self, surface: &WlSurface) -> bool {
         matches!(&self.image, CursorImageStatus::Surface(s) if s == surface)
@@ -95,7 +113,43 @@ impl Sash {
         tracing::trace!(?image, "cursor");
         self.cursor.image = image;
         self.cursor.generation += 1;
+        self.cursor.since = Instant::now();
         self.request_redraw();
+    }
+
+    /// The themed image of the current named shape, if sash-wm draws named shapes (DRM)
+    /// and the theme has one; None means the built-in arrow.
+    pub fn themed_cursor(&self) -> Option<Rc<CursorImage>> {
+        match self.cursor.image() {
+            CursorImageStatus::Named(icon) if self.draws_named_cursor => {
+                self.cursor_theme.image(icon)
+            }
+            _ => None,
+        }
+    }
+
+    /// After a frame: if an animated shape is shown, its next frame is requested at the
+    /// theme's delay. A static shape arms nothing (no frames while nothing moves).
+    pub fn schedule_cursor_animation(&mut self) {
+        if self.cursor.animation_armed {
+            return;
+        }
+        let Some(wait) = self
+            .themed_cursor()
+            .and_then(|image| image.frame_at(self.cursor.shown_for()).1)
+        else {
+            return;
+        };
+        let timer = Timer::from_duration(wait);
+        let inserted = self.loop_handle.insert_source(timer, |_, _, server| {
+            let state = &mut server.state;
+            state.cursor.animation_armed = false;
+            if state.themed_cursor().is_some_and(|image| image.animated()) {
+                state.request_redraw();
+            }
+            TimeoutAction::Drop
+        });
+        self.cursor.animation_armed = inserted.is_ok();
     }
 
     /// Pointer focus moved to another surface (or none): back to the default arrow.

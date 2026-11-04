@@ -129,6 +129,8 @@ impl Harness {
             self.server.state.flush_pending_arrange();
             self.frames += 1;
             self.server.state.frame_presented(&self.output);
+            // As the DRM backend does after each frame.
+            self.server.state.schedule_cursor_animation();
         }
         self.server.flush();
     }

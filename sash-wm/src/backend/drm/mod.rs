@@ -84,6 +84,9 @@ use self::{
     pacing::{Next, Pacer},
     session::{SessionTracker, Step},
 };
+use super::recovery::{self, Failure, Recovery, Watchdog};
+#[cfg(debug_assertions)]
+use super::recovery::{Faults, Injected};
 use crate::{dmabuf, keybinds::Modifier, output, render, server::Server, state::Sash};
 
 #[cfg(debug_assertions)]
@@ -143,6 +146,16 @@ struct Drm {
     flips_refused: u64,
     /// Timing points since the last resume (recorder and debug log only).
     resume: Option<ResumeTrace>,
+    /// Renderer recovery (CLAUDE.md): the failure episode, the flip watchdog, armed
+    /// timers, and the EGL display a rebuilt renderer is made on.
+    recovery: Recovery,
+    watchdog: Watchdog,
+    retry_armed: bool,
+    watchdog_armed: bool,
+    egl_display: EGLDisplay,
+    /// Debug builds: injected renderer faults (SASH_DEBUG_FAIL_SWAPS and friends).
+    #[cfg(debug_assertions)]
+    render_faults: Faults,
     /// For timers that call back into the backend.
     this: Weak<RefCell<Drm>>,
     /// Debug builds: test commits made to fail (fault injection).
@@ -248,6 +261,14 @@ pub fn start(
     let output = output::create_physical(state, &name, size_mm, drm_mode.into());
     // sash-wm draws the arrow here (cursor plane or composited).
     state.draws_named_cursor = true;
+    // The theme's default shape is loaded at startup; every other one on first use.
+    match state
+        .cursor_theme
+        .image(smithay::input::pointer::CursorIcon::Default)
+    {
+        Some(image) => tracing::info!(frames = image.frames.len(), "cursor theme loaded"),
+        None => tracing::warn!("no cursor theme: the built-in arrow is drawn"),
+    }
     state.set_layout_area((width as i32, height as i32).into());
 
     let allocator = GbmAllocator::new(
@@ -302,6 +323,13 @@ pub fn start(
             recheck: recheck::Recheck::default(),
             flips_refused: 0,
             resume: None,
+            recovery: Recovery::default(),
+            watchdog: Watchdog::default(),
+            retry_armed: false,
+            watchdog_armed: false,
+            egl_display: display.clone(),
+            #[cfg(debug_assertions)]
+            render_faults: Faults::from_env(|name| std::env::var(name).ok()),
             this: this.clone(),
             #[cfg(debug_assertions)]
             faults,
@@ -358,6 +386,15 @@ pub fn start(
     // The first frame.
     drm.borrow_mut().render(state);
     Ok(())
+}
+
+/// Recovery failed: sash-wm exits cleanly (the session gives the display and the
+/// console back, as on every exit) with `reason` as its error.
+fn give_up(state: &mut Sash, reason: &str) {
+    tracing::error!(reason, "the renderer could not be recovered; exiting");
+    record!(state, "renderer_gave_up");
+    state.fatal = Some(format!("the renderer could not be recovered: {reason}"));
+    state.loop_signal.stop();
 }
 
 /// A commit refused because this process is no longer DRM master (EACCES): the
@@ -792,38 +829,52 @@ impl Drm {
             (true, true) => "plane",
             (true, false) => "composited",
         };
-        let queued = match result {
-            Ok(frame) if frame.is_empty => false,
-            Ok(_) => {
-                let feedback = self.presentation_feedback(state);
-                match self.compositor.queue_frame(Some(feedback)) {
-                    Ok(()) => true,
-                    Err(FrameError::DrmError(DrmError::Access(access)))
-                        if master_gone(&access.source) =>
-                    {
-                        // The session is pausing and DRM master is already gone: an
-                        // expected race, counted and logged with the session event.
-                        self.flips_refused += 1;
-                        tracing::debug!(err = %access.source, "page flip refused: DRM master gone");
-                        false
-                    }
-                    Err(err) => {
-                        tracing::warn!(%err, "queueing the frame failed");
-                        false
+        let outcome: Result<bool, Failure> = match result {
+            Ok(frame) if frame.is_empty => Ok(false),
+            Ok(_) => match self.injected_fault() {
+                Some(failure) => Err(failure),
+                None => {
+                    let feedback = self.presentation_feedback(state);
+                    match self.compositor.queue_frame(Some(feedback)) {
+                        Ok(()) => Ok(true),
+                        Err(FrameError::DrmError(DrmError::Access(access)))
+                            if master_gone(&access.source) =>
+                        {
+                            // The session is pausing and DRM master is already gone: an
+                            // expected race, counted and logged with the session event.
+                            self.flips_refused += 1;
+                            tracing::debug!(err = %access.source, "page flip refused: DRM master gone");
+                            Ok(false)
+                        }
+                        Err(FrameError::DrmError(DrmError::DeviceInactive)) => Ok(false),
+                        Err(err) => {
+                            tracing::warn!(%err, "queueing the frame failed");
+                            Err(Failure::Frame)
+                        }
                     }
                 }
-            }
+            },
             Err(err) => {
                 tracing::warn!(%err, "rendering failed");
-                false
+                Err(if recovery::context_lost(&err) {
+                    Failure::ContextLost
+                } else {
+                    Failure::Frame
+                })
             }
         };
+        let queued = outcome == Ok(true);
+        if queued {
+            self.watchdog.queued(now());
+            self.arm_watchdog(state);
+        }
         let committed = start.elapsed().saturating_sub(drawn);
         if first_after_resume {
             self.timing_point(state, "first frame drawn", Some(drawn));
             self.timing_point(state, "first frame committed (modeset)", Some(committed));
         }
         self.pacer.rendered(queued, started);
+        state.schedule_cursor_animation();
         #[cfg(feature = "debug-record")]
         self.record_frame(state, queued, cursor, start.elapsed(), (drawn, committed));
         if queued {
@@ -834,6 +885,115 @@ impl Drm {
         } else {
             self.idle_frame_callbacks(state);
         }
+        if let Err(failure) = outcome {
+            self.renderer_failed(failure, state);
+        }
+    }
+
+    /// Debug builds: the fault injected into this frame, if any.
+    fn injected_fault(&mut self) -> Option<Failure> {
+        #[cfg(debug_assertions)]
+        match self.render_faults.swap() {
+            Some(Injected::Fail) => return Some(Failure::Frame),
+            Some(Injected::ContextLost) => return Some(Failure::ContextLost),
+            None => {}
+        }
+        None
+    }
+
+    /// A frame failed: retry later, rebuild the renderer, or give up (recovery.rs).
+    fn renderer_failed(&mut self, failure: Failure, state: &mut Sash) {
+        let next = self.recovery.failed(failure);
+        tracing::warn!(?failure, ?next, "renderer failure");
+        record!(
+            state,
+            "renderer_failure",
+            "failure" => format!("{failure:?}"),
+            "next" => format!("{next:?}"),
+        );
+        match next {
+            recovery::Next::RetryIn(delay) => self.arm_retry(delay, state),
+            recovery::Next::RebuildThenRetryIn(delay) => match self.rebuild_renderer() {
+                Ok(()) => {
+                    tracing::warn!("renderer rebuilt");
+                    record!(state, "renderer_rebuilt");
+                    self.arm_retry(delay, state);
+                }
+                Err(err) => give_up(state, &format!("rebuilding the renderer failed: {err}")),
+            },
+            recovery::Next::GiveUp => {
+                give_up(state, "frames still fail after the renderer was rebuilt")
+            }
+        }
+    }
+
+    /// A new EGL context and renderer on the same display; the compositor's buffers are
+    /// reset, so the next frame is drawn in full. Windows' buffers and the cursor are
+    /// imported into the new renderer as they are drawn: no client has to commit.
+    fn rebuild_renderer(&mut self) -> Result<(), String> {
+        let context = EGLContext::new(&self.egl_display).map_err(|e| e.to_string())?;
+        let renderer = unsafe { GlesRenderer::new(context) }.map_err(|e| e.to_string())?;
+        self.renderer = renderer;
+        self.compositor.reset_buffers();
+        Ok(())
+    }
+
+    /// The failed frame is tried again after `delay` (a timer, never a frame callback),
+    /// drawn in full. While the session is paused the resume redraws instead.
+    fn arm_retry(&mut self, delay: Duration, state: &mut Sash) {
+        if self.retry_armed {
+            return;
+        }
+        let this = self.this.clone();
+        let inserted =
+            state
+                .loop_handle
+                .insert_source(Timer::from_duration(delay), move |_, _, server| {
+                    if let Some(drm) = this.upgrade() {
+                        let mut drm = drm.borrow_mut();
+                        drm.retry_armed = false;
+                        if drm.pacer.is_active() {
+                            tracing::info!("renderer retry");
+                            record!(server.state, "renderer_retry");
+                            drm.compositor.reset_buffers();
+                            drm.render(&mut server.state);
+                        }
+                    }
+                    TimeoutAction::Drop
+                });
+        self.retry_armed = inserted.is_ok();
+    }
+
+    /// Checks the flip watchdog while a frame waits for its flip.
+    fn arm_watchdog(&mut self, state: &mut Sash) {
+        if self.watchdog_armed {
+            return;
+        }
+        let this = self.this.clone();
+        let inserted = state.loop_handle.insert_source(
+            Timer::from_duration(recovery::WATCHDOG / 4),
+            move |_, _, server| {
+                let Some(drm) = this.upgrade() else {
+                    return TimeoutAction::Drop;
+                };
+                let mut drm = drm.borrow_mut();
+                let expected = drm.pacer.is_active();
+                if drm.watchdog.fired(now(), expected) {
+                    drm.watchdog_armed = false;
+                    tracing::warn!("no page flip for 2 s");
+                    record!(server.state, "flip_watchdog");
+                    drm.renderer_failed(Failure::Watchdog, &mut server.state);
+                    return TimeoutAction::Drop;
+                }
+                if drm.watchdog.waiting() {
+                    TimeoutAction::ToDuration(recovery::WATCHDOG / 4)
+                } else {
+                    drm.watchdog_armed = false;
+                    TimeoutAction::Drop
+                }
+            },
+        );
+        self.watchdog_armed = inserted.is_ok();
     }
 
     /// Debug recording: the frame's end (where the cursor went), the counters, and a
@@ -918,6 +1078,17 @@ impl Drm {
 
     /// The queued frame is on screen.
     fn flip_complete(&mut self, state: &mut Sash, metadata: Option<DrmEventMetadata>) {
+        // Debug builds: flips swallowed on request (the watchdog's test).
+        #[cfg(debug_assertions)]
+        if self.render_faults.flips_stopped() {
+            return;
+        }
+        self.watchdog.flipped();
+        if self.recovery.active() {
+            tracing::info!("renderer recovered");
+            record!(state, "renderer_recovered");
+        }
+        self.recovery.succeeded();
         if let Some(resume) = self.resume.as_mut()
             && !std::mem::replace(&mut resume.flipped, true)
         {
@@ -1166,7 +1337,10 @@ impl Drm {
 
     fn run(&mut self, step: Step, state: &mut Sash) {
         match step {
-            Step::StopRendering => self.pacer.pause(),
+            Step::StopRendering => {
+                self.pacer.pause();
+                self.watchdog.reset();
+            }
             Step::SuspendInput => self.libinput.suspend(),
             Step::PauseDrm => self.device.pause(),
             Step::ActivateDrm => {

@@ -380,3 +380,64 @@ fn pointer_motion_over_an_empty_desktop_redraws_the_arrow() {
     assert_eq!(nested.server.state.cursor_frames.requested(), 0);
     assert_eq!(nested.frames, before);
 }
+
+/// Cursor themes (M11a): a static shape and a still pointer give no frames; an animated
+/// shape gives frames at its frame delays while it is shown, and none once it is gone.
+#[test]
+fn an_animated_cursor_draws_frames_only_while_it_is_shown() {
+    use std::time::{Duration, Instant};
+
+    use smithay::input::pointer::{CursorIcon, CursorImageStatus};
+
+    use crate::cursor_theme::{CursorTheme, tests::xcursor_file};
+
+    let root = std::env::temp_dir().join(format!("sash-anim-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let cursors = root.join("T/cursors");
+    std::fs::create_dir_all(&cursors).unwrap();
+    std::fs::write(
+        cursors.join("default"),
+        xcursor_file(&[(24, 24, 24, 0, 0, 0)]),
+    )
+    .unwrap();
+    let frame = (24, 24, 24, 0, 0, 20);
+    std::fs::write(cursors.join("wait"), xcursor_file(&[frame, frame, frame])).unwrap();
+
+    let mut harness = Harness::new();
+    harness.server.state.draws_named_cursor = true; // as on DRM
+    harness.server.state.cursor_theme = CursorTheme::load(&root, "T", 24);
+    let run_for = |harness: &mut Harness, ms: u64| {
+        let start = harness.frames;
+        let until = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < until {
+            harness.step();
+        }
+        harness.frames - start
+    };
+    run_for(&mut harness, 50);
+    assert_eq!(
+        run_for(&mut harness, 200),
+        0,
+        "static shape, still pointer: no frames"
+    );
+    harness
+        .server
+        .state
+        .set_cursor(CursorImageStatus::Named(CursorIcon::Wait));
+    let animated = run_for(&mut harness, 400);
+    assert!(
+        (5..=25).contains(&animated),
+        "about one frame per 20 ms delay: {animated}"
+    );
+    harness
+        .server
+        .state
+        .set_cursor(CursorImageStatus::Named(CursorIcon::Default));
+    run_for(&mut harness, 60);
+    assert_eq!(
+        run_for(&mut harness, 200),
+        0,
+        "back to a static shape: no frames"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

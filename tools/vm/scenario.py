@@ -259,6 +259,17 @@ try:
           away == "1" and sh(vm, "fgconsole").strip() == "2" and active(vm) == "active",
           f"VT after F1: {away}, session events logged: {log}")
 
+    # 8b. Renderer recovery (M11a): a VT switch away for longer than the flip watchdog
+    # (2 s) is no failure: no watchdog while the session is switched away.
+    vm.keys("ctrl", "alt", "f1")
+    time.sleep(4)
+    vm.keys("ctrl", "alt", "f2")
+    time.sleep(2)
+    check("renderer recovery: a 4 s VT switch away does not trip the 2 s flip watchdog",
+          count(vm, "no page flip") == 0 and count(vm, "renderer failure") == 0
+          and active(vm) == "active",
+          f"watchdog lines {count(vm, 'no page flip')}, failures {count(vm, 'renderer failure')}")
+
     # 9. Super+Shift+E quits and the console comes back.
     vm.keys("meta_l", "shift", "e")
     time.sleep(2)
@@ -442,6 +453,8 @@ try:
     time.sleep(1)
     frames2 = count(vm, "frame frame_time")
     shot(vm, "12-after-replug")
+    check("unplug: no flip watchdog while the connector is off (M11a)",
+          count(vm, "no page flip") == 0, f"watchdog lines {count(vm, 'no page flip')}")
     check("unplug: a udev event arrives and rendering stops; sash-wm keeps running",
           events1 > events0 and gone == 1 and frames1 == frames0 and alive == "active",
           f"udev events {events0} -> {events1}, disconnect logged {gone}, "
@@ -545,6 +558,56 @@ try:
     check("resume timing points: every step of a VT switch back is recorded (M9e)",
           seen == wanted, f"{len(seen)} of {len(wanted)}: missing {sorted(set(wanted) - set(seen))}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 17d. Renderer recovery (M11a, debug build with fault injection): a lost context at
+    # frame 30 rebuilds the renderer and frames go on; every swap failing gives up after
+    # the retries and one rebuild, and the clean exit gives the console back; flips that
+    # stop trip the 2 s watchdog, and recovery ends the same way.
+    start(vm, binary=DEBUG, env="SASH_DEBUG_CONTEXT_LOST=30", windows=1)
+    for i in range(60):
+        vm.pointer_abs(100 + 5 * i, 100 + 3 * i, W, H)
+        time.sleep(0.03)
+    time.sleep(1.5)
+    frames_before = count(vm, "frame frame_time")
+    for i in range(30):
+        vm.pointer_abs(400 - 5 * i, 300, W, H)
+        time.sleep(0.03)
+    time.sleep(1)
+    frames_after = count(vm, "frame frame_time")
+    rebuilt, recovered = count(vm, "renderer rebuilt"), count(vm, "renderer recovered")
+    check("renderer recovery: a lost context rebuilds the renderer once and frames go on",
+          rebuilt == 1 and recovered >= 1 and frames_after > frames_before
+          and active(vm) == "active",
+          f"rebuilt {rebuilt}, recovered {recovered}, frames {frames_before} -> {frames_after}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    start(vm, binary=DEBUG, env="SASH_DEBUG_FAIL_SWAPS=1000", windows=0)
+    for i in range(20):
+        vm.pointer_abs(200 + 10 * i, 200, W, H)
+        time.sleep(0.05)
+    time.sleep(8)
+    gave_up = count(vm, "could not be recovered")
+    retries, rebuilt = count(vm, "renderer retry"), count(vm, "renderer rebuilt")
+    check("renderer recovery: every swap failing: retries, one rebuild, then a clean exit "
+          "with the console back",
+          gave_up >= 1 and rebuilt == 1 and retries >= 2 and active(vm) != "active"
+          and vt_mode(vm) == "text",
+          f"retries {retries}, rebuilt {rebuilt}, gave up {gave_up}, unit {active(vm)}, "
+          f"VT 2 {vt_mode(vm)}")
+    sh(vm, "systemctl stop sash-session 2>/dev/null; chvt 1; sleep 1")
+
+    start(vm, binary=DEBUG, env="SASH_DEBUG_STOP_FLIPS=20", windows=0)
+    for i in range(60):
+        vm.pointer_abs(200 + 5 * i, 200, W, H)
+        time.sleep(0.05)
+    time.sleep(12)
+    watchdog = count(vm, "no page flip for 2 s")
+    gave_up = count(vm, "could not be recovered")
+    check("renderer recovery: flips that stop trip the watchdog; recovery gives up "
+          "cleanly when they never come back",
+          watchdog >= 1 and gave_up >= 1 and active(vm) != "active" and vt_mode(vm) == "text",
+          f"watchdog {watchdog}, gave up {gave_up}, unit {active(vm)}, VT 2 {vt_mode(vm)}")
+    sh(vm, "systemctl stop sash-session 2>/dev/null; chvt 1; sleep 1")
 
     # 17c. Clipboard (M10): copy in one client, paste in another, on the DRM backend.
     # wl-copy and wl-paste (wl-clipboard, apt in the guest; owner, M10) each map a small
