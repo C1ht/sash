@@ -921,6 +921,24 @@ change this file without the owner's approval.
 - Open questions (owner, docs/plan.md, no building): how screen sharing
   (xdg-desktop-portal), input methods (IME) and on-screen keyboards get
   a privileged path.
+- Privilege belongs to the connection's file descriptor and to whoever
+  holds it (owner, after M13a). Only trusted code is ever spawned. The
+  programs sash-wm may start are a fixed list of absolute paths owned by
+  root, compiled in; never looked up in PATH, never taken from the
+  environment (applies from M16, when the first program is added).
+  docs/trust.md says so.
+- Received descriptors (owner, after M13a): sash-wm never turns a
+  descriptor it receives in a request into a connection. A test passes a
+  privileged client's own connection descriptor to requests that take an
+  fd and proves no new connection appears.
+- Resource limits (owner, after M13a), constants, each one logged when
+  hit: open connections on the public socket (beyond it a new connection
+  is refused); global binds per connection (beyond it the client is
+  disconnected with a protocol error); the per-client buffer of events
+  not yet read (a client that never reads is cut off when it fills).
+  Tests: thousands of connections and binds, and a client that never
+  reads, neither stall the compositor nor grow memory without bound.
+  The values are listed in docs/plan.md.
 
 ## Layer-shell (owner, after M12; built in M13b)
 
@@ -939,6 +957,41 @@ change this file without the owner's approval.
   and logged.
 - Rule for later (session lock): while the session is locked, every
   compositor keybind is disabled except what logind handles (VT switch).
+- M13b (owner, after M13a): zwlr_layer_shell_v1 is a privileged global
+  (visible only to spawned clients). Three steps, each with a report and
+  a STOP; the owner is asked before the next step:
+  1. sash-wm's own arranger, pure code with no Smithay types: anchors,
+     margins, size and exclusive zones per the protocol (corner,
+     two-parallel-edge and all-edge anchors reserve nothing; sizes never
+     negative); the usable area with the cap; the stacking order. Unit
+     and property tests only, no clients: random panels never break the
+     cap, the usable area never goes negative, the order is stable.
+  2. The usable area wired into tiling coverage, snap zones, maximize,
+     the 64 px rule, the top-edge rule and the border rules above.
+     Property tests: every earlier invariant with random panels
+     appearing, changing and disappearing, including floating windows
+     under a new top panel (moved to keep the top edge inside the usable
+     area).
+  3. The protocol: get_layer_surface, configure and ack, keyboard
+     interactivity (none, on_demand, exclusive) with the keybind rule
+     above, input regions, layer popups, namespaces, output assignment,
+     destruction while mapped, invalid size or anchor (protocol errors),
+     a client disconnecting mid-frame. A small test-only privileged
+     client (wayland-client, test builds only, never in a release
+     binary). Tests: each mode, two exclusive surfaces, a panel appearing
+     under a floating window, an exclusive surface closing while a
+     keybind is pressed. The recorder logs layer events with namespaces,
+     never content. Standard checks after step 3; tag m13b after step 3
+     only. M14 is not started.
+- Stacking, bottom to top (owner, after M13a): background layer, bottom
+  layer, windows (tiled, their popups, floating and maximized windows,
+  the snap preview, as today), top layer, a fullscreen window (with its
+  backdrop and popups), overlay layer; popups of a layer surface directly
+  above their layer; the drag icon, then the cursor, on top of all.
+- Reservation order (owner, after M13a): exclusive zones are applied in
+  the order the surfaces were mapped; one that would break the cap is
+  ignored and logged, so a panel already there never moves because a
+  new one arrived.
 
 ## Text stack (owner, after M12; built in M14)
 
