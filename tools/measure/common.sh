@@ -101,6 +101,8 @@ start_firefox() {
             echo 'user_pref("network.proxy.allow_hijacking_localhost", true);'
             echo 'user_pref("network.proxy.no_proxies_on", "");'
         fi
+        # Extra prefs for a test (one user_pref line each), e.g. software rendering.
+        printf '%s\n' "${FIREFOX_PREFS:-}"
     } > "$profile/user.js"
     WAYLAND_DISPLAY=$SASH_SOCKET XDG_CONFIG_HOME=$(mktemp -d) MOZ_ENABLE_WAYLAND=1 \
         MOZ_CRASHREPORTER_DISABLE=1 MOZ_CRASHREPORTER_NO_REPORT=1 \
