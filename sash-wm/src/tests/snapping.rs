@@ -44,9 +44,15 @@ fn one_floating(
     (c, w)
 }
 
-/// The client's size in an outer rectangle of w x h: the test clients do not negotiate
-/// decorations, so only the 1 px border is taken (M11b).
+/// The client's size in a tiled, snapped or maximized rectangle of w x h: the test
+/// clients do not negotiate decorations, so only the 1 px border on edges inside the
+/// output is taken (M11b; see `harness::tile`).
 fn client(w: i32, h: i32) -> (i32, i32) {
+    super::harness::tile(w, h).expect("a size")
+}
+
+/// The client's size in a plain floating rectangle: the border on all four edges.
+fn floating_client(w: i32, h: i32) -> (i32, i32) {
     crate::layout::decor::Decoration::BORDER.client_size((w, h))
 }
 
@@ -129,7 +135,7 @@ fn client_maximize_on_a_tiled_and_a_floating_window() {
         c.roundtrip();
         assert_eq!(
             c.config(&w).map(|c| (c.size, c.maximized)),
-            Some((client(300, 200), false))
+            Some((floating_client(300, 200), false))
         );
         server.on_server(|h| assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 300, 200))));
     });
@@ -195,7 +201,10 @@ fn mouse_drag_to_the_left_edge_snaps_and_dragging_out_restores() {
             h.key(ALT, KeyState::Released);
         });
         c.roundtrip();
-        assert_eq!(c.config(&w).map(|c| c.size), Some(client(300, 200)));
+        assert_eq!(
+            c.config(&w).map(|c| c.size),
+            Some(floating_client(300, 200))
+        );
     });
 }
 
@@ -476,7 +485,10 @@ fn each_quarter_by_mouse_and_by_arrow_keys() {
                 );
             });
             c.roundtrip();
-            assert_eq!(c.config(&w).map(|c| c.size), Some(client(300, 200)));
+            assert_eq!(
+                c.config(&w).map(|c| c.size),
+                Some(floating_client(300, 200))
+            );
         }
     });
 }
@@ -555,7 +567,10 @@ mod quarter_chords {
                 assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 300, 200)));
             });
             c.roundtrip();
-            assert_eq!(c.config(&w).map(|c| c.size), Some(client(300, 200)));
+            assert_eq!(
+                c.config(&w).map(|c| c.size),
+                Some(floating_client(300, 200))
+            );
             for key in [Y, U, B, N] {
                 assert!(
                     !c.events.keys_pressed.contains(&key),

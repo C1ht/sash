@@ -136,9 +136,9 @@ fn a_drag_over_a_popup_enters_the_popup() {
             t.c2.open_popup(&t.w2.xdg_surface, PopupSpec::default(), None);
         t.c1.roundtrip();
         let _source = start_drag(&mut t, &server);
-        // The popup is at window 2's client origin (401, 1: inside its border) plus
-        // (10, 20), 50x40.
-        move_to(&server, 431.0, 41.0);
+        // The popup is at window 2's client origin (401, 0: inside its left border;
+        // none on the output's top edge) plus (10, 20), 50x40.
+        move_to(&server, 431.0, 40.0);
         t.c2.roundtrip();
         match t.c2.events.data.drag.first() {
             Some(DragEvent::Enter { surface, x, y, .. }) => {
@@ -207,11 +207,10 @@ fn a_drop_on_nothing_or_on_a_target_that_accepted_nothing_cancels() {
     });
 }
 
-/// At the output's edge (the pointer pinned there) what is under the pointer decides,
-/// as anywhere else: there it is window 2's 1 px border (M11b), which is no target, so
-/// the drop is a cancel; one pixel in, the window is the target.
+/// At the output's edge (the pointer pinned there) the window under it is the target
+/// as anywhere else: a tile has no border on the output boundary (owner, after M11b).
 #[test]
-fn a_drop_at_the_output_edge_goes_to_what_is_there() {
+fn a_drop_at_the_output_edge_goes_to_the_window_there() {
     let mut harness = Harness::new();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
@@ -231,13 +230,6 @@ fn a_drop_at_the_output_edge_goes_to_what_is_there() {
                 .current_location();
             assert_eq!(at.x, 799.0, "pinned at the right edge");
         });
-        t.c2.roundtrip();
-        assert_eq!(
-            t.c2.events.data.drag.last(),
-            Some(&DragEvent::Leave),
-            "the border is not the window's"
-        );
-        server.on_server(|h| h.server.state.pointer_moved_by((-1.0, 0.0).into(), 0));
         let offer = accept(&mut t.c2);
         release(&server);
         t.c2.roundtrip();

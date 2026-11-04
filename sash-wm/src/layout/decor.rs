@@ -49,7 +49,9 @@ pub const BUTTONS: [Button; 2] = [Button::Close, Button::Maximize];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Decoration {
     pub bar: bool,
-    pub border: bool,
+    /// The edges with a border: an edge on the output boundary of a tile, a snapped or
+    /// a maximized window has none (owner, after M11b).
+    pub border: Edges,
 }
 
 /// What a point on the decorations means.
@@ -67,22 +69,31 @@ pub enum Part {
 impl Decoration {
     pub const NONE: Decoration = Decoration {
         bar: false,
-        border: false,
+        border: Edges::NONE,
     };
     pub const BORDER: Decoration = Decoration {
         bar: false,
-        border: true,
+        border: Edges::ALL,
     };
     pub const FULL: Decoration = Decoration {
         bar: true,
-        border: true,
+        border: Edges::ALL,
     };
+
+    /// The same decorations with a border only on `edges`.
+    pub fn with_border(self, edges: Edges) -> Self {
+        Self {
+            border: edges,
+            ..self
+        }
+    }
 
     /// Space taken on the left, top, right and bottom.
     pub fn insets(self) -> (i32, i32, i32, i32) {
-        let b = if self.border { BORDER } else { 0 };
+        let b = |on: bool| if on { BORDER } else { 0 };
         let bar = if self.bar { BAR } else { 0 };
-        (b, b + bar, b, b)
+        let e = self.border;
+        (b(e.left), b(e.top) + bar, b(e.right), b(e.bottom))
     }
 
     /// The client's rectangle inside `outer` (never negative; empty if the outer
@@ -118,17 +129,21 @@ impl Decoration {
         }
     }
 
+    fn with_bar(self, bar: bool) -> Self {
+        Self { bar, ..self }
+    }
+
     /// The bar's rectangle (inside the borders).
     pub fn bar_rect(self, outer: Rect) -> Option<Rect> {
         if !self.bar {
             return None;
         }
-        let b = if self.border { BORDER } else { 0 };
+        let (l, t, r, _) = self.with_bar(false).insets();
         Some(Rect::new(
-            outer.x + b,
-            outer.y + b,
-            (outer.w - 2 * b).max(0),
-            BAR.min((outer.h - b).max(0)),
+            outer.x + l,
+            outer.y + t,
+            (outer.w - l - r).max(0),
+            BAR.min((outer.h - t).max(0)),
         ))
     }
 
@@ -165,17 +180,20 @@ impl Decoration {
                 return Some(Part::Button(button));
             }
         }
-        let reach = if self.border { BORDER + ZONE } else { ZONE };
-        let near = |pos: i32, start: i32, end: i32, size: i32| {
+        // A zone reaches ZONE px inside the border (or inside the edge, where there is
+        // no border).
+        let reach = |on: bool| if on { BORDER + ZONE } else { ZONE };
+        let e = self.border;
+        let near = |pos: i32, start: i32, end: i32, first: i32, second: i32| {
             (
-                pos - start < size.min(end - start),
-                end - 1 - pos < size.min(end - start),
+                pos - start < first.min(end - start),
+                end - 1 - pos < second.min(end - start),
             )
         };
-        let (left, right) = near(x, outer.x, outer.right(), reach);
-        let (top, bottom) = near(y, outer.y, outer.bottom(), reach);
-        let (corner_l, corner_r) = near(x, outer.x, outer.right(), CORNER);
-        let (corner_t, corner_b) = near(y, outer.y, outer.bottom(), CORNER);
+        let (left, right) = near(x, outer.x, outer.right(), reach(e.left), reach(e.right));
+        let (top, bottom) = near(y, outer.y, outer.bottom(), reach(e.top), reach(e.bottom));
+        let (corner_l, corner_r) = near(x, outer.x, outer.right(), CORNER, CORNER);
+        let (corner_t, corner_b) = near(y, outer.y, outer.bottom(), CORNER, CORNER);
         // In a corner square the zone is the corner's two edges (those that have
         // zones); elsewhere the strip along one edge.
         let in_corner = (corner_l || corner_r) && (corner_t || corner_b);

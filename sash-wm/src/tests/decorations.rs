@@ -84,8 +84,8 @@ fn a_negotiating_client_is_answered_server_side_also_when_it_asks_for_client_sid
             c.decoration_modes(&decoration),
             [DecorationMode::ServerSide]
         );
-        // Tiled: the 1 px border only.
-        assert_eq!(size(&c, &w), (798, 598));
+        // Tiled, alone: no border (every edge is on the output boundary), no bar.
+        assert_eq!(size(&c, &w), (800, 600));
         // Floating: bar and border, in one configure.
         let before = c.events.configures;
         server.on_server(|h| h.chord(&[ALT, F]));
@@ -151,7 +151,7 @@ fn mode_changes_send_one_configure_each() {
             (
                 "snap left",
                 Box::new(|_, s| s.on_server(|h| h.chord(&[ALT, LEFT]))),
-                (398, 566),
+                (399, 568),
             ),
             (
                 "fullscreen",
@@ -161,12 +161,12 @@ fn mode_changes_send_one_configure_each() {
             (
                 "unfullscreen",
                 Box::new(|w, _| w.toplevel.unset_fullscreen()),
-                (398, 566),
+                (399, 568),
             ),
             (
                 "tile",
                 Box::new(|_, s| s.on_server(|h| h.chord(&[ALT, F]))),
-                (798, 598),
+                (800, 600),
             ),
         ];
         for (what, step, expected) in steps {
@@ -272,7 +272,8 @@ fn the_maximize_button_toggles_the_top_zone_and_restores() {
         click(&server, 150.0, 116.0);
         c.roundtrip();
         let config = c.config(&w).expect("configured");
-        assert_eq!((config.size, config.maximized), ((798, 566), true));
+        // The whole output: the bar, no border (all edges on the output boundary).
+        assert_eq!((config.size, config.maximized), ((800, 568), true));
         server.on_server(|h| {
             assert_eq!(h.rect_of(1), Some(AREA));
             assert_eq!(
@@ -426,23 +427,25 @@ fn tiled_zones_move_the_split() {
             h.pointer_to(402.0, 300.0);
             h.button(BTN_LEFT, ButtonState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
-            // The output boundary: the border, no zone, no drag, the arrow.
+            // The output boundary: no border, no zone, no drag; the client's.
             h.pointer_to(0.0, 300.0);
             assert_eq!(
                 h.server.state.cursor.image(),
                 CursorImageStatus::Named(CursorIcon::Default)
             );
             h.button(BTN_LEFT, ButtonState::Pressed);
-            assert!(!h.pointer_grabbed());
+            // The client's implicit grab, not a move or resize.
+            assert_eq!(h.server.state.dragged_window(), None);
             h.pointer_to(50.0, 300.0);
             h.button(BTN_LEFT, ButtonState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
             assert_eq!(h.mode_of(1), Some(Mode::Tiled));
         });
         c1.roundtrip();
-        assert!(
-            c1.events.buttons_pressed.is_empty(),
-            "nothing reached the client"
+        assert_eq!(
+            c1.events.buttons_pressed.len(),
+            1,
+            "only the press at the output edge reached the client"
         );
     });
 }
@@ -507,5 +510,65 @@ fn popups_over_the_bar_and_client_requests() {
             assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 430, 300)));
             h.button(BTN_LEFT, ButtonState::Released);
         });
+    });
+}
+
+/// The snap bands are measured from the true output edge, whatever borders windows have
+/// there (owner, after M11b): during a bar drag the pointer at 0..7 px from the left or
+/// top edge previews that zone, at 8 px it does not; corners within 64 px of two edges.
+/// Then a window snapped to the left half has no border on its output edges, and a
+/// press at x = 0 goes to its client.
+#[test]
+fn snap_bands_trigger_at_the_true_output_edge() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let (mut c, w, _d) = decorated(&socket, None);
+        floating(&server, 1);
+        c.roundtrip();
+        c.ack_and_commit(&w);
+        server.on_server(|h| {
+            h.pointer_to(300.0, 120.0);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+            let preview = |h: &mut Harness, x: f64, y: f64| {
+                h.pointer_to(x, y);
+                h.server.state.overlay.preview()
+            };
+            let left = Some(Rect::new(0, 0, 400, 600));
+            assert_eq!(preview(h, 0.0, 300.0), left, "x = 0");
+            assert_eq!(preview(h, 7.0, 300.0), left, "x = 7");
+            assert_eq!(preview(h, 8.0, 300.0), None, "x = 8");
+            assert_eq!(preview(h, 400.0, 0.0), Some(AREA), "y = 0: maximize");
+            assert_eq!(preview(h, 400.0, 7.0), Some(AREA), "y = 7");
+            assert_eq!(preview(h, 400.0, 8.0), None, "y = 8");
+            let top_left = Some(Rect::new(0, 0, 400, 300));
+            assert_eq!(preview(h, 0.0, 0.0), top_left, "the corner pixel");
+            assert_eq!(preview(h, 63.0, 63.0), top_left, "63 px from both edges");
+            assert_eq!(preview(h, 799.0, 300.0), Some(Rect::new(400, 0, 400, 600)));
+            // Release at the left edge: snapped to the left half.
+            preview(h, 0.0, 300.0);
+            h.button(BTN_LEFT, ButtonState::Released);
+            assert_eq!(h.rect_of(1), left);
+            let layout = &h.server.state.windows.layout;
+            let decoration = layout.decoration(WindowId(1));
+            assert!(
+                !decoration.border.left
+                    && !decoration.border.top
+                    && !decoration.border.bottom
+                    && decoration.border.right,
+                "{decoration:?}: a border on the interior edge only"
+            );
+        });
+        c.roundtrip();
+        c.ack_and_commit(&w);
+        // The client area reaches the output edge below the bar.
+        assert_eq!(size(&c, &w), (399, 568));
+        server.on_server(|h| h.pointer_to(0.0, 300.0));
+        c.roundtrip();
+        assert_eq!(
+            c.events.pointer_focus,
+            Some(w.surface.id()),
+            "x = 0 is the client's"
+        );
     });
 }

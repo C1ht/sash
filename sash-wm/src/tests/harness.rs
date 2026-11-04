@@ -32,11 +32,14 @@ use crate::{
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The dmabuf main device the harness advertises: 226:128 (a render node's numbers).
-/// The configure size of a window in a w x h tile (or any rectangle with the border
-/// only): the rectangle minus its 1 px border (M11b).
+/// The configure size of a window without a bar in a w x h tile (or a snapped or
+/// maximized rectangle) of the 800x600 test output: the rectangle minus its 1 px
+/// border on the edges inside the output (M11b; none on the output boundary). A tile
+/// narrower than the output touches the boundary on one side in these tests (two
+/// columns or rows at most), so it has one border on that axis.
 pub fn tile(w: i32, h: i32) -> Option<(i32, i32)> {
-    use crate::layout::decor::Decoration;
-    Some(Decoration::BORDER.client_size((w, h)))
+    let inner = |len: i32, full: i32| if len < full { len - 1 } else { len };
+    Some((inner(w, 800).max(1), inner(h, 600).max(1)))
 }
 
 pub const FAKE_MAIN_DEVICE: u64 = (226 << 8) | 128;

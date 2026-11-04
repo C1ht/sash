@@ -228,45 +228,60 @@ impl MonitorLayout {
 
     /// How the window is decorated now: nothing while fullscreen; the border only
     /// while tiled; bar and border while floating, snapped or maximized (the border
-    /// only for a client that draws its own decorations).
+    /// only for a client that draws its own decorations). Windows the layout places
+    /// on the output boundary (tiles, snapped and maximized windows) have no border
+    /// on the edges that lie on it (owner, after M11b).
     pub fn decoration(&self, window: WindowId) -> Decoration {
         let Some(state) = self.windows.get(&window) else {
             return Decoration::NONE;
         };
         if self.fullscreen == Some(window) {
-            Decoration::NONE
-        } else if state.mode() == Mode::Floating || self.is_maximized(window) {
+            return Decoration::NONE;
+        }
+        let decoration = if state.mode() == Mode::Floating || self.is_maximized(window) {
             state.floating_decoration()
         } else {
             Decoration::BORDER
+        };
+        match self.boundary_placed(window) {
+            Some(rect) => decoration.with_border(self.interior_edges(rect)),
+            None => decoration,
         }
     }
 
-    /// The edges of the window that have resize zones: all four while floating (also
-    /// snapped or maximized); on a tile only those not on the output boundary; none
-    /// while fullscreen or maximized tiled.
+    /// The edges of the window that have resize zones: all four on a plain floating
+    /// window; on a tile, a snapped or a maximized window only those not on the output
+    /// boundary; none while fullscreen.
     pub fn resize_zones(&self, window: WindowId) -> Edges {
-        let Some(state) = self.windows.get(&window) else {
-            return Edges::default();
-        };
-        if self.fullscreen == Some(window) {
-            return Edges::default();
+        if !self.contains(window) || self.fullscreen == Some(window) {
+            return Edges::NONE;
         }
+        match self.boundary_placed(window) {
+            Some(rect) => self.interior_edges(rect),
+            None => Edges::ALL,
+        }
+    }
+
+    /// The rectangle of a window the layout places against the output boundary (a
+    /// tile, a maximized or a snapped window); None for a plain floating window.
+    fn boundary_placed(&self, window: WindowId) -> Option<Rect> {
+        let state = self.windows.get(&window)?;
         match state.mode() {
-            Mode::Floating => Edges::ALL,
-            Mode::Tiled if state.maximized_tiled => Edges::default(),
-            Mode::Tiled => {
-                let Some(r) = self.tree.rect_of(window) else {
-                    return Edges::default();
-                };
-                let a = self.area;
-                Edges {
-                    left: r.x > a.x,
-                    right: r.right() < a.right(),
-                    top: r.y > a.y,
-                    bottom: r.bottom() < a.bottom(),
-                }
-            }
+            Mode::Tiled => self.shown_rect(window),
+            Mode::Floating => self
+                .snapped_zone(window)
+                .and_then(|_| self.floating.rect_of(window)),
+        }
+    }
+
+    /// The edges of `r` that are not on the output boundary.
+    fn interior_edges(&self, r: Rect) -> Edges {
+        let a = self.area;
+        Edges {
+            left: r.x > a.x,
+            right: r.right() < a.right(),
+            top: r.y > a.y,
+            bottom: r.bottom() < a.bottom(),
         }
     }
 
@@ -1128,10 +1143,14 @@ impl MonitorLayout {
         for (window, rect, layer) in self.stacking() {
             let state = &self.windows[&window];
             let decoration = self.decoration(window);
+            let plain_floating = layer == Layer::Floating && self.snapped_zone(window).is_none();
             let expected = match layer {
                 Layer::Fullscreen => Decoration::NONE,
-                Layer::Tiled => Decoration::BORDER,
-                Layer::Floating | Layer::Maximized => state.floating_decoration(),
+                Layer::Tiled => Decoration::BORDER.with_border(self.interior_edges(rect)),
+                Layer::Floating if plain_floating => state.floating_decoration(),
+                Layer::Floating | Layer::Maximized => state
+                    .floating_decoration()
+                    .with_border(self.interior_edges(rect)),
             };
             assert_eq!(decoration, expected, "{window:?} ({layer:?}) decorations");
             let inner = decoration.inner(rect);
@@ -1151,7 +1170,7 @@ impl MonitorLayout {
                 );
             }
             let zones = self.resize_zones(window);
-            if layer == Layer::Tiled {
+            if !plain_floating {
                 let a = self.area;
                 assert!(
                     !(zones.left && rect.x <= a.x
@@ -1883,13 +1902,14 @@ mod tests {
         );
         assert_eq!(
             layout.presentation(id(1)).map(|p| (p.size, p.maximized)),
-            Some((Some((798, 598)), true)),
-            "the output minus the border"
+            Some((Some((800, 600)), true)),
+            "the whole output: no border on the output boundary"
         );
         assert!(layout.set_maximized(id(1), false));
         assert_eq!(
             layout.presentation(id(1)).map(|p| (p.size, p.maximized)),
-            Some((Some((398, 598)), false))
+            Some((Some((399, 600)), false)),
+            "the left tile: a border on its right edge only"
         );
         layout.toggle(id(2));
         layout.set_floating_rect(id(2), Rect::new(10, 20, 300, 200));

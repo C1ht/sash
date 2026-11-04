@@ -40,10 +40,13 @@ fn open_three(
 
 /// The configure for a window whose outer rectangle is `size` (0x0: the client
 /// chooses): the test clients do not negotiate decorations, so they get the 1 px border
-/// only, and the client's size is the outer size minus it.
+/// only: on all four edges while floating, on the edges inside the output while tiled
+/// (`harness::tile`).
 fn cfg(size: (i32, i32), tiled: bool) -> Option<ToplevelConfig> {
     let size = if size == (0, 0) {
         size
+    } else if tiled {
+        super::harness::tile(size.0, size.1).expect("a size")
     } else {
         crate::layout::decor::Decoration::BORDER.client_size(size)
     };

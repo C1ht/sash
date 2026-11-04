@@ -90,20 +90,34 @@ pub fn pieces(
     maximized: bool,
 ) -> Vec<Piece> {
     let mut out = Vec::new();
-    if decoration.border {
+    let edges = decoration.border;
+    if edges != Edges::NONE {
         let color = if focused {
             BORDER_FOCUSED
         } else {
             BORDER_UNFOCUSED
         };
         let b = crate::layout::decor::BORDER;
-        let inner_h = (outer.h - 2 * b).max(0);
-        for rect in [
-            Rect::new(outer.x, outer.y, outer.w, b.min(outer.h)),
-            Rect::new(outer.x, outer.bottom() - b, outer.w, b.min(outer.h)),
-            Rect::new(outer.x, outer.y + b, b.min(outer.w), inner_h),
-            Rect::new(outer.right() - b, outer.y + b, b.min(outer.w), inner_h),
-        ] {
+        // Top and bottom strips run the full width; the sides fill between them.
+        let top = if edges.top { b.min(outer.h) } else { 0 };
+        let bottom = if edges.bottom { b.min(outer.h) } else { 0 };
+        let side_h = (outer.h - top - bottom).max(0);
+        let strips = [
+            (edges.top, Rect::new(outer.x, outer.y, outer.w, top)),
+            (
+                edges.bottom,
+                Rect::new(outer.x, outer.bottom() - bottom, outer.w, bottom),
+            ),
+            (
+                edges.left,
+                Rect::new(outer.x, outer.y + top, b.min(outer.w), side_h),
+            ),
+            (
+                edges.right,
+                Rect::new(outer.right() - b, outer.y + top, b.min(outer.w), side_h),
+            ),
+        ];
+        for (_, rect) in strips.into_iter().filter(|(on, _)| *on) {
             out.push(Piece::Fill(rect, color));
         }
     }
