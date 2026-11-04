@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Popup drag (M7): pavucontrol floating, mod+right-drag from its top-left cell for 5 s
-# without and with its "Show:" dropdown open, then frame statistics. Offscreen captures
-# go to CAPDIR. pavucontrol gets a throwaway config directory, and the script switches to
-# its Recording tab, but its Playback tab lists the audio streams of the session: look at
-# every capture and delete any that shows personal content.
+# without and with its "Show:" dropdown open, then frame statistics. pavucontrol gets a
+# throwaway config directory and, since it shows the machine's devices and streams, no
+# captures are taken while it runs (CLAUDE.md; CAPDIR stays empty).
 # Usage: tools/measure/run-popup.sh LOG CAPDIR
 set -u
 source "$(dirname "$0")/common.sh"

@@ -37,7 +37,21 @@ def lines():
         return sum(1 for _ in fh)
 
 
+def capture_allowed():
+    """No content captures while a client that shows device names runs (CLAUDE.md)."""
+    for p in os.environ.get("SASH_NO_CAPTURE_PIDS", "").split():
+        try:
+            os.kill(int(p), 0)
+        except ProcessLookupError:
+            continue
+        print("capture skipped: a client that shows device names is running", flush=True)
+        return False
+    return True
+
+
 def capture(name):
+    if not capture_allowed():
+        return
     os.kill(pid, signal.SIGUSR1)
     time.sleep(0.6)
     print(f"capture {name}", flush=True)

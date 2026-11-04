@@ -3,9 +3,10 @@
 #
 # Clipboard and drag and drop by hand, scripted (M10): nested sash-wm (the measurement
 # build) with foot, pavucontrol and Firefox on a local test page. Every client gets a
-# throwaway config; Firefox gets a new empty profile whose proxy points nowhere, so it
-# reaches no network. Offscreen captures go to CAPDIR: look at every one and delete any
-# that shows personal content (pavucontrol's Playback tab lists the audio streams).
+# throwaway config; Firefox comes from start_firefox (common.sh: throwaway profile, no
+# crash reporter, telemetry or updates, no network). pavucontrol runs alone first and
+# no capture is taken while it runs. Offscreen captures go to CAPDIR: look at every one
+# and delete any that shows personal content.
 # Then idle CPU and memory with the three windows.
 # Usage: tools/measure/run-clipboard.sh LOG CAPDIR
 set -u
@@ -14,33 +15,8 @@ LOG=$1
 export SASH_CAPTURE_DIR
 SASH_CAPTURE_DIR=$(realpath "$2")
 WORK=$(mktemp -d)
-PROFILE="$WORK/firefox-profile"
-mkdir -p "$PROFILE" "$WORK/files"
+mkdir -p "$WORK/files"
 echo "a sample file for the drag test" > "$WORK/files/sample.txt"
-cat > "$PROFILE/user.js" <<'EOF'
-user_pref("network.proxy.type", 1);
-user_pref("network.proxy.http", "127.0.0.1");
-user_pref("network.proxy.http_port", 9);
-user_pref("network.proxy.ssl", "127.0.0.1");
-user_pref("network.proxy.ssl_port", 9);
-user_pref("network.proxy.allow_hijacking_localhost", true);
-user_pref("network.proxy.no_proxies_on", "");
-user_pref("network.captive-portal-service.enabled", false);
-user_pref("network.connectivity-service.enabled", false);
-user_pref("app.update.enabled", false);
-user_pref("app.normandy.enabled", false);
-user_pref("extensions.update.enabled", false);
-user_pref("toolkit.telemetry.enabled", false);
-user_pref("datareporting.healthreport.uploadEnabled", false);
-user_pref("datareporting.policy.dataSubmissionEnabled", false);
-user_pref("browser.safebrowsing.malware.enabled", false);
-user_pref("browser.safebrowsing.phishing.enabled", false);
-user_pref("browser.shell.checkDefaultBrowser", false);
-user_pref("browser.aboutwelcome.enabled", false);
-user_pref("browser.startup.homepage_override.mstone", "ignore");
-user_pref("browser.newtabpage.enabled", false);
-user_pref("trailhead.firstrun.didSeeAboutWelcome", true);
-EOF
 cat > "$WORK/page.html" <<EOF
 <!doctype html><meta charset="utf-8"><title>sash test page</title>
 <style>body{margin:0;font:20px sans-serif}
@@ -74,13 +50,9 @@ unset 'PIDS[-1]' # stopped: never signalled again (its PID could be reused)
 sleep 1
 start_client foot -e sh -c "printf '\\n  foot\\n'; exec bash --norc"
 sleep 1.5
-# No crash reporter (it could send a report past the profile's proxy); Firefox's own
-# output goes to FFLOG for diagnosis.
-FFLOG=${FFLOG:-/dev/null}
-WAYLAND_DISPLAY=$SASH_SOCKET XDG_CONFIG_HOME=$(mktemp -d) MOZ_ENABLE_WAYLAND=1 \
-    MOZ_CRASHREPORTER_DISABLE=1 firefox --no-remote --profile "$PROFILE" \
-    "file://$WORK/page.html" > "$FFLOG" 2>&1 &
-PIDS+=("$!")
+# Throwaway profile, no crash reporter, no telemetry or updates, no network
+# (common.sh); Firefox's own output goes to FFLOG if set.
+start_firefox "file://$WORK/page.html"
 sleep 12
 read -r SASH_W SASH_H < <(sed 's/\x1b\[[0-9;]*m//g' "$LOG" \
     | grep -oP ' resize w=\K\d+ h=\d+' | tail -1 | tr -d 'h=')

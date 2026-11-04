@@ -21,8 +21,23 @@ def click(x, y):
 def lines():
     with open(log, "rb") as fh: return sum(1 for _ in fh)
 
+def capture_allowed():
+    """No content captures while a client that shows device names runs (CLAUDE.md)."""
+    for p in os.environ.get("SASH_NO_CAPTURE_PIDS", "").split():
+        try:
+            os.kill(int(p), 0)
+        except ProcessLookupError:
+            continue
+        print("capture skipped: a client that shows device names is running", flush=True)
+        return False
+    return True
+
+
 def capture():
-    time.sleep(0.4); os.kill(pid, signal.SIGUSR1); time.sleep(0.6)
+    time.sleep(0.4)
+    if capture_allowed():
+        os.kill(pid, signal.SIGUSR1)
+    time.sleep(0.6)
 
 PERIOD = 0.004
 def drag(seconds):
