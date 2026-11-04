@@ -240,7 +240,8 @@ Proposals (no work until approved):
   - Recovery: retry on a timer (0.5, 1, 2 s), rebuild the renderer once after 3 failures or a context loss, then a clean exit; a 2 s flip watchdog; debug-only fault injection (SASH_DEBUG_FAIL_SWAPS, SASH_DEBUG_CONTEXT_LOST, SASH_DEBUG_STOP_FLIPS).
   - The nested Firefox failure is reproduced once more with the m11a build under the owner's limits (CLAUDE.md).
   - Proposal only (owner): compare cursor sizes 24 and 32 by eye on the real hardware; cursor size may join the closed settings list later as an accessibility option. Nothing is built for it.
-- **M11b Decorations.** Rules only (CLAUDE.md, "Decorations (M11b, owner; rules only, not built yet)"); bar height and zone widths to be fixed by the owner first. Not started.
+- **After M11a (owner):** a cap of 3 renderer rebuilds per 60 s (then a clean exit); adwaita-icon-theme in the VM guest and a VM check of the theme path; tools/stage-c.sh --firefox through start_firefox.
+- **M11b Server-side decorations.** In progress, after the M11a follow-ups. Rules: CLAUDE.md ("Decorations (M11b, owner)"): server_side for every negotiating client; floating windows a 32 px bar (close, maximize on the left) and a 1 px border, tiled windows the border only, fullscreen neither; bar and border part of the outer rectangle; resize zones (6 px, 16x16 corners) with resize cursors, on tiled windows moving the split; no pointer events to clients over the decorations; one configure batch per mode change; outline screenshots show bar and border.
 
 Roadmap after M9 (no work now), in order:
 1. **Clipboard and drag-and-drop.** M10 (above).

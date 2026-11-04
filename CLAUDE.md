@@ -773,6 +773,9 @@ change this file without the owner's approval.
   gives up and exits cleanly with a message (DRM: the console restored,
   as for every exit). A frame that succeeds ends the episode; the next
   failure starts the schedule again with one rebuild allowed.
+- Rebuild cap (owner, after M11a): more than 3 renderer rebuilds within
+  60 s (a rolling count, kept across episodes) is a clean exit too
+  (DRM: the console restored).
 - Flip watchdog: frames requested but no page flip (DRM) or
   presentation (nested) for 2 s (constant) counts as one failure. Never
   while the session is paused or switched away, the output is hidden or
@@ -794,26 +797,60 @@ change this file without the owner's approval.
   from sash-wm's own offscreen path (looked at before keeping). The
   owner is told before the runs start. "Nothing on the real display"
   holds for everything else, the DRM backend included.
+- The VM guest gets adwaita-icon-theme (trixie, apt in the guest; owner
+  after M11a: about 0.5 MB, at most 5.5 MB with its dependencies) so the
+  VM scenario checks the theme path, not only the fallback.
+- tools/stage-c.sh --firefox (owner, after M11a): starts Firefox only
+  through start_firefox (throwaway profile, about:blank, no network,
+  crash reporter and telemetry off, only recorded PIDs killed), under
+  the same timeout and logging. The owner runs it on the real display.
 
-## Decorations (M11b, owner; rules only, not built yet)
+## Decorations (M11b, owner)
 
-- Option 4 built as 3b: clients that negotiate xdg-decoration get
-  server-side mode; sash-wm draws a bar on floating windows, including
-  snapped and maximized ones; none on tiled or fullscreen windows. Tiled
-  windows keep client decorations as today. sash-ui apps will draw the
-  shared chrome client-side.
-- The bar is part of the window's outer rectangle: snap zones and every
-  coverage invariant apply to outer rectangles; the client gets the
-  outer rectangle minus the bar.
-- Buttons only: maximize (toggles the top-zone snap) and close. No title
-  text until the shared text stack exists; no minimize, no window menu.
-- A visible 1 px border: #0A84FF focused, #3A3A3C unfocused; bar fill
-  #2C2C2E; unfocused button glyphs are dimmer, so focus is never shown
-  by colour alone.
-- Resize hit zones lie inside the border, clamped to the output, with
-  resize cursors.
-- Bar height and zone widths are constants; the owner fixes their
-  values before they are built.
+- xdg-decoration: every client that negotiates it is answered
+  server_side, also when it asks for client_side (recorded in the log and
+  by the recorder).
+- Floating windows (also snapped and top-zone maximized): a 32 px bar
+  plus a 1 px border. Tiled windows: the 1 px border only, no bar.
+  Fullscreen: neither. Clients that do not negotiate keep their own
+  decorations and get no bar, but get the 1 px border.
+- Bar and border belong to the window's OUTER rectangle. Snap zones,
+  tiling coverage and every earlier invariant apply to outer
+  rectangles; the client gets outer minus bar minus borders. The
+  top-edge rule applies to the outer rectangle.
+- The bar has buttons only, no title text (no font dependency; glyphs
+  are drawn from simple shapes). Buttons on the LEFT (a constant), in
+  the order close, maximize. Close does what mod+Q does; maximize
+  toggles the top-zone snap. No minimize, no menu, no double-click
+  action. A left-drag on the bar moves the window like mod+left-drag
+  (snapping and zones included).
+- Colours (dark values until the appearance setting exists): bar fill
+  #2C2C2E; border focused #0A84FF, unfocused #3A3A3C; glyphs focused
+  #FFFFFF at 92% alpha, unfocused #FFFFFF at 35% alpha; hover background
+  close #FF453A, maximize #3A3A3C. Hover also changes the button's shape
+  or fill, never colour only; focus is shown by border and glyph
+  brightness together.
+- Constants: bar height 32 px, border 1 px, button hit area 32x32,
+  glyph about 12 px, resize zones 6 px wide inside the border and 16x16
+  px at the corners, clamped to the output.
+- Resize zones show the matching resize cursor (Adwaita names, through
+  the cursor machinery) and start the normal resize. On floating windows
+  (also snapped and maximized) that is the floating resize; on tiled
+  windows (owner, M11b) a zone moves the split on that side like
+  mod+right-drag on that edge or corner, and edges on the output
+  boundary have no zone. Every mouse action has an existing keybind;
+  docs/keybinds.md says so (pointer rows of the keybind table).
+- Pointer events over the bar, border, buttons and zones never reach
+  the client (it gets a pointer leave when the pointer moves onto them).
+  Popups, subsurfaces, drag icons and the clipboard focus rules are
+  unchanged.
+- A window changing between tiled, floating, snapped and fullscreen gets
+  its decoration mode and its new size in one configure batch.
+- Debug outline screenshots show the bar band and the border as
+  outlines; still no window contents.
+- sash-ui apps will draw the shared chrome themselves later (option 4);
+  until a native Sash protocol tells them apart, every negotiating
+  client is server-side.
 
 ## Protocol support and known limits
 
