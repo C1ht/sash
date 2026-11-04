@@ -88,6 +88,10 @@ impl Sash {
         if pointer.current_focus() != previous {
             self.pointer_focus_changed();
         }
+        // After the focus change, which resets the cursor to the arrow.
+        if !pointer.is_grabbed() {
+            self.decoration_hover(location);
+        }
         #[cfg(feature = "debug-record")]
         if let Some(recorder) = &self.recorder {
             crate::record::Counters::bump(&recorder.counters.position_updates);
@@ -314,6 +318,14 @@ impl Sash {
                     }
                     return;
                 }
+                // A press on decorations is the compositor's (never delivered).
+                if grab_window.is_none()
+                    && let Some((window, part)) = self.decoration_at(location)
+                {
+                    self.windows.swallowed_buttons.push(button);
+                    self.decoration_press(window, part, button, location, serial);
+                    return;
+                }
                 if grab_window.is_some() {
                     let in_chain = self
                         .surface_at(location)
@@ -337,6 +349,7 @@ impl Sash {
                 }
             }
             ButtonState::Released => {
+                self.decoration_release(button, location);
                 let swallowed = &mut self.windows.swallowed_buttons;
                 if let Some(index) = swallowed.iter().position(|b| *b == button) {
                     swallowed.swap_remove(index);

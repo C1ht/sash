@@ -40,7 +40,11 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
 - keybind matches and the actions they ran;
 - keyboard focus changes with the reason;
 - grabs (moves, resizes, popup grabs) starting and ending;
-- windows: map, unmap, configure sent, configure acknowledged, commit;
+- windows: map, unmap, configure sent, configure acknowledged, commit (with
+  `server_side`: whether the client negotiated decorations; replays of bundles without
+  it assume the windows of before M11b, which had none);
+- decorations (M11b): `decoration_mode` (window, what the client asked for; the answer
+  is always server_side) and `decoration_button` (window, close or maximize);
 - every layout operation, with the layout before and after;
 - clipboard and drag and drop (M10): `selection_set` and `selection_cleared` (with the
   window and a reason), `dnd_start`, `dnd_drop` (window, action) and `dnd_cancel` (a
@@ -55,8 +59,9 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
 - screenshots after each layout change (at most one per second, 100 per session) and
   when the hotkey is pressed, at most 1920 px wide. By default they show **window
   outlines only**: each window as a flat box (tiled and floating in different shades),
-  a 2 px border (blue for the focused window), its id in simple built-in digits, and
-  the pointer as a red cross, drawn from the layout alone. No window contents. With
+  a 2 px border (blue for the focused window), the bar band and the client's
+  rectangle as thin grey outlines (M11b), its id in simple built-in digits, and the
+  pointer as a red cross, drawn from the layout alone. No window contents. With
   `SASH_DEBUG_SCREENSHOTS=full` they show contents, rendered through the same offscreen
   path as `SIGUSR1` captures (never the screen);
 - sash-wm's own log.

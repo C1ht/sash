@@ -9,6 +9,7 @@
 //! - `MonitorLayout`: combines the two with per-window mode, focus and history.
 
 mod bsp;
+pub mod decor;
 mod floating;
 mod geometry;
 mod monitor;

@@ -624,6 +624,36 @@ try:
           f"loaded {loaded}, fallback {fallback}")
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
+    # 17f. Decorations (M11b) on DRM: foot negotiates xdg-decoration and is answered
+    # server_side. Floated (Super+F, at the whole output) it has a bar; a drag on the bar
+    # moves it by (100, 100), and a click on the close button, now at (116, 116), closes
+    # foot. Without the move the click would land in foot's own area.
+    start(vm, windows=1)
+    negotiated = count(vm, "decorations negotiated")
+    vm.keys("meta_l", "f")
+    time.sleep(0.5)
+    vm.pointer_abs(W // 2, 16, W, H)
+    time.sleep(0.2)
+    vm.button("left", True)
+    for i in range(1, 11):
+        vm.pointer_abs(W // 2 + 10 * i, 16 + 10 * i, W, H)
+        time.sleep(0.05)
+    vm.button("left", False)
+    time.sleep(0.5)
+    foot_before = sh(vm, "pgrep -x foot >/dev/null && echo yes || echo no").strip()
+    vm.pointer_abs(116, 116, W, H)
+    time.sleep(0.2)
+    vm.button("left", True)
+    vm.button("left", False)
+    time.sleep(1.5)
+    foot_after = sh(vm, "pgrep -x foot >/dev/null && echo yes || echo no").strip()
+    check("decorations: foot negotiates server_side; a bar drag moves it and the close "
+          "button closes it on DRM",
+          negotiated >= 1 and foot_before == "yes" and foot_after == "no"
+          and active(vm) == "active",
+          f"negotiated {negotiated}, foot before the click {foot_before}, after {foot_after}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
     # 17c. Clipboard (M10): copy in one client, paste in another, on the DRM backend.
     # wl-copy and wl-paste (wl-clipboard, apt in the guest; owner, M10) each map a small
     # window to get keyboard focus, since sash-wm offers no data-control protocol.

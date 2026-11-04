@@ -44,6 +44,12 @@ fn one_floating(
     (c, w)
 }
 
+/// The client's size in an outer rectangle of w x h: the test clients do not negotiate
+/// decorations, so only the 1 px border is taken (M11b).
+fn client(w: i32, h: i32) -> (i32, i32) {
+    crate::layout::decor::Decoration::BORDER.client_size((w, h))
+}
+
 #[test]
 fn client_fullscreen_gets_the_output_size_and_unset_restores() {
     let mut harness = Harness::new();
@@ -78,7 +84,7 @@ fn client_fullscreen_gets_the_output_size_and_unset_restores() {
         let config = c2.config(&w2).expect("configured");
         assert_eq!(
             (config.size, config.fullscreen, config.tiled),
-            ((400, 600), false, true)
+            (client(400, 600), false, true)
         );
     });
 }
@@ -95,7 +101,7 @@ fn client_maximize_on_a_tiled_and_a_floating_window() {
         w1.toplevel.set_maximized();
         c1.roundtrip();
         let config = c1.config(&w1).expect("configured");
-        assert_eq!((config.size, config.maximized), ((800, 600), true));
+        assert_eq!((config.size, config.maximized), (client(800, 600), true));
         server.on_server(|h| {
             assert_eq!(
                 h.mode_of(1),
@@ -106,7 +112,7 @@ fn client_maximize_on_a_tiled_and_a_floating_window() {
         w1.toplevel.unset_maximized();
         c1.roundtrip();
         let config = c1.config(&w1).expect("configured");
-        assert_eq!((config.size, config.maximized), ((400, 600), false));
+        assert_eq!((config.size, config.maximized), (client(400, 600), false));
     });
 
     // Floating: maximize snaps to the whole output; unmaximize restores the rectangle.
@@ -117,13 +123,13 @@ fn client_maximize_on_a_tiled_and_a_floating_window() {
         w.toplevel.set_maximized();
         c.roundtrip();
         let config = c.config(&w).expect("configured");
-        assert_eq!((config.size, config.maximized), ((800, 600), true));
+        assert_eq!((config.size, config.maximized), (client(800, 600), true));
         server.on_server(|h| assert_eq!(zone_of(h, 1), Some(ZoneId::FULL)));
         w.toplevel.unset_maximized();
         c.roundtrip();
         assert_eq!(
             c.config(&w).map(|c| (c.size, c.maximized)),
-            Some(((300, 200), false))
+            Some((client(300, 200), false))
         );
         server.on_server(|h| assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 300, 200))));
     });
@@ -163,7 +169,7 @@ fn mouse_drag_to_the_left_edge_snaps_and_dragging_out_restores() {
         });
         c.roundtrip();
         let config = c.config(&w).expect("configured");
-        assert_eq!(config.size, (400, 600));
+        assert_eq!(config.size, client(400, 600));
         assert_eq!(
             config.tiled_edges,
             [true, false, true, true],
@@ -189,7 +195,7 @@ fn mouse_drag_to_the_left_edge_snaps_and_dragging_out_restores() {
             h.key(ALT, KeyState::Released);
         });
         c.roundtrip();
-        assert_eq!(c.config(&w).map(|c| c.size), Some((300, 200)));
+        assert_eq!(c.config(&w).map(|c| c.size), Some(client(300, 200)));
     });
 }
 
@@ -240,7 +246,7 @@ fn fullscreen_ends_when_another_window_is_focused() {
         c2.roundtrip();
         assert_eq!(
             c2.config(&w2).map(|c| (c.size, c.fullscreen)),
-            Some(((400, 600), false))
+            Some((client(400, 600), false))
         );
     });
 }
@@ -470,7 +476,7 @@ fn each_quarter_by_mouse_and_by_arrow_keys() {
                 );
             });
             c.roundtrip();
-            assert_eq!(c.config(&w).map(|c| c.size), Some((300, 200)));
+            assert_eq!(c.config(&w).map(|c| c.size), Some(client(300, 200)));
         }
     });
 }
@@ -499,13 +505,13 @@ mod quarter_chords {
             c1.roundtrip();
             c2.roundtrip();
             let config = c2.config(&w2).expect("configured");
-            assert_eq!(config.size, (400, 300));
+            assert_eq!(config.size, client(400, 300));
             assert_eq!(
                 config.tiled_edges,
                 [false, true, false, true],
                 "right and bottom"
             );
-            assert_eq!(c1.config(&w1).map(|c| c.size), Some((800, 600)));
+            assert_eq!(c1.config(&w1).map(|c| c.size), Some(client(800, 600)));
             // The same chord again does nothing.
             let configures = c2.events.configures;
             server.on_server(|h| h.chord(&[ALT, N]));
@@ -549,7 +555,7 @@ mod quarter_chords {
                 assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 300, 200)));
             });
             c.roundtrip();
-            assert_eq!(c.config(&w).map(|c| c.size), Some((300, 200)));
+            assert_eq!(c.config(&w).map(|c| c.size), Some(client(300, 200)));
             for key in [Y, U, B, N] {
                 assert!(
                     !c.events.keys_pressed.contains(&key),

@@ -8,6 +8,7 @@ use super::{
     harness::{
         Harness,
         keys::{ALT, H, J, K, L, Q, SHIFT, T},
+        tile,
     },
 };
 use crate::layout::{Rect, WindowId};
@@ -43,7 +44,7 @@ fn three_windows_get_tile_sizes_and_refill_when_the_middle_closes() {
         let _w1 = c1.map_window();
         assert_eq!(
             c1.events.toplevel_size,
-            Some((800, 600)),
+            tile(800, 600),
             "first window fills the output"
         );
         assert!(c1.events.tiled, "configure carries the tiled states");
@@ -52,21 +53,21 @@ fn three_windows_get_tile_sizes_and_refill_when_the_middle_closes() {
         let w2 = c2.map_window();
         assert_eq!(
             c2.events.toplevel_size,
-            Some((400, 600)),
+            tile(400, 600),
             "initial configure has the tile size"
         );
         c1.roundtrip();
-        assert_eq!(c1.events.toplevel_size, Some((400, 600)));
+        assert_eq!(c1.events.toplevel_size, tile(400, 600));
 
         // Rule A: the pointer over window 2 (the focused one) when window 3 opens.
         server.pointer_over_focused();
         let mut c3 = TestClient::connect(&socket);
         let _w3 = c3.map_window();
-        assert_eq!(c3.events.toplevel_size, Some((400, 300)));
+        assert_eq!(c3.events.toplevel_size, tile(400, 300));
         let c1_configures = c1.events.configures;
         c1.roundtrip();
         c2.roundtrip();
-        assert_eq!(c2.events.toplevel_size, Some((400, 300)));
+        assert_eq!(c2.events.toplevel_size, tile(400, 300));
         assert_eq!(
             c1.events.configures, c1_configures,
             "window 1's tile did not change"
@@ -88,8 +89,8 @@ fn three_windows_get_tile_sizes_and_refill_when_the_middle_closes() {
         c2.destroy(w2);
         c3.roundtrip();
         c1.roundtrip();
-        assert_eq!(c3.events.toplevel_size, Some((400, 600)));
-        assert_eq!(c1.events.toplevel_size, Some((400, 600)));
+        assert_eq!(c3.events.toplevel_size, tile(400, 600));
+        assert_eq!(c1.events.toplevel_size, tile(400, 600));
         server.on_server(|h| {
             assert_tiles(
                 h,
@@ -149,8 +150,8 @@ fn keybinds_move_focus_and_swap_without_reaching_clients() {
         });
         c1.roundtrip();
         c3.roundtrip();
-        assert_eq!(c3.events.toplevel_size, Some((400, 600)));
-        assert_eq!(c1.events.toplevel_size, Some((400, 300)));
+        assert_eq!(c3.events.toplevel_size, tile(400, 600));
+        assert_eq!(c1.events.toplevel_size, tile(400, 300));
 
         // Keybind keys never reach clients (Alt and Shift alone are forwarded).
         c2.roundtrip();
@@ -184,7 +185,7 @@ fn close_keybind_asks_the_focused_window_to_close() {
         );
         c2.destroy(w2);
         c1.roundtrip();
-        assert_eq!(c1.events.toplevel_size, Some((800, 600)));
+        assert_eq!(c1.events.toplevel_size, tile(800, 600));
         server.on_server(|h| assert_eq!(h.keyboard_focus(), Some(1)));
     });
 }
@@ -196,12 +197,12 @@ fn layout_updates_while_the_output_is_hidden() {
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
         let [mut c1, _c2, mut c3] = open_three(&socket, &server);
-        assert_eq!(c3.events.toplevel_size, Some((400, 300)));
+        assert_eq!(c3.events.toplevel_size, tile(400, 300));
         server.on_server(|h| h.chord(&[ALT, SHIFT, H]));
         c1.roundtrip();
         c3.roundtrip();
-        assert_eq!(c3.events.toplevel_size, Some((400, 600)));
-        assert_eq!(c1.events.toplevel_size, Some((400, 300)));
+        assert_eq!(c3.events.toplevel_size, tile(400, 600));
+        assert_eq!(c1.events.toplevel_size, tile(400, 300));
     });
     assert_eq!(harness.frames, 0, "no frames while hidden");
 }
@@ -217,10 +218,10 @@ fn closing_a_window_with_an_unacked_configure() {
         let _w2 = c2.map_window();
         // Window 1 gets a configure for its new 400x600 tile and never acks it.
         c1.roundtrip();
-        assert_eq!(c1.events.toplevel_size, Some((400, 600)));
+        assert_eq!(c1.events.toplevel_size, tile(400, 600));
         c1.destroy(w1);
         c2.roundtrip();
-        assert_eq!(c2.events.toplevel_size, Some((800, 600)));
+        assert_eq!(c2.events.toplevel_size, tile(800, 600));
         server.on_server(|h| {
             assert_tiles(h, &[(2, Rect::new(0, 0, 800, 600))]);
             assert_eq!(h.mapped_windows() + h.unmapped_windows(), 1);
@@ -242,7 +243,7 @@ fn unmapped_window_leaves_the_layout_and_reenters_on_remap() {
         c1.roundtrip();
         assert_eq!(
             c1.events.toplevel_size,
-            Some((800, 600)),
+            tile(800, 600),
             "unmap gives the space back"
         );
         server.on_server(|h| assert_eq!(h.rect_of(2), None));
@@ -251,7 +252,7 @@ fn unmapped_window_leaves_the_layout_and_reenters_on_remap() {
         let seen = c2.events.configures;
         w2.surface.commit();
         c2.dispatch_until("a new initial configure", |e| e.configures > seen);
-        assert_eq!(c2.events.toplevel_size, Some((400, 600)));
+        assert_eq!(c2.events.toplevel_size, tile(400, 600));
         c2.ack_and_commit(&w2);
         server.on_server(|h| {
             assert_tiles(

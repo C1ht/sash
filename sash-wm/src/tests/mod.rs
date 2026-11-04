@@ -5,6 +5,7 @@
 mod client;
 mod clipboard;
 mod clipboard_props;
+mod decorations;
 mod dmabuf;
 mod dnd;
 mod floating;

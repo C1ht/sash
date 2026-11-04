@@ -469,8 +469,57 @@ fn markdown() -> String {
             b.description
         );
     }
+    out.push_str(
+        "\n## Window decorations\n\n\
+         The bar and border sash-wm draws (M11b) are used with the plain mouse. They add \
+         no actions: every one has a keybind above.\n\n\
+         | Mouse | Action | Keybinds |\n\
+         |---|---|---|\n",
+    );
+    for (mouse, action, keys) in DECORATION_MOUSE {
+        let _ = writeln!(out, "| {mouse} | {action} | {} |", keys.join(", "));
+    }
     out
 }
+
+/// Mouse actions on the decorations (M11b), each with its existing keybinds (a test
+/// checks they are rows of the table).
+#[cfg(test)]
+const DECORATION_MOUSE: [(&str, &str, &[&str]); 5] = [
+    ("click on the close button", "Close the window", &["mod+Q"]),
+    (
+        "click on the maximize button",
+        "Maximize; on a maximized window, restore",
+        &["mod+Up", "mod+Down"],
+    ),
+    (
+        "left drag on the bar",
+        "Move the window, with edge snapping and snap zones (as mod+left drag)",
+        &[
+            "mod+Ctrl+H",
+            "mod+Ctrl+J",
+            "mod+Ctrl+K",
+            "mod+Ctrl+L",
+            "mod+left drag",
+        ],
+    ),
+    (
+        "left drag on a resize zone (edges and corners)",
+        "Resize from that edge or corner; tiled: moves the split (as mod+right drag)",
+        &[
+            "mod+Ctrl+Shift+H",
+            "mod+Ctrl+Shift+J",
+            "mod+Ctrl+Shift+K",
+            "mod+Ctrl+Shift+L",
+            "mod+right drag",
+        ],
+    ),
+    (
+        "any press on the bar or border",
+        "Focus and raise the window (never delivered to it)",
+        &["mod+H", "mod+J", "mod+K", "mod+L", "mod+Tab"],
+    ),
+];
 
 /// A mod+Tab cycle in progress: a frozen most-recently-used order and the position in it.
 pub struct Cycle {
@@ -640,6 +689,21 @@ mod tests {
                     a.action,
                     b.action
                 );
+            }
+        }
+    }
+
+    /// Every mouse action on the decorations names keybinds that exist.
+    #[test]
+    fn decoration_mouse_actions_have_keybinds() {
+        let labels: Vec<String> = TABLE
+            .iter()
+            .map(|b| format!("{}{}", b.mods.label(), b.trigger.label()))
+            .collect();
+        for (mouse, _, keys) in DECORATION_MOUSE {
+            assert!(!keys.is_empty(), "{mouse}");
+            for key in keys {
+                assert!(labels.iter().any(|l| l == key), "{mouse}: no row {key}");
             }
         }
     }

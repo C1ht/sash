@@ -32,6 +32,13 @@ use crate::{
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The dmabuf main device the harness advertises: 226:128 (a render node's numbers).
+/// The configure size of a window in a w x h tile (or any rectangle with the border
+/// only): the rectangle minus its 1 px border (M11b).
+pub fn tile(w: i32, h: i32) -> Option<(i32, i32)> {
+    use crate::layout::decor::Decoration;
+    Some(Decoration::BORDER.client_size((w, h)))
+}
+
 pub const FAKE_MAIN_DEVICE: u64 = (226 << 8) | 128;
 
 /// The harness's dmabuf format table: no GPU behind it, every buffer "imports".

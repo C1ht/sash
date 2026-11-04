@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use super::{
     BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, Mode, Rect, Side, SizeLimits,
     SplitHandle, WindowId,
+    decor::Decoration,
     geometry::pick_in_direction,
     snap::{SnapStep, ZoneId, Zones, snap_step},
 };
@@ -24,7 +25,11 @@ struct WindowState {
     /// The mode the user (or the default) chose; ignored while forced.
     own_mode: Mode,
     forced: bool,
+    /// The client's own limits (the layout works with outer limits: `outer_limits`).
     limits: SizeLimits,
+    /// The client negotiated server-side decorations (xdg-decoration): it gets a bar
+    /// while floating.
+    server_side: bool,
     parent: Option<WindowId>,
     /// Where the window was the last time it floated.
     last_floating: Option<Rect>,
@@ -72,6 +77,21 @@ impl WindowState {
             self.own_mode
         }
     }
+
+    /// The decorations while floating: a bar and border, or only the border for a
+    /// client that draws its own.
+    fn floating_decoration(&self) -> Decoration {
+        if self.server_side {
+            Decoration::FULL
+        } else {
+            Decoration::BORDER
+        }
+    }
+
+    /// Limits of the floating (outer) rectangle.
+    fn outer_limits(&self) -> SizeLimits {
+        self.floating_decoration().outer_limits(self.limits)
+    }
 }
 
 /// A mouse resize of a tiled window: the split on each moving axis and the length of its
@@ -88,6 +108,8 @@ pub struct NewWindow {
     pub forced: bool,
     pub parent: Option<WindowId>,
     pub limits: SizeLimits,
+    /// Server-side decorations negotiated.
+    pub server_side: bool,
     /// Where the pointer is (rule A: a new tiled window splits the tile under it).
     pub pointer: Option<(i32, i32)>,
 }
@@ -185,11 +207,67 @@ impl MonitorLayout {
         self.windows.get(&window).is_some_and(|s| s.forced)
     }
 
+    /// The limits of the window's floating (outer) rectangle: the client's limits plus
+    /// its decorations.
     pub fn limits(&self, window: WindowId) -> SizeLimits {
         self.windows
             .get(&window)
-            .map(|s| s.limits)
+            .map(WindowState::outer_limits)
             .unwrap_or_default()
+    }
+
+    /// Whether the window has server-side decorations. Returns true if that changed.
+    pub fn set_server_side(&mut self, window: WindowId, server_side: bool) -> bool {
+        let Some(state) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        let changed = state.server_side != server_side;
+        state.server_side = server_side;
+        changed
+    }
+
+    /// How the window is decorated now: nothing while fullscreen; the border only
+    /// while tiled; bar and border while floating, snapped or maximized (the border
+    /// only for a client that draws its own decorations).
+    pub fn decoration(&self, window: WindowId) -> Decoration {
+        let Some(state) = self.windows.get(&window) else {
+            return Decoration::NONE;
+        };
+        if self.fullscreen == Some(window) {
+            Decoration::NONE
+        } else if state.mode() == Mode::Floating || self.is_maximized(window) {
+            state.floating_decoration()
+        } else {
+            Decoration::BORDER
+        }
+    }
+
+    /// The edges of the window that have resize zones: all four while floating (also
+    /// snapped or maximized); on a tile only those not on the output boundary; none
+    /// while fullscreen or maximized tiled.
+    pub fn resize_zones(&self, window: WindowId) -> Edges {
+        let Some(state) = self.windows.get(&window) else {
+            return Edges::default();
+        };
+        if self.fullscreen == Some(window) {
+            return Edges::default();
+        }
+        match state.mode() {
+            Mode::Floating => Edges::ALL,
+            Mode::Tiled if state.maximized_tiled => Edges::default(),
+            Mode::Tiled => {
+                let Some(r) = self.tree.rect_of(window) else {
+                    return Edges::default();
+                };
+                let a = self.area;
+                Edges {
+                    left: r.x > a.x,
+                    right: r.right() < a.right(),
+                    top: r.y > a.y,
+                    bottom: r.bottom() < a.bottom(),
+                }
+            }
+        }
     }
 
     pub fn set_limits(&mut self, window: WindowId, limits: SizeLimits) {
@@ -223,6 +301,7 @@ impl MonitorLayout {
             own_mode: self.default_mode,
             forced: new.forced,
             limits: new.limits,
+            server_side: new.server_side,
             parent: new.parent.filter(|p| self.contains(*p)),
             last_floating: None,
             snap: None,
@@ -251,9 +330,9 @@ impl MonitorLayout {
             .map(|(id, _)| id)
     }
 
-    /// Gives a floating window without a rectangle its first one: the client's size,
-    /// clamped; forced windows centered over their parent (or the output), others
-    /// cascaded. Returns the window's rectangle.
+    /// Gives a floating window without a rectangle its first one: the client's size
+    /// (plus its decorations), clamped; forced windows centered over their parent (or
+    /// the output), others cascaded. Returns the window's rectangle.
     pub fn place(&mut self, window: WindowId, size: (i32, i32)) -> Option<Rect> {
         let state = self.windows.get(&window)?;
         if state.mode() == Mode::Floating
@@ -270,9 +349,9 @@ impl MonitorLayout {
             });
             let hint = InsertHint {
                 next_to: None,
-                size,
+                size: state.floating_decoration().outer_size(size),
                 center_over,
-                limits: state.limits,
+                limits: state.outer_limits(),
             };
             self.floating.insert(window, &hint);
         }
@@ -497,10 +576,12 @@ impl MonitorLayout {
                 .is_some_and(|z| z.maximized)
     }
 
-    /// What the window's configure should say.
+    /// What the window's configure should say: the client's size is its rectangle
+    /// minus its decorations.
     pub fn presentation(&self, window: WindowId) -> Option<Presentation> {
         let state = self.windows.get(&window)?;
-        let size = |r: Rect| Some((r.w.max(1), r.h.max(1)));
+        let decoration = self.decoration(window);
+        let size = |r: Rect| Some(decoration.client_size((r.w, r.h)));
         let plain = Presentation {
             size: None,
             tiled: Edges::default(),
@@ -862,7 +943,7 @@ impl MonitorLayout {
         let before = state.mode();
         state.forced = forced;
         let after = state.mode();
-        let limits = state.limits;
+        let limits = state.outer_limits();
         if before == after {
             return true;
         }
@@ -900,7 +981,7 @@ impl MonitorLayout {
         if state.mode() == Mode::Floating {
             state.snap = None;
         }
-        let limits = state.limits;
+        let limits = state.outer_limits();
         let (w, h) = limits.clamp((rect.w, rect.h));
         self.floating
             .set_rect(window, Rect::new(rect.x, rect.y, w, h))
@@ -1042,6 +1123,44 @@ impl MonitorLayout {
         }
         if let Some(f) = self.fullscreen {
             assert!(self.contains(f), "fullscreen window is unknown");
+        }
+        // Decorations (M11b): inside the outer rectangle; the client gets the rest.
+        for (window, rect, layer) in self.stacking() {
+            let state = &self.windows[&window];
+            let decoration = self.decoration(window);
+            let expected = match layer {
+                Layer::Fullscreen => Decoration::NONE,
+                Layer::Tiled => Decoration::BORDER,
+                Layer::Floating | Layer::Maximized => state.floating_decoration(),
+            };
+            assert_eq!(decoration, expected, "{window:?} ({layer:?}) decorations");
+            let inner = decoration.inner(rect);
+            assert!(
+                inner.x >= rect.x
+                    && inner.y >= rect.y
+                    && inner.right() <= rect.right().max(inner.x)
+                    && inner.bottom() <= rect.bottom().max(inner.y),
+                "{window:?}: client {inner:?} outside {rect:?}"
+            );
+            if layer != Layer::Fullscreen {
+                let presentation = self.presentation(window).expect("known");
+                assert_eq!(
+                    presentation.size,
+                    Some(decoration.client_size((rect.w, rect.h))),
+                    "{window:?}: configure size is the outer size minus decorations"
+                );
+            }
+            let zones = self.resize_zones(window);
+            if layer == Layer::Tiled {
+                let a = self.area;
+                assert!(
+                    !(zones.left && rect.x <= a.x
+                        || zones.right && rect.right() >= a.right()
+                        || zones.top && rect.y <= a.y
+                        || zones.bottom && rect.bottom() >= a.bottom()),
+                    "{window:?}: a resize zone on the output boundary"
+                );
+            }
         }
         let drawn: Vec<WindowId> = self.stacking().iter().map(|(w, _, _)| *w).collect();
         let mut unique = drawn.clone();
@@ -1337,9 +1456,10 @@ mod tests {
         layout.open(id(3), NewWindow::default());
         assert_eq!(layout.tiled_rects(), tiles, "no tiled rectangle changes");
         assert!(!layout.is_placed(id(3)), "waits for the client's size");
+        // The outer rectangle: the client's size plus its 1 px border (M11b).
         assert_eq!(
             layout.place(id(3), (300, 200)),
-            Some(Rect::new(250, 200, 300, 200))
+            Some(Rect::new(249, 199, 302, 202))
         );
         assert_eq!(layout.focused(), Some(id(3)));
         // Tiling it puts it next to the leaf that was focused when it opened (2).
@@ -1399,8 +1519,8 @@ mod tests {
         assert_eq!(layout.mode(id(3)), Some(Mode::Floating));
         assert_eq!(
             layout.place(id(3), (200, 100)),
-            Some(Rect::new(100, 250, 200, 100)),
-            "over its parent"
+            Some(Rect::new(99, 249, 202, 102)),
+            "over its parent (outer: the client plus its border)"
         );
         let fixed = NewWindow {
             forced: true,
@@ -1413,7 +1533,7 @@ mod tests {
         layout.open(id(4), fixed);
         assert_eq!(
             layout.place(id(4), (300, 300)),
-            Some(Rect::new(250, 150, 300, 300)),
+            Some(Rect::new(249, 149, 302, 302)),
             "on the output"
         );
         assert!(
@@ -1427,7 +1547,7 @@ mod tests {
         layout.tile_all();
         assert_eq!(
             rect(&layout, 3),
-            Rect::new(100, 250, 200, 100),
+            Rect::new(99, 249, 202, 102),
             "not moved by bulk actions"
         );
         layout.check_invariants();
@@ -1464,23 +1584,23 @@ mod tests {
         assert_eq!(layout.mode(id(2)), Some(Mode::Floating));
         assert_eq!(
             layout.resize_by(id(2), STEP, -STEP),
-            Some(Rect::new(440, 0, 420, 560)),
-            "max width 420"
+            Some(Rect::new(440, 0, 422, 560)),
+            "max client width 420, plus the border"
         );
         for _ in 0..20 {
             layout.resize_by(id(2), -STEP, -STEP);
         }
         assert_eq!(
             rect(&layout, 2),
-            Rect::new(440, 0, 100, 100),
-            "min size 100x100"
+            Rect::new(440, 0, 102, 102),
+            "min client size 100x100"
         );
         for _ in 0..40 {
             layout.move_by(id(2), STEP, STEP);
         }
         assert_eq!(
             rect(&layout, 2),
-            Rect::new(736, 536, 100, 100),
+            Rect::new(736, 536, 102, 102),
             "64 px stay visible"
         );
         layout.check_invariants();
@@ -1571,7 +1691,7 @@ mod tests {
         big.open(id(1), fixed);
         assert_eq!(
             big.place(id(1), (2000, 1500)),
-            Some(Rect::new(-600, 0, 2000, 1500))
+            Some(Rect::new(-601, 0, 2002, 1502))
         );
         big.move_by(id(1), 5000, 5000);
         big.check_invariants();
@@ -1748,7 +1868,7 @@ mod tests {
         assert!(!layout.snap(id(1), ZoneId::LEFT));
         assert!(!layout.snap_key(id(1), Direction::Up));
         assert!(!layout.set_maximized(id(1), true));
-        assert_eq!(rect(&layout, 1), Rect::new(250, 200, 300, 200));
+        assert_eq!(rect(&layout, 1), Rect::new(249, 199, 302, 202));
         layout.check_invariants();
     }
 
@@ -1763,12 +1883,13 @@ mod tests {
         );
         assert_eq!(
             layout.presentation(id(1)).map(|p| (p.size, p.maximized)),
-            Some((Some((800, 600)), true))
+            Some((Some((798, 598)), true)),
+            "the output minus the border"
         );
         assert!(layout.set_maximized(id(1), false));
         assert_eq!(
             layout.presentation(id(1)).map(|p| (p.size, p.maximized)),
-            Some((Some((400, 600)), false))
+            Some((Some((398, 598)), false))
         );
         layout.toggle(id(2));
         layout.set_floating_rect(id(2), Rect::new(10, 20, 300, 200));

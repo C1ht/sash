@@ -12,7 +12,8 @@ use smithay::{
     },
     wayland::{
         compositor::CompositorState, cursor_shape::CursorShapeManagerState,
-        presentation::PresentationState, shell::xdg::XdgShellState, shm::ShmState,
+        presentation::PresentationState, shell::xdg::XdgShellState,
+        shell::xdg::decoration::XdgDecorationState, shm::ShmState,
     },
 };
 
@@ -40,6 +41,11 @@ pub struct Protocols {
         reason = "the global lives on the display; this keeps its id"
     )]
     pub cursor_shape: CursorShapeManagerState,
+    #[expect(
+        dead_code,
+        reason = "the global lives on the display; this keeps its id"
+    )]
+    pub xdg_decoration: XdgDecorationState,
 }
 
 impl Protocols {
@@ -51,6 +57,7 @@ impl Protocols {
             xdg_shell: XdgShellState::new::<Sash>(display),
             seat: SeatState::new(),
             cursor_shape: CursorShapeManagerState::new::<Sash>(display),
+            xdg_decoration: XdgDecorationState::new::<Sash>(display),
         }
     }
 }
@@ -78,6 +85,8 @@ pub struct Sash {
     pub cursor_theme: crate::cursor_theme::CursorTheme,
     /// Snap preview and fullscreen backdrop.
     pub overlay: Overlay,
+    /// Server-side decorations: the pointer on them and their buffers.
+    pub decorations: crate::decorations::Decorations,
     pub keybinds: Keybinds,
 
     /// Process start; the clock for frame callback timestamps and startup time.
@@ -137,6 +146,7 @@ impl Sash {
             cursor_theme: crate::cursor_theme::CursorTheme::system(),
             fatal: None,
             overlay: Overlay::new(),
+            decorations: crate::decorations::Decorations::new(),
             keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,

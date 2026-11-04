@@ -815,6 +815,7 @@ pub fn take_outline_shot(state: &mut Sash) {
             rect,
             layer,
             focused: Some(id) == focused,
+            decoration: state.windows.layout.decoration(id),
         })
         .collect();
     let pointer = state.seat.get_pointer().map(|p| {

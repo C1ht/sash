@@ -23,7 +23,11 @@ enum Op {
         /// It maps at once (focus moves to it); else focus stays until a later
         /// `Focus` (its map, M9e).
         mapped: bool,
+        /// Server-side decorations negotiated (a bar while floating).
+        server_side: bool,
     },
+    /// The client negotiates (or drops) server-side decorations later.
+    SetServerSide(usize, bool),
     /// Gives an unplaced floating window its size (the client's first buffer).
     Place(usize, (i32, i32)),
     Close(usize),
@@ -106,14 +110,17 @@ fn op() -> impl Strategy<Value = Op> {
             prop::option::of(size()),
             prop::option::of((-500..4500i32, -500..4500i32)),
             any::<bool>(),
+            any::<bool>(),
         )
-            .prop_map(|(forced, parent, fixed, pointer, mapped)| Op::Open {
+            .prop_map(|(forced, parent, fixed, pointer, mapped, server_side)| Op::Open {
                 forced,
                 parent,
                 fixed,
                 pointer,
                 mapped,
+                server_side,
             }),
+        1 => (index, any::<bool>()).prop_map(|(i, s)| Op::SetServerSide(i, s)),
         3 => (index, size()).prop_map(|(i, s)| Op::Place(i, s)),
         2 => index.prop_map(Op::Close),
         2 => index.prop_map(Op::Toggle),
@@ -156,6 +163,7 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
             fixed,
             pointer,
             mapped,
+            server_side,
         } => {
             *next += 1;
             let limits = fixed
@@ -168,6 +176,7 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
                 forced: forced || limits.is_fixed(),
                 parent: parent.and_then(|p| pick(layout, p)),
                 limits,
+                server_side,
                 pointer,
             };
             // Rule A: the tile under the pointer is split, otherwise the focused one;
@@ -347,6 +356,11 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
         Op::UnsnapDrag(i, x, y) => {
             if let Some(w) = pick(layout, i) {
                 layout.unsnap_for_drag(w, (x, y), (y, x));
+            }
+        }
+        Op::SetServerSide(i, on) => {
+            if let Some(w) = pick(layout, i) {
+                layout.set_server_side(w, on);
             }
         }
         Op::Maximize(i, on) => {

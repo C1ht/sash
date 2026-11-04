@@ -37,6 +37,7 @@ mod clients;
 mod cursor;
 mod cursor_theme;
 mod data_device;
+mod decorations;
 mod dmabuf;
 mod grab;
 mod keybinds;

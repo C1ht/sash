@@ -869,6 +869,8 @@ change this file without the owner's approval.
 - `wl_data_device_manager` (version 3) from M10: clipboard and drag and
   drop (see "Clipboard and drag and drop (M10)"). No primary selection,
   no data-control.
+- `zxdg_decoration_manager_v1` (version 1) from M11b: every negotiating
+  client is answered server_side (see "Decorations (M11b, owner)").
 - xdg-shell protocol errors are limited by Smithay 0.7, which does not
   expose a toplevel's `xdg_surface`:
   - a buffer before the first `ack_configure` gets

@@ -517,7 +517,8 @@ fn a_fixed_size_parent_at_the_output_edge() {
                 h.chord(&[ALT, CTRL, L]);
             }
             let r = h.rect_of(1).expect("rect");
-            assert_eq!(r.right(), 800 + 200 - 64, "64 px stay visible");
+            // Outer width: the client's 200 plus its border.
+            assert_eq!(r.right(), 800 + 202 - 64, "64 px stay visible");
         });
         // A submenu to the right of the window flips to its left side.
         let spec = PopupSpec {

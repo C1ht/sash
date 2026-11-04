@@ -24,7 +24,10 @@ use smithay::{
     desktop::{Window, WindowSurfaceType, utils::under_from_surface_tree},
     reexports::{
         calloop::timer::{TimeoutAction, Timer},
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_protocols::xdg::{
+            decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
+            shell::server::xdg_toplevel,
+        },
         wayland_server::protocol::wl_surface::WlSurface,
     },
     utils::{Logical, Point, SERIAL_COUNTER, Size},
@@ -35,8 +38,9 @@ use crate::{
     keybinds::{Action, Cycle},
     layout::{
         Direction, Edges, Layer, Mode, MonitorLayout, NewWindow, Presentation, Rect, STEP,
-        SizeLimits, TiledResize, WindowId, ZoneId, resize_rect, resize_zone, snap_to_edges,
-        stop_top_edge,
+        SizeLimits, TiledResize, WindowId, ZoneId,
+        decor::{Decoration, Part},
+        resize_rect, resize_zone, snap_to_edges, stop_top_edge,
     },
     popups::popups_of,
     state::Sash,
@@ -64,6 +68,8 @@ pub struct Managed {
     pub window: Window,
     /// Whether the client has committed a buffer since entering the layout.
     pub mapped: bool,
+    /// The client negotiated xdg-decoration (always answered server-side).
+    pub server_side: bool,
     sent: Option<Sent>,
     /// Send a configure even if nothing changed (a client request needs an answer).
     reply_due: bool,
@@ -146,6 +152,20 @@ impl Windows {
         self.list.iter_mut().find(|m| m.id == id)
     }
 
+    /// Notes whether the client negotiated server-side decorations.
+    pub fn set_server_side(&mut self, id: WindowId, server_side: bool) {
+        if let Some(managed) = self.by_id_mut(id) {
+            managed.server_side = server_side;
+        }
+    }
+
+    /// The client gets a configure with the next arrange even if nothing changed.
+    pub fn reply_due(&mut self, id: WindowId) {
+        if let Some(managed) = self.by_id_mut(id) {
+            managed.reply_due = true;
+        }
+    }
+
     /// The edges an interactive resize of `id` moves, if one is in progress.
     fn resizing(&self, id: WindowId) -> Option<Edges> {
         match &self.drag {
@@ -203,7 +223,11 @@ type SurfaceHit = (WlSurface, Point<f64, Logical>);
 pub struct Visible<'a> {
     pub id: WindowId,
     pub window: &'a Window,
+    /// The client's rectangle (inside the decorations).
     pub rect: Rect,
+    /// The whole window, decorations included.
+    pub outer: Rect,
+    pub decoration: Decoration,
     pub position: Point<i32, Logical>,
     pub layer: Layer,
 }
@@ -217,6 +241,7 @@ impl Sash {
             id,
             window,
             mapped: false,
+            server_side: false,
             sent: None,
             reply_due: false,
             resize_sent_at: None,
@@ -239,13 +264,19 @@ impl Sash {
         let Some(managed) = self.windows.by_surface(surface) else {
             return;
         };
-        let (id, window, mapped) = (managed.id, managed.window.clone(), managed.mapped);
+        let (id, window, mapped, server_side) = (
+            managed.id,
+            managed.window.clone(),
+            managed.mapped,
+            managed.server_side,
+        );
         window.on_commit();
         record!(
             self,
             "commit",
             "window" => id,
             "buffer" => has_buffer,
+            "server_side" => server_side,
             "geometry" => {
                 let g = window.geometry();
                 vec![g.loc.x.into(), g.loc.y.into(), g.size.w.into(), g.size.h.into()]
@@ -273,6 +304,7 @@ impl Sash {
                 forced,
                 parent,
                 limits,
+                server_side,
                 pointer,
             };
             record_context!(self, "open window");
@@ -359,10 +391,16 @@ impl Sash {
         if acked != Some(Size::from(sent.size())) {
             return false;
         }
-        let actual = window.geometry().size;
-        if (actual.w, actual.h) == (rect.w, rect.h) || actual.w <= 0 || actual.h <= 0 {
+        let client = window.geometry().size;
+        let decoration = self.windows.layout.decoration(id);
+        if (client.w, client.h) == decoration.client_size((rect.w, rect.h))
+            || client.w <= 0
+            || client.h <= 0
+        {
             return false;
         }
+        let (w, h) = decoration.outer_size((client.w, client.h));
+        let actual = Size::<i32, Logical>::from((w, h));
         let edges = self.windows.resizing(id).unwrap_or_default();
         let x = if edges.left {
             rect.right() - actual.w
@@ -453,8 +491,12 @@ impl Sash {
                     managed.resize_sent_at.get_or_insert_with(Instant::now);
                 }
                 managed.sent = Some(want);
+                let server_side = managed.server_side;
                 toplevel.with_pending_state(|state| {
                     state.size = presentation.size.map(Into::into);
+                    // Every client that negotiates gets server-side decorations; the
+                    // mode goes out with the size in the same configure.
+                    state.decoration_mode = server_side.then_some(DecorationMode::ServerSide);
                     let tiled = presentation.tiled;
                     for (on, tiled_state) in [tiled.left, tiled.right, tiled.top, tiled.bottom]
                         .into_iter()
@@ -518,6 +560,7 @@ impl Sash {
             return;
         };
         if let Some(rect) = self.windows.layout.shown_rect(id) {
+            let rect = self.windows.layout.decoration(id).inner(rect);
             let window = managed.window.clone();
             self.space
                 .map_element(window.clone(), buffer_position(&window, rect), false);
@@ -627,6 +670,10 @@ impl Sash {
                 return popups;
             }
             if Some(visible.id) == target {
+                // The bar, border and resize zones are the compositor's.
+                if self.decoration_part(visible, x, y).is_some() {
+                    return Some((visible.id, None));
+                }
                 let origin = visible.position.to_f64();
                 let surface = visible
                     .window
@@ -645,18 +692,46 @@ impl Sash {
         None
     }
 
+    /// What (x, y) is on a window's decorations; None in the client's area.
+    pub fn decoration_part(&self, visible: &Visible<'_>, x: i32, y: i32) -> Option<Part> {
+        let layout = &self.windows.layout;
+        visible.decoration.hit(
+            visible.outer,
+            layout.resize_zones(visible.id),
+            layout.area(),
+            x,
+            y,
+        )
+    }
+
+    /// The decoration under a global position, if the topmost thing there is one
+    /// (popups and windows above it win).
+    pub fn decoration_at(&self, location: Point<f64, Logical>) -> Option<(WindowId, Part)> {
+        let (id, surface) = self.hit(location)?;
+        if surface.is_some() {
+            return None;
+        }
+        let (x, y) = (location.x.floor() as i32, location.y.floor() as i32);
+        let visible = self.visible_windows().into_iter().find(|v| v.id == id)?;
+        self.decoration_part(&visible, x, y).map(|part| (id, part))
+    }
+
     /// Mapped windows in drawing order, bottom first (see `MonitorLayout::stacking`).
     pub fn visible_windows(&self) -> Vec<Visible<'_>> {
         self.windows
             .layout
             .stacking()
             .into_iter()
-            .filter_map(|(id, rect, layer)| {
+            .filter_map(|(id, outer, layer)| {
                 let managed = self.windows.by_id(id).filter(|m| m.mapped)?;
+                let decoration = self.windows.layout.decoration(id);
+                let rect = decoration.inner(outer);
                 Some(Visible {
                     id,
                     window: &managed.window,
                     rect,
+                    outer,
+                    decoration,
                     position: buffer_position(&managed.window, rect),
                     layer,
                 })

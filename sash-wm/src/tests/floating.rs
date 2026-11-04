@@ -38,7 +38,15 @@ fn open_three(
     [(c1, w1), (c2, w2), (c3, w3)]
 }
 
+/// The configure for a window whose outer rectangle is `size` (0x0: the client
+/// chooses): the test clients do not negotiate decorations, so they get the 1 px border
+/// only, and the client's size is the outer size minus it.
 fn cfg(size: (i32, i32), tiled: bool) -> Option<ToplevelConfig> {
+    let size = if size == (0, 0) {
+        size
+    } else {
+        crate::layout::decor::Decoration::BORDER.client_size(size)
+    };
     Some(ToplevelConfig {
         size,
         tiled,
@@ -166,7 +174,7 @@ fn dialog_with_a_parent_opens_centered_over_it_and_floating() {
             assert_eq!(h.mode_of(3), Some(Mode::Floating));
             assert_eq!(
                 h.rect_of(3),
-                Some(Rect::new(100, 250, 200, 100)),
+                Some(Rect::new(99, 249, 202, 102)),
                 "centered over the parent"
             );
             assert_eq!(
@@ -201,7 +209,7 @@ fn fixed_size_window_floats_centered_on_the_output() {
         c2.ack_and_commit(&fixed);
         server.on_server(|h| {
             assert_eq!(h.mode_of(2), Some(Mode::Floating));
-            assert_eq!(h.rect_of(2), Some(Rect::new(250, 200, 300, 200)));
+            assert_eq!(h.rect_of(2), Some(Rect::new(249, 199, 302, 202)));
             assert_eq!(
                 h.rect_of(1),
                 Some(AREA),
@@ -307,20 +315,21 @@ fn client_resize_request_resizes_a_floating_window() {
         let w = c.map_window();
         server.on_server(|h| {
             h.chord(&[ALT, F]); // floats at (0, 0, 800, 600)
-            h.pointer_to(790.0, 590.0);
+            // In the client's area, clear of the decorations' resize zones.
+            h.pointer_to(780.0, 580.0);
             h.button(BTN_LEFT, ButtonState::Pressed);
         });
         c.roundtrip();
         c.request_resize(&w, ResizeEdge::BottomRight);
         server.on_server(|h| {
-            h.pointer_to(690.0, 540.0);
+            h.pointer_to(680.0, 530.0);
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 700, 550)));
         });
         c.roundtrip();
         assert_eq!(
             c.config(&w),
             Some(ToplevelConfig {
-                size: (700, 550),
+                size: (698, 548),
                 resizing: true,
                 ..Default::default()
             })
@@ -341,7 +350,8 @@ fn client_resize_request_resizes_a_floating_window() {
             h.chord(&[ALT, H]); // focus 1
             h.chord(&[ALT, F]); // 1 | 2
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
-            h.pointer_to(390.0, 590.0);
+            // In the client's area (the tile's resize zones would start a resize).
+            h.pointer_to(380.0, 580.0);
             h.button(BTN_LEFT, ButtonState::Pressed);
         });
         c.roundtrip();
@@ -593,7 +603,8 @@ fn moving_keeps_the_size_the_client_settled_on() {
         assert_eq!(c.config(&w), cfg((800, 600), false));
         // Like foot rounding to its cell grid once it is no longer tiled.
         c.ack_and_commit_size(&w, (790, 590));
-        server.on_server(|h| assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 790, 590))));
+        // The outer rectangle: the client's size plus its border.
+        server.on_server(|h| assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 792, 592))));
         let configures = c.events.configures;
         server.on_server(|h| {
             h.pointer_to(420.0, 310.0);
@@ -601,12 +612,12 @@ fn moving_keeps_the_size_the_client_settled_on() {
         });
         c.roundtrip();
         server.on_server(|h| {
-            assert_eq!(h.rect_of(1), Some(Rect::new(40, 100, 790, 590)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(40, 100, 792, 592)));
             h.button(BTN_LEFT, ButtonState::Released);
             h.key(ALT, KeyState::Released);
         });
         c.roundtrip();
-        assert_eq!(c.config(&w), cfg((790, 590), false));
+        assert_eq!(c.config(&w), cfg((792, 592), false));
         assert!(
             c.events.configures <= configures + 1,
             "no configure back to the size at the press"
@@ -656,7 +667,7 @@ fn window_larger_than_the_output_and_tiny_output() {
         c.dispatch_until("configure", |e| e.configures >= 1);
         c.ack_and_commit(&big);
         server.on_server(|h| {
-            assert_eq!(h.rect_of(1), Some(Rect::new(-600, 0, 2000, 1500)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(-601, 0, 2002, 1502)));
             // Moving it far away keeps 64 px on the output.
             h.chord(&[ALT, CTRL, L]);
             for _ in 0..50 {

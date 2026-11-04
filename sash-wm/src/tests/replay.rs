@@ -227,6 +227,14 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
         _ => (800, 600),
     };
 
+    // Bundles from before M11b have no server_side field: their windows had no
+    // decorations, so a client's committed size was the whole window. The stand-ins
+    // (which get the 1 px border) commit that size minus the border, so the windows
+    // come out as recorded.
+    let before_decorations = !events
+        .iter()
+        .any(|e| kind(e) == "commit" && e.get("server_side").is_some());
+
     let mut harness = Harness::with_modifier(modifier);
     harness.timeout = REPLAY_TIMEOUT;
     let socket = harness.socket_path();
@@ -317,6 +325,13 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
                         ),
                         _ => (0, 0),
                     };
+                    let size = if before_decorations && size.0 > 0 && size.1 > 0 {
+                        crate::layout::decor::Decoration::BORDER.client_size(size)
+                    } else {
+                        size
+                    };
+                    let server_side =
+                        event.get("server_side").and_then(Json::as_bool) == Some(true);
                     let entry = windows
                         .entry(w)
                         .or_insert_with(|| (TestClient::connect(&socket), None, Stage::Initial));
@@ -325,7 +340,14 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
                         // A new window: its initial commit; the configure comes back.
                         (None, _, _) => {
                             let seen = client.events.configures;
-                            *window = Some(client.create_window());
+                            let win = client.create_window_without_commit();
+                            // A client that negotiated decorations does so before its
+                            // initial commit.
+                            if server_side {
+                                let _ = client.decorate(&win, None);
+                            }
+                            win.surface.commit();
+                            *window = Some(win);
                             client.dispatch_until("initial configure", |e| e.configures > seen);
                         }
                         // Its first buffer, or a new one: at the recorded size.
@@ -597,7 +619,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "pointer_position",
         "key",
     ];
-    const FIELDS: [&str; 32] = [
+    const FIELDS: [&str; 33] = [
         "t_us",
         "kind",
         "op",
@@ -622,6 +644,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "window",
         "leaf",
         "buffer",
+        "server_side",
         "geometry",
         "button",
         "pressed",

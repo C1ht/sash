@@ -4,7 +4,7 @@
 //! alone (no renderer, no window contents). Every pixel is one of `PALETTE`, so a test
 //! can prove that nothing a client drew is in the picture.
 
-use crate::layout::{Layer, Rect, WindowId};
+use crate::layout::{Layer, Rect, WindowId, decor::Decoration};
 
 pub type Rgba = [u8; 4];
 
@@ -15,10 +15,13 @@ pub const BORDER: Rgba = [190, 190, 190, 255];
 pub const FOCUSED_BORDER: Rgba = [10, 132, 255, 255];
 pub const TEXT: Rgba = [255, 255, 255, 255];
 pub const POINTER: Rgba = [255, 64, 64, 255];
+/// The outlines of the bar band and the client's rectangle inside the border (M11b).
+pub const DECORATION: Rgba = [140, 140, 140, 255];
 
 /// Every colour an outline picture can contain.
 #[cfg(test)]
-pub const PALETTE: [Rgba; 7] = [
+pub const PALETTE: [Rgba; 8] = [
+    DECORATION,
     BACKGROUND,
     TILED_FILL,
     FLOATING_FILL,
@@ -48,6 +51,8 @@ pub struct Outline {
     pub rect: Rect,
     pub layer: Layer,
     pub focused: bool,
+    /// The server-side decorations: their bar band and border show as outlines.
+    pub decoration: Decoration,
 }
 
 /// An RGBA canvas `width` x `height` showing an output of `output` (w, h) pixels,
@@ -108,6 +113,14 @@ impl Canvas {
             BORDER
         };
         self.fill(r.x, r.y, r.w, r.h, fill);
+        // Decorations: the bar band and the client's rectangle, 1 canvas pixel each
+        // (below the window's own outline, which stays visible where they meet).
+        if outline.decoration != Decoration::NONE {
+            if let Some(bar) = outline.decoration.bar_rect(r) {
+                self.outline(bar, DECORATION);
+            }
+            self.outline(outline.decoration.inner(r), DECORATION);
+        }
         let s = self.scale as i32;
         let b = 2 * s;
         self.fill(r.x, r.y, r.w, b, border);
@@ -117,6 +130,15 @@ impl Canvas {
         // The id, 4 canvas pixels per font dot, inside the top-left corner.
         let (cx, cy) = ((r.x.max(0) / s) + 8, (r.y.max(0) / s) + 8);
         self.number(cx, cy, outline.id.0, 4);
+    }
+
+    /// A 1 canvas pixel outline of an output-space rectangle.
+    fn outline(&mut self, r: Rect, colour: Rgba) {
+        let s = self.scale as i32;
+        self.fill(r.x, r.y, r.w, s, colour);
+        self.fill(r.x, r.y + r.h - s, r.w, s, colour);
+        self.fill(r.x, r.y, s, r.h, colour);
+        self.fill(r.x + r.w - s, r.y, s, r.h, colour);
     }
 
     fn number(&mut self, x: i32, y: i32, n: u64, dot: i32) {
@@ -176,18 +198,21 @@ mod tests {
                 rect: Rect::new(0, 0, 2560, 1440),
                 layer: Layer::Tiled,
                 focused: false,
+                decoration: Decoration::BORDER,
             },
             Outline {
                 id: WindowId(12),
                 rect: Rect::new(2560, 0, 2560, 1440),
                 layer: Layer::Tiled,
                 focused: true,
+                decoration: Decoration::BORDER,
             },
             Outline {
                 id: WindowId(3),
                 rect: Rect::new(1000, 300, 900, 600),
                 layer: Layer::Floating,
                 focused: false,
+                decoration: Decoration::FULL,
             },
         ];
         let c = draw((5120, 1440), &windows, Some((4000, 700)), 1920);
@@ -205,5 +230,14 @@ mod tests {
         // Window 1's id: "1" starts at canvas (8, 8); its top row is 010.
         assert_eq!(at(&c, 8 + 4, 8), TEXT);
         assert_eq!(at(&c, 8, 8), TILED_FILL);
+        // Window 3's bar band (32 px at scale 3: canvas rows 100..111) and client
+        // rectangle are outlined.
+        assert_eq!(
+            at(&c, 400, 100 + 32 / 3),
+            DECORATION,
+            "the bar band's lower edge"
+        );
+        assert_eq!(at(&c, 400, 111), DECORATION, "the client rectangle's top");
+        assert_eq!(at(&c, 400, 120), FLOATING_FILL);
     }
 }

@@ -417,3 +417,161 @@ fn gpu_rebuild_restores_windows_and_cursor_without_client_help() {
     }
     assert!(before == after, "the rebuilt renderer draws the same frame");
 }
+
+/// Ten coloured windows, floating and overlapping in a cascade; with `server_side`
+/// they negotiated decorations (bar and border), else they have the border only. The
+/// pointer rests on window 10's bar; window 10 has focus.
+fn ten_floating(harness: &mut Harness, server_side: bool) {
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut clients = Vec::new();
+        for i in 0..10u32 {
+            let mut c = TestClient::connect(&socket);
+            let mut w = c.create_window_without_commit();
+            w.color = 0xff00_0000 | (0x1f * (i + 1)) << 16 | 0x4080;
+            if server_side {
+                std::mem::forget(c.decorate(&w, None));
+            }
+            w.surface.commit();
+            c.dispatch_until("configure", |e| e.configures >= 1);
+            c.ack_and_commit(&w);
+            clients.push((c, w));
+        }
+        server.on_server(|h| {
+            h.chord(&[ALT, crate::tests::harness::keys::SHIFT, F]); // float all
+            for i in 0..10 {
+                let rect = crate::layout::Rect::new(20 + 40 * i, 20 + 30 * i, 360, 260);
+                h.server
+                    .state
+                    .windows
+                    .layout
+                    .set_floating_rect(crate::layout::WindowId(i as u64 + 1), rect);
+            }
+            h.server.state.focus_window(crate::layout::WindowId(10));
+            h.server.state.arrange();
+            h.pointer_to(560.0, 300.0);
+        });
+        for (c, w) in &mut clients {
+            c.roundtrip();
+            c.ack_and_commit(w);
+        }
+        std::mem::forget(clients);
+    });
+    for _ in 0..20 {
+        harness.step();
+    }
+}
+
+fn percentiles(name: &str, mut t: Vec<Duration>) {
+    t.sort();
+    let q = |p: f64| t[((t.len() - 1) as f64 * p) as usize].as_micros();
+    println!(
+        "{name}: n={} p50={}us p95={}us p99={}us max={}us",
+        t.len(),
+        q(0.5),
+        q(0.95),
+        q(0.99),
+        t.last().unwrap().as_micros()
+    );
+}
+
+/// M11b measurements: full-frame render time with ten windows with bars (and with the
+/// border only), frame times during a bar drag (damage tracked from frame to frame, as
+/// the backends do), and pointer hit-testing on the decorations. With SASH_CAPTURE_DIR
+/// set, also writes the decorated scene as a PNG (solid-colour test windows only).
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_decorations_cost() {
+    let size: Size<i32, smithay::utils::Physical> = (800, 600).into();
+    let mut renderer = renderer();
+    let mut target: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, (800, 600).into())
+        .expect("offscreen buffer");
+    for server_side in [false, true] {
+        let mut harness = Harness::new();
+        ten_floating(&mut harness, server_side);
+        let mut times = Vec::new();
+        for _ in 0..300 {
+            let start = Instant::now();
+            let elements = render::output_elements(&harness.server.state, &mut renderer, 1.0);
+            let mut framebuffer = renderer.bind(&mut target).expect("bind");
+            let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+            let result = damage
+                .render_output(
+                    &mut renderer,
+                    &mut framebuffer,
+                    0,
+                    &elements,
+                    render::CLEAR_COLOR,
+                )
+                .expect("render");
+            result.sync.wait().expect("GPU done");
+            times.push(start.elapsed());
+        }
+        let name = if server_side {
+            "full frame, 10 windows with bars"
+        } else {
+            "full frame, 10 windows, border only"
+        };
+        percentiles(name, times);
+        if !server_side {
+            continue;
+        }
+        #[cfg(debug_assertions)]
+        if let Some(dir) = std::env::var_os(crate::capture::CAPTURE_DIR_VAR) {
+            let path = std::path::Path::new(&dir).join("m11b-ten-bars.png");
+            crate::capture::write_png::<_, GlesTexture>(
+                &mut renderer,
+                &harness.server.state,
+                (800, 600).into(),
+                &path,
+            )
+            .expect("capture");
+            println!("wrote {}", path.display());
+        }
+        // Hit-testing: what is under the pointer, decorations included, at points
+        // spread over the output.
+        let state = &harness.server.state;
+        let mut hits = Vec::new();
+        let mut found = 0;
+        for i in 0..20_000u32 {
+            let at = (((i * 37) % 800) as f64 + 0.5, ((i * 53) % 600) as f64 + 0.5).into();
+            let start = Instant::now();
+            let decoration = state.decoration_at(at);
+            let surface = state.surface_at(at);
+            hits.push(start.elapsed());
+            found += decoration.is_some() as u32 + surface.is_some() as u32;
+        }
+        assert!(found > 0);
+        percentiles("hit test (decoration_at + surface_at)", hits);
+        // A bar drag: window 10 grabbed by its bar and moved in a circle, one frame
+        // per motion, the damage tracker kept.
+        harness.button(BTN_LEFT, ButtonState::Pressed);
+        assert!(harness.pointer_grabbed(), "a bar drag");
+        let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+        let mut frames = Vec::new();
+        for step in 0..300 {
+            let t = step as f64 / 60.0;
+            let x = 560.0 - 100.0 + 100.0 * (2.0 * std::f64::consts::PI * t).cos();
+            let y = 300.0 + 100.0 * (2.0 * std::f64::consts::PI * t).sin();
+            let start = Instant::now();
+            harness.pointer_to(x, y);
+            harness.server.state.flush_pending_arrange();
+            let elements = render::output_elements(&harness.server.state, &mut renderer, 1.0);
+            let mut framebuffer = renderer.bind(&mut target).expect("bind");
+            let result = damage
+                .render_output(
+                    &mut renderer,
+                    &mut framebuffer,
+                    0,
+                    &elements,
+                    render::CLEAR_COLOR,
+                )
+                .expect("render");
+            result.sync.wait().expect("GPU done");
+            frames.push(start.elapsed());
+        }
+        harness.button(BTN_LEFT, ButtonState::Released);
+        percentiles("bar drag frame (motion, configure, render)", frames);
+    }
+}

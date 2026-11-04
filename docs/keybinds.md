@@ -44,3 +44,15 @@
 | mod+left drag | mod | Move the window; a tiled window floats; hold Shift to turn edge snapping off (keyboard: mod+Ctrl+H/J/K/L, mod+arrows) | all |
 | mod+right drag | mod | Resize from the pointer's cell of a 3x3 grid; tiled: moves splits (keyboard: mod+Ctrl+Shift+H/J/K/L) | all |
 | click | no mod | Focus and raise the window; the click is delivered (keyboard: mod+H/J/K/L, mod+Tab) | all |
+
+## Window decorations
+
+The bar and border sash-wm draws (M11b) are used with the plain mouse. They add no actions: every one has a keybind above.
+
+| Mouse | Action | Keybinds |
+|---|---|---|
+| click on the close button | Close the window | mod+Q |
+| click on the maximize button | Maximize; on a maximized window, restore | mod+Up, mod+Down |
+| left drag on the bar | Move the window, with edge snapping and snap zones (as mod+left drag) | mod+Ctrl+H, mod+Ctrl+J, mod+Ctrl+K, mod+Ctrl+L, mod+left drag |
+| left drag on a resize zone (edges and corners) | Resize from that edge or corner; tiled: moves the split (as mod+right drag) | mod+Ctrl+Shift+H, mod+Ctrl+Shift+J, mod+Ctrl+Shift+K, mod+Ctrl+Shift+L, mod+right drag |
+| any press on the bar or border | Focus and raise the window (never delivered to it) | mod+H, mod+J, mod+K, mod+L, mod+Tab |

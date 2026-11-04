@@ -365,9 +365,30 @@ local test page (no network). Rules: CLAUDE.md, "Clipboard and drag and drop (M1
 - [ ] **Escape.** Start a drag, press Escape: the drag ends, nothing is dropped, Escape does not reach the app.
 - [ ] **A focus keybind.** Start a drag, press Alt+H (or Alt+Tab): the drag ends and focus moves.
 - [ ] **Drop on nothing.** Drop on an empty part of the output (with floating windows) or on a window that does not take the data: nothing happens, both apps keep working.
-- [ ] **Edge.** Drag to the very edge of the output over a window and drop: it goes to that window.
+- [ ] **Edge.** Drag to the very edge of the output over a window and drop: the last pixel is the window's 1 px border (M11b), so the drop is cancelled; one pixel in, it goes to that window.
 - [ ] **Popups.** Drag over an open menu of another app: the menu gets the drag (only if it accepts drops; otherwise the drop is cancelled).
 - [ ] **Alt+drag is separate.** Alt+drag still moves windows and shows the snap preview as before; a drag and drop cannot start during it, and Alt+drag does nothing during a drag and drop.
 - [ ] **An app closes mid-drag.** Start a drag from foot to Firefox, close the source (from another terminal: `kill <pid of that foot>`) or the target: the drag ends, the pointer works again at once.
 
 Notes:
+
+## 16. Decorations (M11b)
+
+Setup as above (debug build, mod = Alt, nested), with foot (it negotiates
+decorations) and an app that draws its own title bar and does not negotiate (for
+example pavucontrol with `XDG_CONFIG_HOME` set to a fresh temporary directory; no
+screenshots of it). Rules: CLAUDE.md, "Decorations (M11b, owner)".
+
+- [ ] **Tiled.** Two foot windows side by side: each has a 1 px border (blue on the focused one, grey on the other) and no bar.
+- [ ] **Floating.** Alt+F on one: a 32 px dark bar appears with close (x) and maximize (square) on the left; the window keeps its outer size.
+- [ ] **Focus without colour.** Click the other window: the first one's border turns grey and its glyphs dim; both change together.
+- [ ] **Hover.** Over close: a red square appears behind the x; over maximize: a grey square behind the square; leaving removes them.
+- [ ] **Close.** Press close, move off it and release: nothing. Click it: the window closes (as Alt+Q).
+- [ ] **Maximize.** Click maximize: the window fills the output with its bar; the glyph becomes two squares. Click again: back to where it was. From a half (Alt+Left), maximize then restore returns to the rectangle before the snap.
+- [ ] **Bar drag.** Drag the bar: the window moves; to the left edge it shows the preview and snaps on release, as Alt+drag does. A tiny move of the pointer while pressing does not jump the window.
+- [ ] **Resize zones.** Near each edge and corner (7 px from an edge, 16 px squares at corners) the cursor shows the matching resize arrow; dragging resizes from there and stops at the window's min and max size. Next to the close button the button wins.
+- [ ] **Tiled zones.** On the shared edge of two tiles the cursor shows a resize arrow and dragging moves the split; on the output's edges there is none.
+- [ ] **Nothing reaches the app.** Clicks and scrolling on the bar, border and zones do nothing inside foot (no selection starts, no scroll).
+- [ ] **Fullscreen.** A fullscreen window (foot: F11 if bound, or a video player) has no bar and no border.
+- [ ] **An app that draws its own title bar.** It keeps it; sash-wm adds only the 1 px border, no bar.
+- [ ] **Menus over the bar.** A menu or tooltip that opens over a window's bar is on top and takes the pointer there.

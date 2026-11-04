@@ -39,6 +39,10 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
     zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
 };
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::{self, ZxdgToplevelDecorationV1},
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{Anchor, ConstraintAdjustment, Gravity, XdgPositioner},
@@ -74,6 +78,9 @@ pub struct Events {
     subcompositor: Option<WlSubcompositor>,
     dmabuf: Option<ZwpLinuxDmabufV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
+    decoration_manager: Option<ZxdgDecorationManagerV1>,
+    /// Per xdg_toplevel_decoration: the modes its configure events gave, in order.
+    pub decoration_modes: HashMap<ObjectId, Vec<zxdg_toplevel_decoration_v1::Mode>>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     pub configure_serial: Option<u32>,
@@ -205,6 +212,38 @@ impl TestClient {
                 .blocking_dispatch(&mut self.events)
                 .unwrap_or_else(|err| panic!("waiting for {what}: {err}"));
         }
+    }
+
+    /// Negotiates xdg-decoration for a window (before or after its initial commit),
+    /// asking for `mode` if given.
+    pub fn decorate(
+        &mut self,
+        window: &TestWindow,
+        mode: Option<zxdg_toplevel_decoration_v1::Mode>,
+    ) -> ZxdgToplevelDecorationV1 {
+        let qh = self.qh();
+        let decoration = self
+            .events
+            .decoration_manager
+            .as_ref()
+            .expect("zxdg_decoration_manager_v1")
+            .get_toplevel_decoration(&window.toplevel, &qh, ());
+        if let Some(mode) = mode {
+            decoration.set_mode(mode);
+        }
+        decoration
+    }
+
+    /// The modes the compositor's decoration configures gave for `decoration`.
+    pub fn decoration_modes(
+        &self,
+        decoration: &ZxdgToplevelDecorationV1,
+    ) -> Vec<zxdg_toplevel_decoration_v1::Mode> {
+        self.events
+            .decoration_modes
+            .get(&decoration.id())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Creates a toplevel and sends the initial commit (no buffer).
@@ -674,6 +713,9 @@ impl Dispatch<WlRegistry, ()> for Events {
                 events.dmabuf = Some(registry.bind(name, version.min(5), qh, ()))
             }
             "xdg_wm_base" => events.wm_base = Some(registry.bind(name, version.min(3), qh, ())),
+            "zxdg_decoration_manager_v1" => {
+                events.decoration_manager = Some(registry.bind(name, 1, qh, ()))
+            }
             "wl_seat" => {
                 events.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ()));
             }
@@ -932,6 +974,29 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Events {
 
 delegate_noop!(Events: ignore ZwpLinuxDmabufV1);
 delegate_noop!(Events: WpCursorShapeManagerV1);
+delegate_noop!(Events: ZxdgDecorationManagerV1);
+
+impl Dispatch<ZxdgToplevelDecorationV1, ()> for Events {
+    fn event(
+        events: &mut Self,
+        decoration: &ZxdgToplevelDecorationV1,
+        event: zxdg_toplevel_decoration_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zxdg_toplevel_decoration_v1::Event::Configure {
+            mode: WEnum::Value(mode),
+        } = event
+        {
+            events
+                .decoration_modes
+                .entry(decoration.id())
+                .or_default()
+                .push(mode);
+        }
+    }
+}
 delegate_noop!(Events: WpCursorShapeDeviceV1);
 delegate_noop!(Events: XdgPositioner);
 delegate_noop!(Events: WlSubcompositor);

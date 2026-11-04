@@ -279,6 +279,8 @@ where
     }
     let mut preview_drawn = false;
     let visible_windows = state.visible_windows();
+    let drawn: Vec<_> = visible_windows.iter().map(|v| v.id).collect();
+    state.decorations.retain(&drawn);
     let popup_elements = |renderer: &mut R, visible: &Visible<'_>| {
         let mut out = Vec::new();
         for (popup, origin) in popups_of(visible.window, visible.rect) {
@@ -321,6 +323,15 @@ where
             ),
             None => Vec::new(),
         };
+        // Bar and border above the client's surfaces (a client's shadow stays below).
+        elements.extend(crate::decorations::decoration_elements(
+            state,
+            renderer,
+            visible.id,
+            visible.outer,
+            visible.decoration,
+            scale,
+        ));
         match visible.layer {
             Layer::Tiled => {
                 let r = visible.rect;

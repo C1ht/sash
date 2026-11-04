@@ -12,6 +12,7 @@ use super::{
     harness::{
         Harness,
         keys::{ALT, CTRL, F, H, J, K, L, SHIFT},
+        tile,
     },
 };
 use crate::{
@@ -66,9 +67,9 @@ fn keyboard_resize_moves_the_split_on_the_right_or_bottom_edge() {
             resize_key(h, J);
             resize_key(h, K);
         });
-        assert_eq!(size(&mut c1, &w1), Some((440, 600)));
-        assert_eq!(size(&mut c2, &w2), Some((360, 340)));
-        assert_eq!(size(&mut c3, &w3), Some((360, 260)));
+        assert_eq!(size(&mut c1, &w1), tile(440, 600));
+        assert_eq!(size(&mut c2, &w2), tile(360, 340));
+        assert_eq!(size(&mut c3, &w3), tile(360, 260));
         for client in [&c1, &c2, &c3] {
             for key in [H, J, K, L] {
                 assert!(
@@ -124,8 +125,8 @@ fn scripted_mouse_resize_moves_splits_through_the_synthetic_input() {
             assert_eq!(h.rect_of(2), Some(Rect::new(400, 0, 400, 350)));
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
         });
-        assert_eq!(size(&mut c2, &w2), Some((400, 350)));
-        assert_eq!(size(&mut c3, &w3), Some((400, 250)));
+        assert_eq!(size(&mut c2, &w2), tile(400, 350));
+        assert_eq!(size(&mut c3, &w3), tile(400, 250));
         // Left cell of window 3: its left edge is the vertical split.
         script(
             &input,
@@ -143,8 +144,8 @@ fn scripted_mouse_resize_moves_splits_through_the_synthetic_input() {
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 280, 600)));
             assert_eq!(h.rect_of(3), Some(Rect::new(280, 350, 520, 250)));
         });
-        assert_eq!(size(&mut c1, &w1), Some((280, 600)));
-        assert_eq!(size(&mut c3, &w3), Some((520, 250)));
+        assert_eq!(size(&mut c1, &w1), tile(280, 600));
+        assert_eq!(size(&mut c3, &w3), tile(520, 250));
         assert!(
             [&c1, &c2, &c3]
                 .iter()
@@ -175,8 +176,8 @@ fn drag_configures_are_batched_per_frame() {
             }
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 430, 600)));
         });
-        assert_eq!(size(&mut c1, &w1), Some((430, 600)));
-        assert_eq!(size(&mut c2, &w2), Some((370, 600)));
+        assert_eq!(size(&mut c1, &w1), tile(430, 600));
+        assert_eq!(size(&mut c2, &w2), tile(370, 600));
         assert_eq!(
             (c1.events.configures, c2.events.configures),
             (configures.0 + 1, configures.1 + 1),
@@ -212,7 +213,7 @@ fn a_drag_on_an_output_boundary_edge_does_nothing() {
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
             assert_eq!(h.mode_of(1), Some(Mode::Tiled));
         });
-        assert_eq!(size(&mut c1, &w1), Some((400, 600)));
+        assert_eq!(size(&mut c1, &w1), tile(400, 600));
         assert_eq!(c1.events.configures, configures, "no configure");
         assert!(c1.events.buttons_pressed.is_empty());
     });
@@ -238,8 +239,8 @@ fn ratios_survive_toggling_and_output_resizes() {
             h.server.state.set_layout_area((1000, 700).into());
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 650, 700)));
         });
-        assert_eq!(size(&mut c1, &w1), Some((650, 700)));
-        assert_eq!(size(&mut c2, &w2), Some((350, 350)));
+        assert_eq!(size(&mut c1, &w1), tile(650, 700));
+        assert_eq!(size(&mut c2, &w2), tile(350, 350));
     });
 }
 
@@ -277,7 +278,7 @@ fn closing_windows_during_a_resize() {
             h.key(ALT, KeyState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 800, 600)));
         });
-        assert_eq!(size(&mut c1, &w1), Some((800, 600)));
+        assert_eq!(size(&mut c1, &w1), tile(800, 600));
     });
 }
 
@@ -300,18 +301,18 @@ fn resizing_while_the_output_is_hidden_still_sends_configures() {
         // No frame is presented; the fallback timer sends the configures while the
         // button is still held.
         c1.dispatch_until("the configure from the fallback timer", |e| {
-            e.toplevel_size == Some((460, 600))
+            e.toplevel_size == tile(460, 600)
         });
         c2.dispatch_until("the configure from the fallback timer", |e| {
-            e.toplevel_size == Some((340, 600))
+            e.toplevel_size == tile(340, 600)
         });
         server.on_server(|h| {
             assert!(h.pointer_grabbed(), "still dragging");
             h.button(BTN_RIGHT, ButtonState::Released);
             h.key(ALT, KeyState::Released);
         });
-        assert_eq!(size(&mut c1, &w1), Some((460, 600)));
-        assert_eq!(size(&mut c2, &w2), Some((340, 600)));
+        assert_eq!(size(&mut c1, &w1), tile(460, 600));
+        assert_eq!(size(&mut c2, &w2), tile(340, 600));
     });
     assert_eq!(harness.frames, 0);
 }
