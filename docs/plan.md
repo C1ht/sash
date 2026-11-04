@@ -225,6 +225,13 @@ Proposals (no work until approved):
     - Against: every highlighted text becomes readable by the next focused client without any copy action, so text selected only to read it (a password in a terminal, a private message) leaks with one stray middle-click; it doubles the selection state to explain and to protect; it is easy to paste by accident.
     - If built later: the same focus rule as the clipboard (offered only to the keyboard-focused client, no data-control).
 
+- **After M10 (owner):** decisions confirmed (MIME name limits, close/swap/quit cancel a drag, reused sources accepted). New process rule for networked and crash-reporting clients and for clients that show device names (CLAUDE.md, enforced in tools/). Investigate only: the nested window stops drawing once Firefox runs (lost EGL context).
+- **Known limit: the clipboard empties when its source closes.** sash-wm passes the reader's fd to the source client and keeps no copy, so once the copying app closes, there is nothing to paste. Options (none built; owner decides):
+  1. Keep as is. For: sash-wm never sees a payload (the M10 rule holds), no memory or privacy cost, the standard Wayland behaviour. Against: copy, close the app, paste gives nothing (surprises users coming from desktops with a clipboard keeper).
+  2. A small compositor-side keeper for text only: when the source goes away, sash-wm has already read the text types (bounded size) and serves them itself. For: the common case (copy text, close the app) works with nothing to install. Against: breaks the current rule that sash-wm never reads a payload; the compositor holds copied passwords in its memory (they outlive the app, and a debug build's recorder must be proven never to see them); a read can block or be slow (needs a bounded async reader and limits); MIME choice and size limits become policy.
+  3. A separate opt-in clipboard app (a sash-ui client) that copies the selection when its source goes away. For: sash-wm stays payload-free; users who want history opt in; it can show and clear what it keeps (no hidden state). Against: it needs a way to read the selection without keyboard focus, which is exactly the data-control access M10 refused, unless a narrower native Sash protocol grants it to that one first-party app; one more app to build.
+- **M11 Cursor themes and xdg-decoration: investigate and propose first.** Rules: CLAUDE.md ("Cursor themes, xdg-decoration (M11)"). Report: docs/m11-investigation.md. No implementation; then STOP and ask.
+
 Roadmap after M9 (no work now), in order:
 1. **Clipboard and drag-and-drop.** M10 (above).
 2. **xdg-decoration.** Lets clients drop their own title bars in the tiled layout; sash-wm draws none (no borders yet).

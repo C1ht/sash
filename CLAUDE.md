@@ -695,6 +695,38 @@ change this file without the owner's approval.
   bundle file, screenshots and log included.
 - VM scenario: copy and paste between two clients on DRM with
   wl-clipboard installed in the guest by apt (owner, M10).
+- Confirmed by the owner after M10: 256 bytes per MIME name and 4096
+  bytes of names per source; close, swap and quit cancel a drag like the
+  focus keybinds; a reused source is accepted. The used_source change
+  was made together with the code (commit 78558ed), from the by-hand
+  run, not in a rules commit first.
+- Known limit (owner, after M10): the clipboard is empty once its source
+  client closes (sash-wm keeps no copy; it never reads payloads). The
+  options are in docs/plan.md and docs/DEBUG.md; none is built.
+
+## Cursor themes, xdg-decoration (M11): investigate and propose first
+
+- M11 is an investigation: report tables and short notes in
+  docs/m11-investigation.md, a summary in docs/plan.md, then STOP and
+  ask. No implementation. M12 is not started.
+- A. Cursor themes: what Smithay 0.7 and the xcursor crate give; which
+  default theme can ship (licence, size, hi-dpi variants, what Debian 13
+  packages); how cursor-shape names map to theme files; loading cost and
+  caching; the fallback without a theme; scaling at 5120x1440. The theme
+  is fixed: no new setting. XCURSOR_THEME and XCURSOR_SIZE in debug
+  builds only, and only if the owner agrees.
+- B. xdg-decoration: options (always client-side; server-side title
+  bars everywhere; server-side only for floating windows that ask or
+  draw none; a different split for sash-ui apps), with pros, cons and a
+  recommendation, against the UI rules, hit-testing and resize edges,
+  snapping, fullscreen, tiled windows, the 64 px visibility rule, drawing
+  cost, the title bar's content, and the window-menu and maximize
+  requests clients send today.
+- C. How A and B change the M12 layer-shell plan.
+- Also after M10 (investigate only, no fix): the nested window stops
+  drawing once Firefox runs and does not recover; what is lost, how,
+  whether other GL clients trigger it, what the nested and DRM backends
+  do with a lost context, and a proposed recovery rule.
 
 ## Protocol support and known limits
 
@@ -783,6 +815,16 @@ change this file without the owner's approval.
   personal content; never commit it.
 - Do not run anything that needs a password, a login or the owner's
   network accounts.
+- Clients that can reach the network or report crashes (owner, after
+  M10; Firefox especially, any browser): started with
+  MOZ_CRASHREPORTER_DISABLE=1, a throwaway profile, telemetry and
+  updates off, and no network (a proxy to nowhere) unless a test needs
+  it. Clients that can show device names or personal data (pavucontrol,
+  file managers) get no content screenshots at all. Enforced in tools/:
+  tools/measure/common.sh (`start_firefox`; `start_client` refuses
+  browsers and marks no-capture clients, whose presence makes every
+  capture a no-op) and tools/check-clients.sh (a static check of
+  tools/).
 - The scratchpad is volatile (it is lost on reboot). Measurement and
   similarity scripts live in tools/, reviewed screenshots in
   docs/screenshots/; nothing in the repo depends on the scratchpad.

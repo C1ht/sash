@@ -131,3 +131,14 @@ before each button, key or window event, the first and every 25th during a drag)
 no typed keys and no device names. Aim for under 200 KB and a test under 10 s. Add a
 README and a test like `the_owners_nvidia_session_replays` in
 `sash-wm/src/tests/replay.rs`.
+
+## Known limit: the clipboard empties when its source closes
+
+Not a recorder matter, but a question that comes up when reading bundles: after the app
+that copied something closes, there is nothing to paste. sash-wm passes the reader's
+pipe to the copying app and keeps no copy (it never reads a payload), so the clipboard
+ends with that app (the recorder logs `selection_cleared` with the reason "source
+gone"). The options and their pros and cons are in docs/plan.md ("Known limit: the
+clipboard empties when its source closes"): keep as is; a compositor-side keeper for
+text only (sash-wm would read payloads, which the current rule forbids); a separate
+opt-in clipboard app. None is built.
