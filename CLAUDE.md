@@ -854,9 +854,45 @@ change this file without the owner's approval.
   its decoration mode and its new size in one configure batch.
 - Debug outline screenshots show the bar band and the border as
   outlines; still no window contents.
+- Output edges (owner, after M11b): windows the layout places on the
+  output boundary (tiles, snapped and maximized windows) have no border
+  and no resize zone on their edges that lie on the boundary; interior
+  edges keep both. The edge pixels belong to the client. A plain
+  floating window keeps all four borders wherever it is (its client
+  size never changes by moving it). The snap triggers (8 px bands,
+  64 px corners) are measured from the true output edge, unchanged; a
+  test proves it.
+- Known UX question (owner, after M11b): maximize, then restore, from a
+  snapped half returns to the pre-snap rectangle, not to the half. Kept
+  for now.
 - sash-ui apps will draw the shared chrome themselves later (option 4);
   until a native Sash protocol tells them apart, every negotiating
   client is server-side.
+
+## Layer-shell, trust, text stack (M12): investigate and propose first
+
+- M12 is an investigation (owner, after M11b): report tables and short
+  notes with sources in docs/m12-investigation.md and a summary in
+  docs/plan.md, then STOP and ask. No code. M13 is not started.
+- A. wlr-layer-shell: what Smithay 0.7 supports and what sash-wm must
+  build (layers, anchors, margins, exclusive zones, keyboard
+  interactivity none/exclusive/on-demand, layer popups, namespaces,
+  output assignment); how the usable area feeds tiling coverage,
+  maximize, snapping, the 64 px rule and the top-edge rule, and how the
+  coverage invariants change; ordering against windows, bars, popups,
+  drag icons and fullscreen; keyboard focus between layer surfaces and
+  windows.
+- B. Trust and privacy: a trust model for layer-shell (layers,
+  exclusive keyboard focus) and later ext-session-lock, screen capture,
+  idle-inhibit, virtual keyboard and input injection; a table with pros,
+  cons and a recommendation. No new setting.
+- C. The shared text stack in sash-ui (font loading, shaping and
+  fallback, glyph atlas, rasterisation, hinting, scaling; bidi and IME
+  as known limits); whether sash-wm can use sash-ui without becoming
+  its own client; crate boundaries, licences, binary size, frame time.
+- D. A milestone plan: layer-shell, the text stack, window titles in
+  bars, then a minimal dock and launcher as the first layer-shell
+  clients; smallest steps and what is deliberately left out.
 
 ## Protocol support and known limits
 
