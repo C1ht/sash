@@ -56,6 +56,7 @@ mod surface;
 mod synthetic;
 #[cfg(test)]
 mod tests;
+mod trust;
 mod windows;
 
 use std::time::{Duration, Instant};

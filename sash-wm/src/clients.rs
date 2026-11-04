@@ -16,7 +16,7 @@ use smithay::{
     wayland::{compositor::CompositorClientState, socket::ListeningSocketSource},
 };
 
-use crate::server::Server;
+use crate::{server::Server, trust::Privileged};
 
 #[derive(Default)]
 pub struct ClientState {
@@ -24,9 +24,25 @@ pub struct ClientState {
     /// The client's xdg_wm_base, for protocol errors Smithay 0.7 cannot send itself
     /// (recorded from its requests, see `shell.rs`).
     xdg_wm_base: Mutex<Option<XdgWmBase>>,
+    /// Set only for a connection sash-wm created for a program it started (trust.rs).
+    pub privileged: Option<Privileged>,
 }
 
 impl ClientState {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the mechanism only; first-party clients come later"
+        )
+    )]
+    pub fn privileged(privileged: Privileged) -> Self {
+        Self {
+            privileged: Some(privileged),
+            ..Self::default()
+        }
+    }
+
     pub fn xdg_wm_base(&self) -> Option<XdgWmBase> {
         self.xdg_wm_base.lock().ok()?.clone()
     }
@@ -47,6 +63,9 @@ impl ClientData for ClientState {
 
     fn disconnected(&self, client: ClientId, reason: DisconnectReason) {
         tracing::debug!(?client, ?reason, "client disconnected");
+        if let Some(privileged) = &self.privileged {
+            privileged.closed();
+        }
     }
 }
 

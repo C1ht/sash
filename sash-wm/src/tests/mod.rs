@@ -19,6 +19,7 @@ mod replay;
 mod snapping;
 mod tiled_resize;
 mod tiling;
+mod trust;
 
 use std::{sync::mpsc, thread};
 

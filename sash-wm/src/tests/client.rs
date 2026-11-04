@@ -30,6 +30,7 @@ use wayland_client::{
         wl_surface::WlSurface,
     },
 };
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_list_v1::ExtForeignToplevelListV1;
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
     wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
@@ -79,6 +80,9 @@ pub struct Events {
     dmabuf: Option<ZwpLinuxDmabufV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
+    registry: Option<WlRegistry>,
+    /// Every global advertised to this client: (name, interface).
+    pub globals: Vec<(u32, String)>,
     /// Per xdg_toplevel_decoration: the modes its configure events gave, in order.
     pub decoration_modes: HashMap<ObjectId, Vec<zxdg_toplevel_decoration_v1::Mode>>,
     keyboard: Option<WlKeyboard>,
@@ -181,14 +185,20 @@ impl TestClient {
     pub fn connect(socket: &Path) -> Self {
         let stream = UnixStream::connect(socket).expect("connect to sash-wm");
         let conn = Connection::from_socket(stream).expect("wayland connection");
+        Self::from_connection(conn)
+    }
+
+    /// A client on an existing connection (a spawned helper's WAYLAND_SOCKET).
+    pub fn from_connection(conn: Connection) -> Self {
         let queue = conn.new_event_queue();
-        conn.display().get_registry(&queue.handle(), ());
+        let registry = conn.display().get_registry(&queue.handle(), ());
         let mut client = Self {
             conn,
             queue,
             events: Events::default(),
             dmabuf_buffers: false,
         };
+        client.events.registry = Some(registry);
         client.roundtrip(); // globals
         client.roundtrip(); // seat capabilities
         client
@@ -212,6 +222,14 @@ impl TestClient {
                 .blocking_dispatch(&mut self.events)
                 .unwrap_or_else(|err| panic!("waiting for {what}: {err}"));
         }
+    }
+
+    /// Binds global `name` as the stand-in privileged interface, whether or not it was
+    /// advertised (a guess); the server's answer shows on the next roundtrip.
+    pub fn bind_guessed_stand_in(&mut self, name: u32) {
+        let qh = self.qh();
+        let registry = self.events.registry.as_ref().expect("registry");
+        let _: ExtForeignToplevelListV1 = registry.bind(name, 1, &qh, ());
     }
 
     /// Negotiates xdg-decoration for a window (before or after its initial commit),
@@ -692,14 +710,19 @@ impl Dispatch<WlRegistry, ()> for Events {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let wl_registry::Event::Global {
-            name,
-            interface,
-            version,
-        } = event
-        else {
-            return;
+        let (name, interface, version) = match event {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } => (name, interface, version),
+            wl_registry::Event::GlobalRemove { name } => {
+                events.globals.retain(|(n, _)| *n != name);
+                return;
+            }
+            _ => return,
         };
+        events.globals.push((name, interface.clone()));
         match interface.as_str() {
             "wl_compositor" => {
                 events.compositor = Some(registry.bind(name, version.min(4), qh, ()))
@@ -975,6 +998,7 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Events {
 delegate_noop!(Events: ignore ZwpLinuxDmabufV1);
 delegate_noop!(Events: WpCursorShapeManagerV1);
 delegate_noop!(Events: ZxdgDecorationManagerV1);
+delegate_noop!(Events: ignore ExtForeignToplevelListV1);
 
 impl Dispatch<ZxdgToplevelDecorationV1, ()> for Events {
     fn event(

@@ -46,6 +46,13 @@ pub struct Protocols {
         reason = "the global lives on the display; this keeps its id"
     )]
     pub xdg_decoration: XdgDecorationState,
+    /// The tests' stand-in privileged global (trust.rs).
+    #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "the global lives on the display; this keeps its id"
+    )]
+    pub stand_in: smithay::reexports::wayland_server::backend::GlobalId,
 }
 
 impl Protocols {
@@ -58,6 +65,8 @@ impl Protocols {
             seat: SeatState::new(),
             cursor_shape: CursorShapeManagerState::new::<Sash>(display),
             xdg_decoration: XdgDecorationState::new::<Sash>(display),
+            #[cfg(test)]
+            stand_in: crate::trust::stand_in::advertise(display),
         }
     }
 }
@@ -87,6 +96,8 @@ pub struct Sash {
     pub overlay: Overlay,
     /// Server-side decorations: the pointer on them and their buffers.
     pub decorations: crate::decorations::Decorations,
+    /// Privileged connections (trust.rs).
+    pub trust: crate::trust::Trust,
     pub keybinds: Keybinds,
 
     /// Process start; the clock for frame callback timestamps and startup time.
@@ -147,6 +158,7 @@ impl Sash {
             fatal: None,
             overlay: Overlay::new(),
             decorations: crate::decorations::Decorations::new(),
+            trust: crate::trust::Trust::new(&loop_handle),
             keybinds: Keybinds::new(modifier, socket_name),
             started,
             loop_signal,

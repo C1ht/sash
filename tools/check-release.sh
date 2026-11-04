@@ -38,6 +38,8 @@ markers=(
     SASH_DEBUG_FAIL_SWAPS
     SASH_DEBUG_CONTEXT_LOST
     SASH_DEBUG_STOP_FLIPS
+    # M13a: the stand-in privileged global exists in test builds only.
+    "privileged stand-in global (tests only)"
 )
 found=0
 for marker in "${markers[@]}"; do
@@ -74,6 +76,22 @@ for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
         exit 1
     fi
 done
+# Control for the stand-in privileged global: it is in the test binary, and in no
+# sash-wm binary (not even a debug one).
+test_bin=$(cargo test --locked -p sash-wm --no-run --message-format=json 2> /dev/null |
+    python3 -I -c 'import sys, json
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("reason") == "compiler-artifact" and m.get("profile", {}).get("test") and m.get("executable"):
+        print(m["executable"])' | head -1)
+if ! grep -aqF -- "privileged stand-in global (tests only)" "$test_bin"; then
+    echo "FAIL: control: the test binary lacks the stand-in marker, the check is stale"
+    exit 1
+fi
+if grep -aqF -- "privileged stand-in global (tests only)" target/debug/sash-wm; then
+    echo "FAIL: the debug sash-wm binary contains the test-only stand-in global"
+    exit 1
+fi
 # Control for the recorder: its markers are in a debug build with the feature.
 cargo build --locked -p sash-wm --features debug-record
 for marker in SASH_DEBUG_RECORD SASH_DEBUG_KEYS "DEBUG RECORDING" "sash_wm::record" "debug bundle"; do
@@ -85,4 +103,4 @@ done
 # Leave the default debug build in target/debug.
 cargo build --locked -p sash-wm
 
-echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection or debug recording code"
+echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection or debug recording code; the test-only privileged stand-in is in tests only"

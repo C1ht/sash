@@ -43,6 +43,8 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
 - windows: map, unmap, configure sent, configure acknowledged, commit (with
   `server_side`: whether the client negotiated decorations; replays of bundles without
   it assume the windows of before M11b, which had none);
+- privileged clients (M13a): `client_spawned` (program file name, pid) and
+  `privileged_closed` (program, pid); no arguments or environment;
 - decorations (M11b): `decoration_mode` (window, what the client asked for; the answer
   is always server_side) and `decoration_button` (window, close or maximize);
 - every layout operation, with the layout before and after;
