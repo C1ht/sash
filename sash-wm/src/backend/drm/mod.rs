@@ -903,7 +903,7 @@ impl Drm {
 
     /// A frame failed: retry later, rebuild the renderer, or give up (recovery.rs).
     fn renderer_failed(&mut self, failure: Failure, state: &mut Sash) {
-        let next = self.recovery.failed(failure);
+        let next = self.recovery.failed(failure, now());
         tracing::warn!(?failure, ?next, "renderer failure");
         record!(
             state,
@@ -921,9 +921,7 @@ impl Drm {
                 }
                 Err(err) => give_up(state, &format!("rebuilding the renderer failed: {err}")),
             },
-            recovery::Next::GiveUp => {
-                give_up(state, "frames still fail after the renderer was rebuilt")
-            }
+            recovery::Next::GiveUp(reason) => give_up(state, reason),
         }
     }
 

@@ -30,6 +30,9 @@ while IFS= read -r hit; do
         tools/check-clients.sh) continue ;;
     esac
     [[ $line =~ start_firefox ]] && continue
+    # The option name --firefox (tools/stage-c.sh) is not a start.
+    stripped=${line//--firefox/}
+    [[ $stripped =~ $browsers ]] || continue
     report "$file: a browser started outside start_firefox: $line"
 done < <(code_lines "$browsers" $(git ls-files 'tools/*.sh' 'tools/*.py'))
 

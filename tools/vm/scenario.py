@@ -609,6 +609,21 @@ try:
           f"watchdog {watchdog}, gave up {gave_up}, unit {active(vm)}, VT 2 {vt_mode(vm)}")
     sh(vm, "systemctl stop sash-session 2>/dev/null; chvt 1; sleep 1")
 
+    # 17e. Cursor theme (M11a): Adwaita from /usr/share/icons (adwaita-icon-theme, apt in
+    # the guest; owner after M11a) loads on DRM, so the themed path is used, not the
+    # built-in arrow.
+    if sh(vm, "test -d /usr/share/icons/Adwaita/cursors && echo yes || true").strip() != "yes":
+        sh(vm, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "
+               "adwaita-icon-theme >/dev/null 2>&1; true", timeout=900)
+    start(vm, windows=1)
+    vm.pointer_abs(W // 2, H // 2, W, H)
+    time.sleep(1)
+    loaded, fallback = count(vm, "cursor theme loaded"), count(vm, "no cursor theme")
+    check("cursor theme: Adwaita loads from /usr/share/icons on DRM (not the fallback)",
+          loaded == 1 and fallback == 0 and active(vm) == "active",
+          f"loaded {loaded}, fallback {fallback}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
     # 17c. Clipboard (M10): copy in one client, paste in another, on the DRM backend.
     # wl-copy and wl-paste (wl-clipboard, apt in the guest; owner, M10) each map a small
     # window to get keyboard focus, since sash-wm offers no data-control protocol.

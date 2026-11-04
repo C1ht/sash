@@ -36,6 +36,9 @@ repository:
 - writes sash-wm's PID to `~/.cache/sash/stage-c/sash-wm.pid` (for the escape steps);
 - with `-- CLIENT ...`, starts that client on sash-wm once it listens, with a throwaway
   `XDG_CONFIG_HOME`;
+- with `--firefox` instead, starts Firefox on about:blank through `start_firefox`
+  (tools/measure/common.sh: a throwaway profile, no network, the crash reporter and
+  telemetry off), stops it by its recorded PID and removes the profile;
 - prints the exit status and the log path when the console is back.
 
 It refuses to run inside Hyprland (WAYLAND_DISPLAY or DISPLAY set) or off a text

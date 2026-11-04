@@ -316,7 +316,7 @@ impl Nested {
 
     /// A frame failed: retry on a timer, rebuild the renderer, or give up.
     fn renderer_failed(&mut self, failure: Failure, state: &mut Sash) {
-        let next = self.recovery.failed(failure);
+        let next = self.recovery.failed(failure, state.started.elapsed());
         tracing::warn!(?failure, ?next, "renderer failure");
         record!(
             state,
@@ -334,9 +334,7 @@ impl Nested {
                 }
                 Err(err) => give_up(state, &format!("rebuilding the renderer failed: {err}")),
             },
-            recovery::Next::GiveUp => {
-                give_up(state, "frames still fail after the renderer was rebuilt")
-            }
+            recovery::Next::GiveUp(reason) => give_up(state, reason),
         }
     }
 

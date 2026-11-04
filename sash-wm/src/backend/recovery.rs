@@ -13,6 +13,9 @@ pub const BACKOFF: [Duration; 3] = [
     Duration::from_secs(1),
     Duration::from_secs(2),
 ];
+/// At most this many renderer rebuilds within REBUILD_WINDOW; one more is a clean exit.
+pub const MAX_REBUILDS: usize = 3;
+pub const REBUILD_WINDOW: Duration = Duration::from_secs(60);
 /// Frames requested but no flip (or presentation) for this long counts as a failure.
 pub const WATCHDOG: Duration = Duration::from_secs(2);
 
@@ -34,8 +37,8 @@ pub enum Next {
     RetryIn(Duration),
     /// Rebuild the renderer, then try again after this long.
     RebuildThenRetryIn(Duration),
-    /// Recovery failed: exit cleanly.
-    GiveUp,
+    /// Recovery failed: exit cleanly, for this reason.
+    GiveUp(&'static str),
 }
 
 /// One failure episode: from the first failure to the next frame that succeeds.
@@ -43,27 +46,43 @@ pub enum Next {
 pub struct Recovery {
     failures: usize,
     rebuilt: bool,
+    /// When the renderer was rebuilt, within the last REBUILD_WINDOW (kept across
+    /// episodes).
+    rebuilds: std::collections::VecDeque<Duration>,
 }
 
 impl Recovery {
-    /// A frame failed. Retries back off (0.5, 1, 2 s); the third failure or a lost
-    /// context rebuilds the renderer once; any failure after the rebuild gives up.
-    pub fn failed(&mut self, why: Failure) -> Next {
+    /// A frame failed at `now`. Retries back off (0.5, 1, 2 s); the third failure or a
+    /// lost context rebuilds the renderer once; any failure after the rebuild gives up,
+    /// and so does a rebuild beyond MAX_REBUILDS within REBUILD_WINDOW.
+    pub fn failed(&mut self, why: Failure, now: Duration) -> Next {
         self.failures += 1;
         if self.rebuilt {
-            return Next::GiveUp;
+            return Next::GiveUp("frames still fail after the renderer was rebuilt");
         }
         let delay = BACKOFF[(self.failures - 1).min(BACKOFF.len() - 1)];
         if why == Failure::ContextLost || self.failures >= BACKOFF.len() {
+            while self
+                .rebuilds
+                .front()
+                .is_some_and(|t| now.saturating_sub(*t) >= REBUILD_WINDOW)
+            {
+                self.rebuilds.pop_front();
+            }
+            if self.rebuilds.len() >= MAX_REBUILDS {
+                return Next::GiveUp("more than 3 renderer rebuilds within 60 s");
+            }
+            self.rebuilds.push_back(now);
             self.rebuilt = true;
             return Next::RebuildThenRetryIn(delay);
         }
         Next::RetryIn(delay)
     }
 
-    /// A frame reached the screen: the episode is over.
+    /// A frame reached the screen: the episode is over (the rebuild count is kept).
     pub fn succeeded(&mut self) {
-        *self = Self::default();
+        self.failures = 0;
+        self.rebuilt = false;
     }
 
     /// Whether an episode is running (a retry is due).
@@ -196,21 +215,62 @@ mod tests {
     use super::*;
 
     const S: fn(f64) -> Duration = Duration::from_secs_f64;
+    const T0: Duration = Duration::ZERO;
+
+    /// Owner's cap: a fourth rebuild within 60 s gives up, even when frames succeeded in
+    /// between (the rolling count is kept across episodes); older rebuilds age out.
+    #[test]
+    fn more_than_three_rebuilds_in_sixty_seconds_give_up() {
+        let mut r = Recovery::default();
+        for t in [0.0, 10.0, 20.0] {
+            assert_eq!(
+                r.failed(Failure::ContextLost, S(t)),
+                Next::RebuildThenRetryIn(S(0.5))
+            );
+            r.succeeded();
+        }
+        assert_eq!(
+            r.failed(Failure::ContextLost, S(59.9)),
+            Next::GiveUp("more than 3 renderer rebuilds within 60 s"),
+            "the fourth"
+        );
+        // At 60 s the first rebuild has aged out: a fourth one is allowed then.
+        let mut r = Recovery::default();
+        for t in [0.0, 10.0, 20.0] {
+            r.failed(Failure::ContextLost, S(t));
+            r.succeeded();
+        }
+        assert_eq!(
+            r.failed(Failure::ContextLost, S(60.0)),
+            Next::RebuildThenRetryIn(S(0.5))
+        );
+        r.succeeded();
+        assert!(matches!(
+            r.failed(Failure::ContextLost, S(65.0)),
+            Next::GiveUp(_)
+        ));
+        // Retries alone (no rebuild) never count.
+        let mut r = Recovery::default();
+        for t in 0..50 {
+            assert_eq!(r.failed(Failure::Frame, S(t as f64)), Next::RetryIn(S(0.5)));
+            r.succeeded();
+        }
+    }
 
     #[test]
     fn retries_back_off_then_one_rebuild_then_give_up() {
         let mut r = Recovery::default();
         assert!(!r.active());
-        assert_eq!(r.failed(Failure::Frame), Next::RetryIn(S(0.5)));
+        assert_eq!(r.failed(Failure::Frame, T0), Next::RetryIn(S(0.5)));
         assert!(r.active());
-        assert_eq!(r.failed(Failure::Frame), Next::RetryIn(S(1.0)));
+        assert_eq!(r.failed(Failure::Frame, T0), Next::RetryIn(S(1.0)));
         assert_eq!(
-            r.failed(Failure::Watchdog),
+            r.failed(Failure::Watchdog, T0),
             Next::RebuildThenRetryIn(S(2.0))
         );
         assert_eq!(
-            r.failed(Failure::Frame),
-            Next::GiveUp,
+            r.failed(Failure::Frame, T0),
+            Next::GiveUp("frames still fail after the renderer was rebuilt"),
             "failed again after the rebuild"
         );
     }
@@ -219,14 +279,17 @@ mod tests {
     fn a_lost_context_rebuilds_at_once_and_only_once() {
         let mut r = Recovery::default();
         assert_eq!(
-            r.failed(Failure::ContextLost),
+            r.failed(Failure::ContextLost, T0),
             Next::RebuildThenRetryIn(S(0.5))
         );
-        assert_eq!(r.failed(Failure::ContextLost), Next::GiveUp);
+        assert!(matches!(
+            r.failed(Failure::ContextLost, T0),
+            Next::GiveUp(_)
+        ));
         let mut r = Recovery::default();
-        assert_eq!(r.failed(Failure::Frame), Next::RetryIn(S(0.5)));
+        assert_eq!(r.failed(Failure::Frame, T0), Next::RetryIn(S(0.5)));
         assert_eq!(
-            r.failed(Failure::ContextLost),
+            r.failed(Failure::ContextLost, T0),
             Next::RebuildThenRetryIn(S(1.0))
         );
     }
@@ -234,24 +297,24 @@ mod tests {
     #[test]
     fn a_frame_that_succeeds_ends_the_episode() {
         let mut r = Recovery::default();
-        r.failed(Failure::Frame);
-        r.failed(Failure::Frame);
+        r.failed(Failure::Frame, T0);
+        r.failed(Failure::Frame, T0);
         r.succeeded();
         assert!(!r.active());
         assert_eq!(
-            r.failed(Failure::Frame),
+            r.failed(Failure::Frame, T0),
             Next::RetryIn(S(0.5)),
             "starts over"
         );
         // After a rebuild that worked, a later episode may rebuild again.
         let mut r = Recovery::default();
         assert_eq!(
-            r.failed(Failure::ContextLost),
+            r.failed(Failure::ContextLost, T0),
             Next::RebuildThenRetryIn(S(0.5))
         );
         r.succeeded();
         assert_eq!(
-            r.failed(Failure::ContextLost),
+            r.failed(Failure::ContextLost, T0),
             Next::RebuildThenRetryIn(S(0.5))
         );
     }

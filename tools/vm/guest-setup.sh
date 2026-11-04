@@ -10,6 +10,6 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     libseat1 libinput10 libgbm1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri \
     libxkbcommon0 foot fonts-dejavu-core kbd procps python3-minimal openssh-server \
-    wl-clipboard
+    wl-clipboard adwaita-icon-theme
 id sash >/dev/null 2>&1 || useradd -m -s /bin/bash sash
 echo "guest ready"

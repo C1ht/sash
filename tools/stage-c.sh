@@ -13,10 +13,14 @@
 # - Optionally passes `--mode WxH@R` on (a fixed mode instead of the selection rule).
 # - Optionally starts one client once sash-wm is listening (everything after `--`), with
 #   a throwaway XDG_CONFIG_HOME; its output goes to the same log.
+# - Or, with --firefox, Firefox on about:blank through start_firefox
+#   (tools/measure/common.sh: a throwaway profile, no network, the crash reporter and
+#   telemetry off); it is stopped by its recorded PID and its profile removed.
 #
-# Usage: tools/stage-c.sh SECONDS NAME [--mode WxH@R] [-- CLIENT ARGS...]
+# Usage: tools/stage-c.sh SECONDS NAME [--mode WxH@R] [--firefox | -- CLIENT ARGS...]
 #   e.g. tools/stage-c.sh 20 run1 --mode 5120x1440@60
 #        tools/stage-c.sh 120 run3 -- kitty --config NONE
+#        tools/stage-c.sh 120 run6 --firefox
 # Needs no sudo.
 set -u
 
@@ -34,8 +38,14 @@ if [ "${1:-}" = "--mode" ]; then
     esac
     shift 2
 fi
+FIREFOX=""
+if [ "${1:-}" = "--firefox" ]; then
+    FIREFOX=yes
+    shift
+fi
 CLIENT=()
 if [ "${1:-}" = "--" ]; then
+    [ -n "$FIREFOX" ] && { echo "stage-c: --firefox or -- CLIENT, not both" >&2; exit 2; }
     shift
     CLIENT=("$@")
 fi
@@ -45,7 +55,7 @@ fail() {
     exit 2
 }
 case "$SECONDS_ARG" in
-    '' | *[!0-9]*) fail "usage: tools/stage-c.sh SECONDS NAME [--mode WxH@R] [-- CLIENT ARGS...]" ;;
+    '' | *[!0-9]*) fail "usage: tools/stage-c.sh SECONDS NAME [--mode WxH@R] [--firefox | -- CLIENT ARGS...]" ;;
 esac
 [ "$SECONDS_ARG" -ge 5 ] && [ "$SECONDS_ARG" -le 600 ] || fail "SECONDS must be 5..600"
 case "$NAME" in
@@ -88,6 +98,10 @@ EOF
 if [ ${#CLIENT[@]} -gt 0 ]; then
     echo "Client once sash-wm listens: ${CLIENT[*]}"
 fi
+if [ -n "$FIREFOX" ]; then
+    echo "Firefox once sash-wm listens: about:blank, throwaway profile, no network,"
+    echo "crash reporter and telemetry off (start_firefox)"
+fi
 echo
 read -r -p "Press Enter to start (Ctrl+C cancels) " _
 
@@ -108,7 +122,9 @@ rm -f "$FIFO"
 {
     echo "== stage C $NAME: $(date -Is), $SECONDS_ARG s, $TTY"
     echo "== $(uname -r); sash $(git -C "$ROOT" describe --always --dirty 2> /dev/null)"
-    echo "== client: ${CLIENT[*]:-none}; mode: ${MODE[1]:-the selection rule}"
+    CLIENT_NAME=${CLIENT[*]:-none}
+    [ -n "$FIREFOX" ] && CLIENT_NAME="firefox (start_firefox, about:blank)"
+    echo "== client: $CLIENT_NAME; mode: ${MODE[1]:-the selection rule}"
 } >&3
 
 RUST_LOG=${RUST_LOG:-sash_wm=debug} timeout -k 5 -s TERM $((SECONDS_ARG + 5)) \
@@ -125,7 +141,7 @@ echo "${SASH_PID:-$TIMEOUT_PID}" > "$PIDFILE"
 echo "== sash-wm pid ${SASH_PID:-unknown}, timeout pid $TIMEOUT_PID" >&3
 
 CLIENT_PID=""
-if [ ${#CLIENT[@]} -gt 0 ]; then
+if [ ${#CLIENT[@]} -gt 0 ] || [ -n "$FIREFOX" ]; then
     SOCKET=""
     for _ in $(seq 100); do
         SOCKET=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -o 'socket="[^"]*"' | head -1 |
@@ -134,7 +150,14 @@ if [ ${#CLIENT[@]} -gt 0 ]; then
         kill -0 "$TIMEOUT_PID" 2> /dev/null || break
         sleep 0.1
     done
-    if [ -n "$SOCKET" ]; then
+    if [ -n "$SOCKET" ] && [ -n "$FIREFOX" ]; then
+        # The protections live in one place: start_firefox (tools/measure/common.sh).
+        source "$ROOT/tools/measure/common.sh"
+        SASH_SOCKET=$SOCKET
+        echo "== starting Firefox on $SOCKET through start_firefox" >&3
+        FFLOG=/dev/fd/3 start_firefox about:blank
+        CLIENT_PID=${PIDS[-1]}
+    elif [ -n "$SOCKET" ]; then
         CONFIG=$(mktemp -d)
         echo "== starting the client on $SOCKET (XDG_CONFIG_HOME=$CONFIG)" >&3
         WAYLAND_DISPLAY="$SOCKET" XDG_CONFIG_HOME="$CONFIG" "${CLIENT[@]}" >&3 2>&3 &
@@ -146,7 +169,12 @@ fi
 
 wait "$TIMEOUT_PID"
 STATUS=$?
-if [ -n "$CLIENT_PID" ]; then
+if [ -n "$CLIENT_PID" ] && [ -n "$FIREFOX" ]; then
+    # Firefox lost its compositor; give it a moment, then stop_all ends it by its
+    # recorded PID and removes the throwaway profile.
+    sleep 1
+    stop_all
+elif [ -n "$CLIENT_PID" ]; then
     # The client lost its compositor; give it a moment, then end it (our own PID).
     sleep 1
     kill "$CLIENT_PID" 2> /dev/null
