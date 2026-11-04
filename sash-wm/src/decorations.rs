@@ -26,7 +26,6 @@ use smithay::{
         },
         wayland_server::{
             Client, DataInit, Dispatch, DisplayHandle, backend::ClientId, delegate_dispatch,
-            delegate_global_dispatch,
         },
     },
     utils::{Logical, Point, Scale, Serial, Transform},
@@ -486,7 +485,7 @@ impl XdgDecorationHandler for Sash {
     }
 }
 
-delegate_global_dispatch!(Sash: [ZxdgDecorationManagerV1: XdgDecorationManagerGlobalData] => XdgDecorationState);
+crate::limits::counted_global!(ZxdgDecorationManagerV1: XdgDecorationManagerGlobalData => XdgDecorationState);
 delegate_dispatch!(Sash: [ZxdgDecorationManagerV1: ()] => XdgDecorationState);
 
 /// Smithay tells the compositor nothing when a client destroys its decoration object;

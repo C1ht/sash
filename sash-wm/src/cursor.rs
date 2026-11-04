@@ -9,7 +9,6 @@
 //! back to the default arrow until that client sets its own.
 
 use smithay::{
-    delegate_cursor_shape,
     input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{IsAlive, Logical, Point},
@@ -177,7 +176,10 @@ impl Sash {
 
 impl TabletSeatHandler for Sash {}
 
-delegate_cursor_shape!(Sash);
+// What `delegate_cursor_shape!` does, with binds counted (limits.rs).
+crate::limits::counted_global!(smithay::reexports::wayland_protocols::wp::cursor_shape::v1::server::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1: () => smithay::wayland::cursor_shape::CursorShapeManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_protocols::wp::cursor_shape::v1::server::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1: ()] => smithay::wayland::cursor_shape::CursorShapeManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_protocols::wp::cursor_shape::v1::server::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1: smithay::wayland::cursor_shape::CursorShapeDeviceUserData<Sash>] => smithay::wayland::cursor_shape::CursorShapeManagerState);
 
 #[cfg(test)]
 mod tests {

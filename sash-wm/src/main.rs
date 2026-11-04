@@ -42,6 +42,7 @@ mod dmabuf;
 mod grab;
 mod keybinds;
 mod layout;
+mod limits;
 mod output;
 mod popups;
 #[cfg(feature = "debug-record")]

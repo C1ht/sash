@@ -359,13 +359,14 @@ impl Sash {
 impl GlobalDispatch<WlDataDeviceManager, ()> for Sash {
     fn bind(
         _state: &mut Self,
-        _dh: &DisplayHandle,
-        _client: &Client,
+        dh: &DisplayHandle,
+        client: &Client,
         resource: New<WlDataDeviceManager>,
         _global_data: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());
+        crate::limits::count_bind(dh, client);
     }
 }
 

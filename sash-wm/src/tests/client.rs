@@ -19,6 +19,7 @@ use wayland_client::{
         wl_buffer::WlBuffer,
         wl_callback::{self, WlCallback},
         wl_compositor::WlCompositor,
+        wl_data_offer::WlDataOffer,
         wl_keyboard::{self, WlKeyboard},
         wl_pointer::{self, WlPointer},
         wl_registry::{self, WlRegistry},
@@ -230,6 +231,22 @@ impl TestClient {
         let qh = self.qh();
         let registry = self.events.registry.as_ref().expect("registry");
         let _: ExtForeignToplevelListV1 = registry.bind(name, 1, &qh, ());
+    }
+
+    /// Passes this client's own connection descriptor as the fd of a
+    /// wl_shm.create_pool request (a socket is no memory to map).
+    pub fn create_pool_from_own_connection(&mut self) {
+        let qh = self.qh();
+        let shm = self.events.shm.clone().expect("wl_shm");
+        let _pool = shm.create_pool(self.conn.backend().poll_fd(), 4096, &qh, ());
+        let _ = self.conn.flush();
+    }
+
+    /// Asks for `mime` of `offer` with this client's own connection descriptor as the
+    /// fd: sash-wm passes it to the selection's source, which writes its payload there.
+    pub fn receive_into_own_connection(&mut self, offer: &WlDataOffer, mime: &str) {
+        offer.receive(mime.to_string(), self.conn.backend().poll_fd());
+        let _ = self.conn.flush();
     }
 
     /// Negotiates xdg-decoration for a window (before or after its initial commit),

@@ -3,7 +3,6 @@
 //! wl_output: the single output sash-wm shows its windows on.
 
 use smithay::{
-    delegate_output,
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     utils::{Physical, Size, Transform},
     wayland::output::OutputHandler,
@@ -17,7 +16,12 @@ const NOMINAL_REFRESH_MHZ: i32 = 60_000;
 
 impl OutputHandler for Sash {}
 
-delegate_output!(Sash);
+// What `delegate_output!` does, with binds counted (limits.rs).
+crate::limits::counted_global!(smithay::reexports::wayland_server::protocol::wl_output::WlOutput: smithay::wayland::output::WlOutputData => smithay::wayland::output::OutputManagerState);
+crate::limits::counted_global!(smithay::reexports::wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1: () => smithay::wayland::output::OutputManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_output::WlOutput: smithay::wayland::output::OutputUserData] => smithay::wayland::output::OutputManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_v1::ZxdgOutputV1: smithay::wayland::output::XdgOutputUserData] => smithay::wayland::output::OutputManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::ZxdgOutputManagerV1: ()] => smithay::wayland::output::OutputManagerState);
 
 /// Creates the output, advertises it to clients and places it at the origin of the space.
 pub fn create(state: &mut Sash, name: &str, size: Size<i32, Physical>) -> Output {

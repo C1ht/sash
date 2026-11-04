@@ -4,7 +4,6 @@
 
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor, delegate_shm,
     reexports::wayland_server::{
         Client,
         protocol::{wl_buffer::WlBuffer, wl_surface::WlSurface},
@@ -68,5 +67,16 @@ impl ShmHandler for Sash {
     }
 }
 
-delegate_compositor!(Sash);
-delegate_shm!(Sash);
+// What `delegate_compositor!` and `delegate_shm!` do, with binds counted (limits.rs).
+crate::limits::counted_global!(smithay::reexports::wayland_server::protocol::wl_compositor::WlCompositor: () => smithay::wayland::compositor::CompositorState);
+crate::limits::counted_global!(smithay::reexports::wayland_server::protocol::wl_subcompositor::WlSubcompositor: () => smithay::wayland::compositor::CompositorState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_compositor::WlCompositor: ()] => smithay::wayland::compositor::CompositorState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_surface::WlSurface: smithay::wayland::compositor::SurfaceUserData] => smithay::wayland::compositor::CompositorState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_region::WlRegion: smithay::wayland::compositor::RegionUserData] => smithay::wayland::compositor::CompositorState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_callback::WlCallback: ()] => smithay::wayland::compositor::CompositorState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_subcompositor::WlSubcompositor: ()] => smithay::wayland::compositor::CompositorState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_subsurface::WlSubsurface: smithay::wayland::compositor::SubsurfaceUserData] => smithay::wayland::compositor::CompositorState);
+crate::limits::counted_global!(smithay::reexports::wayland_server::protocol::wl_shm::WlShm: () => smithay::wayland::shm::ShmState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_shm::WlShm: ()] => smithay::wayland::shm::ShmState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_shm_pool::WlShmPool: smithay::wayland::shm::ShmPoolUserData] => smithay::wayland::shm::ShmState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer: smithay::wayland::shm::ShmBufferUserData] => smithay::wayland::shm::ShmState);

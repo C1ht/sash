@@ -152,6 +152,26 @@ fn helper_process() {
             let _ = stream.write_all(&[0xff; 64]);
             std::fs::write(&out, "end\n").expect("write");
         }
+        // Passes its own connection's descriptor to wl_shm.create_pool.
+        "own-fd-shm" => {
+            let mut client = from_env();
+            client.create_pool_from_own_connection();
+            assert!(client.try_roundtrip().is_err(), "a socket was mapped");
+            std::fs::write(&out, "end\n").expect("write");
+        }
+        // Passes its own connection's descriptor to wl_data_offer.receive, which sends
+        // it on to the selection's source.
+        "own-fd-receive" => {
+            let mut client = from_env();
+            client.data_device();
+            let _window = client.map_window();
+            client.dispatch_until("the selection", |e| e.data.selection_offer().is_some());
+            let offer = client.events.data.selection_offer().expect("offer");
+            client.receive_into_own_connection(&offer, "text/plain");
+            std::fs::write(&out, "end\n").expect("write");
+            // Wait until sash-wm ends the connection.
+            while client.try_roundtrip().is_ok() {}
+        }
         other => panic!("unknown helper mode {other}"),
     }
 }
@@ -294,5 +314,58 @@ fn the_server_survives_every_failure() {
     harness.run_with_remote(move |_server| {
         let mut client = TestClient::connect(&socket);
         let _ = client.map_window();
+    });
+}
+
+/// Privilege belongs to the descriptor, and sash-wm never turns a descriptor it
+/// receives into a connection: a privileged client passing its own connection to
+/// requests that take an fd adds no connection. Through wl_data_offer.receive the
+/// descriptor reaches another client (the selection's source), which can then write
+/// on the privileged connection: here garbage, which ends it (docs/trust.md).
+#[test]
+fn a_privileged_clients_own_descriptor_never_becomes_a_connection() {
+    let dir = Scratch::new();
+    let mut harness = Harness::new();
+    let out = dir.file("shm");
+    let command = helper("own-fd-shm", &out, &harness);
+    harness
+        .server
+        .state
+        .spawn_privileged(command)
+        .expect("spawn");
+    wait_for_list(&mut harness, &out);
+    harness.run_until("the privileged connection closes", |h| {
+        h.server.state.trust.open == 0
+    });
+    assert_eq!(harness.server.connections.open(), 0, "no connection added");
+
+    let out = dir.file("receive");
+    let command = helper("own-fd-receive", &out, &harness);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut source = TestClient::connect(&socket);
+        let _window = source.map_window();
+        let copied = source.copy(&["text/plain"], b"not a wayland message".to_vec());
+        server.on_server(move |h| {
+            h.server.state.spawn_privileged(command).expect("spawn");
+        });
+        source.dispatch_until("the send event", |e| {
+            !e.data.source(&copied).sends.is_empty()
+        });
+        source.join_writers();
+        server.on_server(|h| {
+            h.run_until("the privileged connection ends", |h| {
+                h.server.state.trust.open == 0
+            });
+            assert_eq!(
+                h.server.connections.open(),
+                1,
+                "only the source is connected"
+            );
+        });
+    });
+    wait_for_list(&mut harness, &out);
+    harness.run_until("every connection closes", |h| {
+        h.server.connections.open() == 0
     });
 }

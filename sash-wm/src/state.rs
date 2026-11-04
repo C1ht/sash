@@ -216,4 +216,7 @@ impl Sash {
     }
 }
 
-smithay::delegate_presentation!(Sash);
+// What `delegate_presentation!` does, with binds counted (limits.rs).
+crate::limits::counted_global!(smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation::WpPresentation: u32 => smithay::wayland::presentation::PresentationState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation::WpPresentation: u32] => smithay::wayland::presentation::PresentationState);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::WpPresentationFeedback: ()] => smithay::wayland::presentation::PresentationFeedbackState);

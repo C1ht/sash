@@ -8,7 +8,6 @@ use smithay::{
         AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
         KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
-    delegate_seat,
     input::{
         Seat, SeatHandler, SeatState,
         keyboard::{FilterResult, Keycode, Keysym},
@@ -58,7 +57,12 @@ impl SeatHandler for Sash {
     }
 }
 
-delegate_seat!(Sash);
+// What `delegate_seat!` does, with binds counted (limits.rs).
+crate::limits::counted_global!(smithay::reexports::wayland_server::protocol::wl_seat::WlSeat: smithay::wayland::seat::SeatGlobalData<Sash> => smithay::input::SeatState<Sash>);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_seat::WlSeat: smithay::wayland::seat::SeatUserData<Sash>] => smithay::input::SeatState<Sash>);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_pointer::WlPointer: smithay::wayland::seat::PointerUserData<Sash>] => smithay::input::SeatState<Sash>);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_keyboard::WlKeyboard: smithay::wayland::seat::KeyboardUserData<Sash>] => smithay::input::SeatState<Sash>);
+smithay::reexports::wayland_server::delegate_dispatch!(Sash: [smithay::reexports::wayland_server::protocol::wl_touch::WlTouch: smithay::wayland::seat::TouchUserData<Sash>] => smithay::input::SeatState<Sash>);
 
 impl Sash {
     /// Moves the pointer to `location` (global logical coordinates) and updates pointer focus.

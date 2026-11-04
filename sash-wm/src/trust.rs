@@ -17,7 +17,7 @@ use std::{
         unix::net::UnixStream,
     },
     process::Command,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -29,7 +29,11 @@ use smithay::reexports::{
     wayland_server::Client,
 };
 
-use crate::{clients::ClientState, server::Server, state::Sash};
+use crate::{
+    clients::{ClientState, Watch},
+    server::Server,
+    state::Sash,
+};
 
 /// A closed privileged connection: the program's file name and its pid.
 type Closed = (String, u32);
@@ -62,6 +66,8 @@ pub struct Trust {
     closed: Sender<Closed>,
     /// Privileged connections open now.
     pub open: usize,
+    /// Privileged clients cut off for not reading their events (limits.rs).
+    pub cut_off: Arc<AtomicUsize>,
 }
 
 impl Trust {
@@ -76,7 +82,11 @@ impl Trust {
         if let Err(err) = inserted {
             tracing::warn!(%err, "cannot watch privileged connections");
         }
-        Self { closed, open: 0 }
+        Self {
+            closed,
+            open: 0,
+            cut_off: Arc::default(),
+        }
     }
 }
 
@@ -128,7 +138,8 @@ impl Sash {
             pid,
             closed: self.trust.closed.clone(),
         };
-        let data = Arc::new(ClientState::privileged(privileged));
+        let watch = Watch::new(&ours, None, self.trust.cut_off.clone());
+        let data = Arc::new(ClientState::privileged(privileged, watch));
         if let Err(err) = self.display_handle.insert_client(ours, data) {
             tracing::warn!(%err, program, pid, "privileged client not added");
             let _ = child.kill();
@@ -184,13 +195,14 @@ pub mod stand_in {
     impl GlobalDispatch<ExtForeignToplevelListV1, StandIn> for Sash {
         fn bind(
             _: &mut Self,
-            _: &DisplayHandle,
-            _: &Client,
+            dh: &DisplayHandle,
+            client: &Client,
             resource: New<ExtForeignToplevelListV1>,
             _: &StandIn,
             data_init: &mut DataInit<'_, Self>,
         ) {
             data_init.init(resource, ());
+            crate::limits::count_bind(dh, client);
         }
 
         fn can_view(client: Client, _: &StandIn) -> bool {

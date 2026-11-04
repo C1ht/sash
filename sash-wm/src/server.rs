@@ -9,13 +9,15 @@ use smithay::reexports::{
     wayland_server::Display,
 };
 
-use crate::{clients, keybinds::Modifier, state::Sash};
+use crate::{clients, keybinds::Modifier, limits, state::Sash};
 
 pub struct Server {
     pub display: Display<Sash>,
     pub state: Sash,
     /// Name of the Wayland socket clients connect to, e.g. `wayland-2`.
     pub socket_name: OsString,
+    /// Open connections on the public socket (limits.rs).
+    pub connections: limits::Connections,
 }
 
 impl Server {
@@ -55,6 +57,7 @@ impl Server {
             display,
             state,
             socket_name,
+            connections: limits::Connections::default(),
         })
     }
 

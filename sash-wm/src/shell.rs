@@ -20,7 +20,7 @@ use smithay::{
         wayland_server::{
             Client, DataInit, Dispatch, DisplayHandle, Resource,
             backend::ClientId,
-            delegate_dispatch, delegate_global_dispatch,
+            delegate_dispatch,
             protocol::{wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
@@ -129,7 +129,7 @@ impl XdgShellHandler for Sash {
 
 // Everything except xdg_wm_base and xdg_toplevel goes straight to Smithay (what
 // `delegate_xdg_shell!` would do); those two are handled first, see below.
-delegate_global_dispatch!(Sash: [XdgWmBase: ()] => XdgShellState);
+crate::limits::counted_global!(XdgWmBase: () => XdgShellState);
 delegate_dispatch!(Sash: [XdgPositioner: XdgPositionerUserData] => XdgShellState);
 delegate_dispatch!(Sash: [XdgPopup: XdgShellSurfaceUserData] => XdgShellState);
 delegate_dispatch!(Sash: [XdgSurface: XdgSurfaceUserData] => XdgShellState);

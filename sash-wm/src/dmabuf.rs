@@ -33,7 +33,7 @@ use smithay::{
         wayland_server::{
             Client, DataInit, Dispatch, DisplayHandle, Resource,
             backend::{ClientId, ObjectId},
-            delegate_dispatch, delegate_global_dispatch,
+            delegate_dispatch,
             protocol::wl_buffer::WlBuffer,
         },
     },
@@ -192,7 +192,7 @@ impl DmabufHandler for Sash {
 }
 
 // What `delegate_dmabuf!` would do, except for zwp_linux_buffer_params_v1 (below).
-delegate_global_dispatch!(Sash: [ZwpLinuxDmabufV1: DmabufGlobalData] => DmabufState);
+crate::limits::counted_global!(ZwpLinuxDmabufV1: DmabufGlobalData => DmabufState);
 delegate_dispatch!(Sash: [ZwpLinuxDmabufV1: DmabufData] => DmabufState);
 delegate_dispatch!(Sash: [WlBuffer: Dmabuf] => DmabufState);
 delegate_dispatch!(Sash: [ZwpLinuxDmabufFeedbackV1: DmabufFeedbackData] => DmabufState);
