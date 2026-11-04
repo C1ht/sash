@@ -9,6 +9,9 @@ change this file without the owner's approval.
 - Repository: `sash`. Crates:
   - `sash-wm` — the compositor, built on Smithay.
   - `sash-ui` — the first-party UI toolkit (later).
+  - `sash-text` — shaping, glyph cache and CPU rasterisation, no Wayland
+    or UI code; sash-ui depends on it (approved by the owner after M12;
+    created in M14, not before).
 - Do not create any other crate without asking first.
 - Development platform: Arch Linux. Target distro: Debian 13 (trixie).
   Everything must build and run with what trixie ships (see "Target
@@ -893,6 +896,63 @@ change this file without the owner's approval.
 - D. A milestone plan: layer-shell, the text stack, window titles in
   bars, then a minimal dock and launcher as the first layer-shell
   clients; smallest steps and what is deliberately left out.
+
+## Trust and spawning (M13a, owner)
+
+- Privileged protocols: layer-shell, session lock, virtual keyboard,
+  input method, screen capture. They are advertised only to clients
+  sash-wm started itself on a socket it created (passed as
+  WAYLAND_SOCKET). The proof is the socket, never a process id, path,
+  name or namespace. Every other client does not see those globals, and
+  binding one by guessing its name fails (a protocol error for that
+  client only; the server carries on).
+- A started client's children do not inherit privilege: a child that
+  connects through the public socket is a normal client. The privilege
+  ends when the connection closes; a restarted client gets a new
+  privileged socket from sash-wm.
+- Idle-inhibit stays open to every client.
+- Recorded cost: no third-party bars, launchers or wallpaper tools.
+- The spawner lives inside sash-wm. It logs the program, the pid, and
+  when a privileged connection opens and closes; the recorder records the
+  same with no arguments or environment.
+- M13a builds the mechanism only, with a test-only stand-in privileged
+  protocol (compiled only into tests, never into a release build;
+  tools/check-release.sh proves it). No real privileged protocol yet.
+- Open questions (owner, docs/plan.md, no building): how screen sharing
+  (xdg-desktop-portal), input methods (IME) and on-screen keyboards get
+  a privileged path.
+
+## Layer-shell (owner, after M12; built in M13b)
+
+- Usable area: the output minus the exclusive zones. Tiles, snap zones,
+  maximize, the 64 px rule and the top-edge rule use the usable area;
+  fullscreen uses the whole output; the snap triggers stay at the true
+  screen edge.
+- Borders: only true output-boundary edges lose the border; an edge
+  that touches a panel keeps it. A tiled window's edge against a panel
+  has no resize zone; a floating window's has.
+- Keybinds: the global ones (VT switch, quit, the debug hotkey) always
+  work. Window-targeting keybinds (every other action) do nothing while a
+  layer surface with exclusive keyboard interactivity is open.
+- Reserved space: at most half the output per axis, and the usable area
+  never below 640x360; a reservation that would break either is ignored
+  and logged.
+- Rule for later (session lock): while the session is locked, every
+  compositor keybind is disabled except what logind handles (VT switch).
+
+## Text stack (owner, after M12; built in M14)
+
+- cosmic-text and its crates are approved for a measurement only (binary
+  size, frame time, cargo deny with the licence and crate list), done as
+  M14's first step and reported before any use.
+- The crate sash-text holds shaping, the glyph cache and CPU
+  rasterisation, with no Wayland or UI code; sash-ui depends on it.
+- The bundled typeface is Manrope (SIL Open Font License 1.1): the font's
+  copyright notice and the OFL text ship with it, it is listed in NOTICE,
+  and it is not sold on its own; a Reserved Font Name, if declared, is
+  respected. DejaVu and Noto are fallbacks only.
+- Window titles are untrusted input: length and content limits, fuzz
+  tests, never recorded by the debug recorder.
 
 ## Protocol support and known limits
 

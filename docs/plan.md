@@ -249,6 +249,21 @@ Proposals (no work until approved):
   - Trust: privileged globals (layer-shell, session lock, virtual keyboard, input method, capture) only for clients sash-wm spawns with WAYLAND_SOCKET, hidden from all others; idle-inhibit for everyone while visible. No setting.
   - Text: cosmic-text 0.19 (MIT OR Apache-2.0; harfrust, skrifa, fontdb, swash), CPU masks in an atlas, DejaVu from /usr/share/fonts; a `text` feature of sash-ui that sash-wm uses without client code. About 20 crates to approve; size and time to be measured first.
   - Plan: M13a trust and spawning, M13b layer-shell, M14 text stack, M15 window titles, M16 dock and launcher.
+- **M12 accepted by the owner.** Decisions in CLAUDE.md ("Trust and spawning (M13a, owner)", "Layer-shell (owner, after M12; built in M13b)", "Text stack (owner, after M12; built in M14)"). Order: M13a, M13b, M14.
+- **M13a Trust and spawning.** In progress. The mechanism only: a spawner in sash-wm starts a client on a socket pair it created (WAYLAND_SOCKET) and marks that connection privileged; a global filter hides privileged globals from every other client; a test-only stand-in privileged protocol proves it (never in a release build). Tests: normal, spawned, a spawned client's child, a client claiming anything, connection close, restart, failures; property tests unchanged. Not started: M13b.
+
+Open questions (owner, after M12; no building): privileged paths for portals, IME and on-screen keyboards. The trust rule says a privileged connection is one sash-wm created; each option says who gets one.
+- **Screen sharing (xdg-desktop-portal).** Apps ask the portal over D-Bus; a portal backend captures and streams through PipeWire.
+  - A. sash-wm starts a first-party portal backend with a privileged socket; the backend shows a compositor-drawn picker and indicator. For: one trusted capturer, consent on screen. Against: a portal backend and PipeWire integration to build; D-Bus exposure.
+  - B. sash-wm streams to PipeWire itself (no capture protocol at all). For: no Wayland capture protocol exists for anyone. Against: PipeWire inside the compositor (size, crashes take the session down).
+  - C. No screen sharing. For: nothing to attack. Against: video calls cannot share screens.
+- **Input methods (IME, zwp_input_method_v2).** An IME sees every key typed into text fields.
+  - A. sash-wm starts one fixed IME (for example fcitx5 or ibus from a fixed path) with a privileged socket. For: works with existing IMEs. Against: third-party code with every keystroke; the fixed choice is a setting in disguise unless one IME is chosen.
+  - B. A first-party IME in sash-ui later. For: trusted code. Against: a large project per language.
+  - C. None (today). Against: CJK users cannot type.
+- **On-screen keyboard (zwp_virtual_keyboard_v1).**
+  - A. A first-party on-screen keyboard started by sash-wm, privileged. For: small, trusted. Against: to build.
+  - B. sash-wm draws the keyboard itself (no protocol). For: no injection protocol at all. Against: UI code inside the compositor.
 
 Proposals (owner, after M11b; no work until approved):
 - **Hiding windows (minimize) through the dock.** A window can be hidden and brought back from the dock once a dock exists (a layer-shell client). Not a third layout mode: a hidden window keeps its tiled or floating state and its leaf (as a placeholder while hidden). No minimize button in the bar until decided.
