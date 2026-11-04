@@ -833,6 +833,12 @@ change this file without the owner's approval.
 - Constants: bar height 32 px, border 1 px, button hit area 32x32,
   glyph about 12 px, resize zones 6 px wide inside the border and 16x16
   px at the corners, clamped to the output.
+- Where a button's 32x32 area overlaps a resize zone or corner, the
+  button wins (owner, M11b): the zones apply only outside the buttons.
+- A button acts on release, only if the pointer is still over it; any
+  press on the bar focuses and raises its window like a plain click.
+  While a window is maximized its maximize glyph shows "restore" (two
+  overlapping squares).
 - Resize zones show the matching resize cursor (Adwaita names, through
   the cursor machinery) and start the normal resize. On floating windows
   (also snapped and maximized) that is the floating resize; on tiled
