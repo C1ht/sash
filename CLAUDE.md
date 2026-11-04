@@ -727,6 +727,93 @@ change this file without the owner's approval.
   drawing once Firefox runs and does not recover; what is lost, how,
   whether other GL clients trigger it, what the nested and DRM backends
   do with a lost context, and a proposed recovery rule.
+- Investigation accepted by the owner; M11 is split into M11a (cursor
+  themes, renderer recovery: built) and M11b (decorations: rules only
+  until the owner starts it). M12 is not started.
+
+## Cursor themes (M11a, owner)
+
+- The theme is Adwaita, loaded from /usr/share/icons only (no other
+  directory: not ~/.icons, not XCURSOR_PATH), at the constant size 24.
+  No setting. Debian: the trixie package adwaita-icon-theme ships
+  /usr/share/icons/Adwaita/cursors; it goes into the .deb's Depends.
+- xcursor 0.3.11 is a direct dependency (MIT, already in the tree
+  through Smithay), checked by cargo deny.
+- A cursor-shape name is looked up as its CSS name, then its old X11
+  names (cursor-icon's alternatives), then the theme's default shape,
+  then the built-in arrow. No theme found: the built-in arrow for every
+  shape. Inherits are followed within /usr/share/icons only, depth
+  limited, loops refused.
+- Theme files are read with limits (constants): a maximum file size; an
+  image larger than the cursor limit, of zero size or truncated is
+  skipped. A broken file never stops sash-wm: the shape falls back.
+- Loading: the default shape at startup, every other shape on first use,
+  cached for the session per shape and size.
+- Debug builds only: XCURSOR_THEME and XCURSOR_SIZE choose another theme
+  and size (still from /usr/share/icons). Not compiled into release
+  builds; tools/check-release.sh proves it.
+- Animated shapes (wait, progress): frames are requested only while an
+  animated shape is shown, at the theme's frame delays. A static cursor
+  and a still pointer still give 0 frames.
+- On DRM the themed image goes to the hardware cursor plane when it fits
+  the plane (NVIDIA 256x256, the VM 64x64), else it is composited.
+  Nested, named shapes still go to the host's cursor through winit (M8);
+  client cursor surfaces are unchanged.
+
+## Renderer recovery (M11a, owner)
+
+- A frame that fails to render, swap or flip is retried on a timer with
+  backoff: 0.5 s, then 1 s, then 2 s (constants), never by waiting for a
+  frame callback. After 3 consecutive failures, or one "context lost",
+  the renderer is rebuilt once: a new EGL context and renderer on the
+  same display (nested: the same window; DRM: the compositor's buffers
+  are reset), then a full redraw; every window's current buffer (shm and
+  dmabuf) and the cursor are imported again without any help from the
+  clients. If the rebuild fails, or frames fail again after it, sash-wm
+  gives up and exits cleanly with a message (DRM: the console restored,
+  as for every exit). A frame that succeeds ends the episode; the next
+  failure starts the schedule again with one rebuild allowed.
+- Flip watchdog: frames requested but no page flip (DRM) or
+  presentation (nested) for 2 s (constant) counts as one failure. Never
+  while the session is paused or switched away, the output is hidden or
+  not presenting, or the connector is off.
+- Every step (failure, retry, rebuild, give-up, watchdog) is logged and
+  recorded (recorder events, no data).
+- Debug builds only, fault injection (the SASH_DEBUG_ family):
+  SASH_DEBUG_FAIL_SWAPS=N fails the next N swaps;
+  SASH_DEBUG_CONTEXT_LOST=K reports "context lost" at frame K;
+  SASH_DEBUG_STOP_FLIPS=K stops page flips after frame K. Not compiled
+  into release builds; tools/check-release.sh proves it.
+- Item 3, the nested Firefox reproduction (owner, M11a only): a nested
+  sash-wm window on Hyprland is allowed for this one investigation:
+  Firefox only through start_firefox on about:blank (no network, crash
+  reporter off, throwaway profile), at most 6 attempts, timeouts and
+  kills by recorded PIDs only, keys sent only to the nested window, none
+  of the owner's other windows touched, focused, resized or moved,
+  Hyprland debug logging off, no screenshots except outline captures
+  from sash-wm's own offscreen path (looked at before keeping). The
+  owner is told before the runs start. "Nothing on the real display"
+  holds for everything else, the DRM backend included.
+
+## Decorations (M11b, owner; rules only, not built yet)
+
+- Option 4 built as 3b: clients that negotiate xdg-decoration get
+  server-side mode; sash-wm draws a bar on floating windows, including
+  snapped and maximized ones; none on tiled or fullscreen windows. Tiled
+  windows keep client decorations as today. sash-ui apps will draw the
+  shared chrome client-side.
+- The bar is part of the window's outer rectangle: snap zones and every
+  coverage invariant apply to outer rectangles; the client gets the
+  outer rectangle minus the bar.
+- Buttons only: maximize (toggles the top-zone snap) and close. No title
+  text until the shared text stack exists; no minimize, no window menu.
+- A visible 1 px border: #0A84FF focused, #3A3A3C unfocused; bar fill
+  #2C2C2E; unfocused button glyphs are dimmer, so focus is never shown
+  by colour alone.
+- Resize hit zones lie inside the border, clamped to the output, with
+  resize cursors.
+- Bar height and zone widths are constants; the owner fixes their
+  values before they are built.
 
 ## Protocol support and known limits
 

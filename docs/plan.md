@@ -235,6 +235,12 @@ Proposals (no work until approved):
   - Cursor themes: proposal: the system's Adwaita (Debian adwaita-icon-theme 48.1, CC-BY-SA-3.0 or LGPL-3, all 36 shapes, sizes 24 to 96), not bundled, size 24, built-in arrow as fallback, xcursor 0.3.11 as a direct dependency (to approve) or an own parser.
   - xdg-decoration: recommendation (4) built as 3b: server-side mode for every client that supports it, sash-wm draws a bar (maximize, close) only on floating windows; sash-ui apps client-side later.
   - M12 effects: themes before or with M12, usable area and z-order with bars, one text stack.
+- **M11a Cursor themes and renderer recovery.** In progress. Rules: CLAUDE.md ("Cursor themes (M11a, owner)", "Renderer recovery (M11a, owner)").
+  - Cursor themes: Adwaita from /usr/share/icons, size 24, xcursor 0.3.11 direct, debug-only XCURSOR_THEME/XCURSOR_SIZE, fallback to the built-in arrow, animated shapes only while shown. Debian .deb Depends: adwaita-icon-theme (trixie 48.1-1 ships /usr/share/icons/Adwaita/cursors).
+  - Recovery: retry on a timer (0.5, 1, 2 s), rebuild the renderer once after 3 failures or a context loss, then a clean exit; a 2 s flip watchdog; debug-only fault injection (SASH_DEBUG_FAIL_SWAPS, SASH_DEBUG_CONTEXT_LOST, SASH_DEBUG_STOP_FLIPS).
+  - The nested Firefox failure is reproduced once more with the m11a build under the owner's limits (CLAUDE.md).
+  - Proposal only (owner): compare cursor sizes 24 and 32 by eye on the real hardware; cursor size may join the closed settings list later as an accessibility option. Nothing is built for it.
+- **M11b Decorations.** Rules only (CLAUDE.md, "Decorations (M11b, owner; rules only, not built yet)"); bar height and zone widths to be fixed by the owner first. Not started.
 
 Roadmap after M9 (no work now), in order:
 1. **Clipboard and drag-and-drop.** M10 (above).
