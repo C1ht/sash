@@ -1013,6 +1013,55 @@ change this file without the owner's approval.
      border; a tiled window's panel edge has no resize zone; a floating
      window's (also snapped or maximized) has.
   Report with raw test output, then STOP and ask before step 3. No tag.
+- Resize zones against the usable-area boundary (owner, after step 2):
+  a tiled window, also a maximized one, has NO zone on an edge that lies
+  on the usable area's boundary (panel or output): moving that split
+  would change hidden tiles. A floating window that is snapped or
+  maximized keeps its zone there; a resize from it unsnaps the window
+  and keeps its rectangle (it continues from the snapped rectangle).
+- Step 3 (owner, after step 2): zwlr_layer_shell_v1 at version 4 (what
+  Smithay 0.7 offers), a privileged global (visible only to spawned
+  clients), as briefed, plus:
+  - The test client exists only in the test build; tools/check-release.sh
+    proves no layer-shell test client is in any release binary.
+  - Every error case has a test, and only the offending client is
+    disconnected: invalid size, invalid anchor, a buffer committed before
+    the first ack, a request on a destroyed object, a surface that
+    already has a role. Not errors (owner, per the protocol), tested as
+    such: a positive exclusive zone on anchors where it does not apply is
+    treated as zero (the client stays, nothing is reserved); destroying a
+    mapped layer surface or its wl_surface unmaps it, frees its
+    reservation, re-lays out the windows and returns keyboard focus.
+  - Limits (constants): 16 layer surfaces per client, 32 per output,
+    a namespace of at most 128 bytes. Beyond them get_layer_surface is
+    refused: the object is created and sent `closed` at once, the client
+    stays connected, and the refusal is logged (warn).
+  - Frame callbacks follow the existing rule (none while the output is
+    not presenting). shm and dmabuf buffers both work.
+  - Keyboard interactivity: none never takes the keyboard; on_demand
+    takes it on a click into the surface and loses it when a window is
+    clicked or focused; exclusive on the top or overlay layer takes it
+    when mapped. With several exclusive surfaces the top-most layer
+    wins (overlay over top), then the newest within a layer; when it
+    closes, the next one by the same rule gets it back, else the window
+    that had it. Exclusive on bottom or background behaves like on_demand
+    (the protocol allows normal focus there) and blocks no keybind.
+    Window-targeting keybinds do nothing while an exclusive top or
+    overlay surface holds the keyboard; global ones (VT switch, quit,
+    the debug hotkey) work.
+  - Popups of layer surfaces (get_popup) use the M7 popup code with the
+    layer surface as parent, constrained to the output, drawn directly
+    above their layer. Input regions are honoured for pointer
+    hit-testing. Output assignment: a null output or sash-wm's one
+    output; a surface for an output that is gone is sent `closed`.
+  - Debug recorder: layer events (new, map, unmap, closed, refused,
+    focus) with the namespace, layer, anchors, size and zone; never
+    buffer contents.
+  - A test panel with exclusive zone = visible size plus margin proves
+    the first-party panel rule end to end.
+  - Standard checks after step 3 (both profiles, the recording feature,
+    deny, release check, glibc, trixie, VM scenario, fresh clone,
+    similarity); push main, tag m13b, STOP. M14 is not started.
 
 ## Text stack (owner, after M12; built in M14)
 
