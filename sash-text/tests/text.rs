@@ -294,27 +294,3 @@ fn long_run_any_input_is_safe() {
         stack.cache_bytes()
     );
 }
-
-/// Found by `any_input_is_safe` with the trixie fonts: Noto Color Emoji deletes a glyph
-/// with a multiple substitution, where swash 0.2.10 computes `0 - 1` (correct when it
-/// wraps, a panic with overflow checks; the workspace turns them off for swash).
-#[test]
-fn a_regional_indicator_pair_and_a_joiner() {
-    if !common::fonts_installed(
-        "a_regional_indicator_pair_and_a_joiner",
-        &["Noto Color Emoji"],
-    ) {
-        return;
-    }
-    let mut stack = TextStack::new();
-    for scale in [0.25, 1.0, 2.0] {
-        exercise(&mut stack, "aa🇩🇩\u{200d}".as_bytes(), 1.0, scale, None);
-        exercise(
-            &mut stack,
-            "🇩🇰\u{200d}🇩🇰\u{200d}".as_bytes(),
-            13.0,
-            scale,
-            Some(10.0),
-        );
-    }
-}

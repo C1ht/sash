@@ -15,8 +15,8 @@ pub fn render(stack: &mut TextStack, text: &str, style: Style, scale: f32) -> Im
     stack.draw(&line, scale, INK)
 }
 
-/// Whether every named fallback font is installed; prints a visible skip otherwise.
-pub fn fonts_installed(test: &str, names: &[&str]) -> bool {
+/// The named fallback fonts that are not installed, as a skip reason; None if all are.
+pub fn missing_fonts(names: &[&str]) -> Option<String> {
     let missing: Vec<&str> = names
         .iter()
         .copied()
@@ -27,14 +27,7 @@ pub fn fonts_installed(test: &str, names: &[&str]) -> bool {
                 .is_none_or(|(_, path, _)| !std::path::Path::new(path).exists())
         })
         .collect();
-    if missing.is_empty() {
-        return true;
-    }
-    eprintln!(
-        "{test}: skipped: font not installed ({})",
-        missing.join(", ")
-    );
-    false
+    (!missing.is_empty()).then(|| format!("font not installed: {}", missing.join(", ")))
 }
 
 fn golden_path(name: &str) -> PathBuf {

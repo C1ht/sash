@@ -16,6 +16,12 @@ use crate::{
     fonts::{EMOJI, Fonts},
 };
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: panic inside the swash call (to prove the panic is caught).
+    pub(crate) static FORCE_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// A glyph placed on the line, in logical pixels from the line's origin (left edge,
 /// baseline); y grows downwards.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -199,6 +205,10 @@ fn shape_runs(fonts: &mut Fonts, shaper: &mut ShapeContext, text: &str, style: S
         let mut run = builder.build();
         run.add_str(&text[segment.start..segment.end]);
         run.shape_with(|cluster| {
+            #[cfg(test)]
+            if FORCE_PANIC.with(std::cell::Cell::get) {
+                panic!("a panic forced inside swash's shaping callback (test)");
+            }
             if capped || glyphs.len() + cluster.glyphs.len() > MAX_GLYPHS {
                 capped = true;
                 return;

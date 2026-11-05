@@ -571,25 +571,6 @@ fn a_recorded_session_replays_to_the_same_layouts() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Regression: a session recorded on the DRM backend in the test VM (real libinput
-/// events, foot windows, keybinds; see the fixture's README) replays to the same
-/// layouts: rule A placement (the third window opens with the pointer over window 1
-/// while window 2 has focus, so the old rule would differ), a float, a drag, a snap,
-/// a close.
-#[test]
-fn the_drm_session_recorded_in_the_vm_replays() {
-    let bundle =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tests/fixtures/replay/vm-drm-20261102");
-    let report = replay(&bundle).unwrap();
-    assert!(report.mismatches.is_empty(), "{:#?}", report.mismatches);
-    assert_eq!(report.compared, 9, "{report:?}");
-    // Three Super+Return spawns are replayed by their windows; Super+F, Super+Left and
-    // Super+Q as actions.
-    assert_eq!(report.replayed.get("keybind"), Some(&3));
-    assert_eq!(report.skipped.get("keybind"), Some(&3));
-    assert_eq!(report.replayed.get("pointer_button"), Some(&4));
-}
-
 /// The owner's first real-hardware session (NVIDIA, 5120x1440, stage C run 4), cut
 /// before foot's first maximize request and downsampled (tools/replay-fixture.py):
 /// four windows under rule A and nine drags, three of them snapping, replay to the
@@ -692,4 +673,27 @@ fn real_hardware_fixtures_hold_only_replay_data() {
             assert!(FIELDS.contains(&name.as_str()), "field {name} in: {line}");
         }
     }
+}
+
+/// No fixture holds client text (owner, after M14): no app ids or titles in any file of
+/// any replay fixture. (The VM session of 2026-11-02 listed app ids in its state.json,
+/// recorded before they were taken out of bundles; it was removed.)
+#[test]
+fn no_fixture_holds_client_text() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tests/fixtures/replay");
+    let mut checked = 0;
+    for fixture in fs::read_dir(&root).unwrap().flatten() {
+        for file in fs::read_dir(fixture.path()).unwrap().flatten() {
+            let path = file.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            for forbidden in ["app_id", "title"] {
+                assert!(!text.contains(forbidden), "{} contains {forbidden}", path.display());
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no fixture files found");
 }

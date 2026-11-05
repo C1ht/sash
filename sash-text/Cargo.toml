@@ -16,3 +16,9 @@ swash = "=0.2.10"
 [dev-dependencies]
 png = "0.18"
 proptest = "1"
+
+# The golden images have their own runner: it lists skipped cases (fonts not
+# installed) and never counts them as passed.
+[[test]]
+name = "golden"
+harness = false

@@ -46,7 +46,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends bu
 export PATH=/cache/cargo/bin:$PATH
 cd /src
 env ${BLESS:+SASH_TEXT_BLESS=1} ${REPORT:+SASH_TEXT_REPORT=$REPORT} \
-    cargo test --locked -p sash-text -- --nocapture 2>&1 | grep -E "^test |test result|skipped|report |wrote|panicked|FAILED" || true
+    cargo test --locked -p sash-text -- --nocapture 2>&1 | grep -E "^test |test result|^golden|skipped|report |wrote|panicked|FAILED" || true
 if [ -n "$BLESS" ]; then mkdir -p /cache/blessed && cp sash-text/tests/golden/*.png /cache/blessed/; fi
 if [ -n "$LONG" ]; then
     SASH_TEXT_LONG_SECONDS=$LONG cargo test --locked --release -p sash-text --test text \

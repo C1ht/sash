@@ -136,10 +136,13 @@ sash-text picks the font per cluster).
 
 ## Known limits (plainly)
 
-- **Bidi:** titles are one line; with cosmic-text, right-to-left runs would be reordered
-  by unicode-bidi; with swash alone they are shaped in logical order and **not
-  reordered** (Hebrew reads backwards) unless sash-text adds unicode-bidi. Proposal:
-  not reordered in M14, documented; mixed-direction titles are rare in a bar.
+- **Bidi:** titles are one line. (Corrected after M14 step 2, measured: swash's shaper
+  puts each right-to-left run in visual order, so Hebrew and Arabic runs are reordered
+  per run, digits inside a run keep their order, and a Latin title with a Hebrew word
+  reads correctly. What is missing is the full Unicode bidi algorithm: the paragraph
+  direction is always left-to-right and brackets are not mirrored. The Arabic result
+  is unverified by a reader. This step originally said runs were not reordered and
+  Hebrew would read backwards; that was wrong.)
 - **IME:** none. sash-text draws text; it never edits text (no cursor, no preedit).
 - **Vertical text:** not supported.
 - **Hinting on the 5120x1440 panel:** 1190 mm wide, about 109 px per inch. swash hints
@@ -166,7 +169,8 @@ sash-text picks the font per cluster).
 swapped later. Reasons: no unmaintained crate (cargo deny passes), 6 crates instead of
 27, smaller and faster, and sash-text needs only one line with ellipsis, which is
 little code; the cost is swash's shaper instead of HarfBuzz's (fine for Latin, Danish,
-CJK, Hebrew/Arabic joining; weaker for some Indic scripts) and no bidi reordering.
+CJK, Hebrew/Arabic joining; weaker for some Indic scripts) and no full bidi algorithm
+(runs are reordered, paragraphs are not; see above).
 Alternative if HarfBuzz-quality shaping matters more: cosmic-text with a custom
 Fallback, and an ignore for RUSTSEC-2026-0192 in deny.toml (owner decision, like the
 cgmath advisory).

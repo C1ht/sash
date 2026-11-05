@@ -175,3 +175,36 @@ proptest! {
         check_bounds(&text, size, weight, scale);
     }
 }
+
+/// A panic inside the swash call is caught: the line becomes an ellipsis and the next
+/// line shapes normally. Part of the release run (`cargo test --release`): the release
+/// profile's panic strategy is unwind (Cargo's default).
+#[test]
+fn a_panic_inside_swash_becomes_an_ellipsis() {
+    let mut stack = TextStack::new();
+    let text = ClientText::from("Settings");
+    let normal = stack.line(&text, Style::default(), None);
+    crate::shape::FORCE_PANIC.with(|f| f.set(true));
+    let broken = stack.line(&text, Style::default(), None);
+    crate::shape::FORCE_PANIC.with(|f| f.set(false));
+    assert!(broken.truncated(), "marked as cut");
+    let ellipsis = stack.line(&ClientText::from("…"), Style::default(), None);
+    assert_eq!(
+        broken.glyph_count(),
+        ellipsis.glyph_count(),
+        "only the ellipsis"
+    );
+    assert!(broken.width() > 0.0 && (broken.width() - ellipsis.width()).abs() < 0.01);
+    assert_eq!(
+        stack.line(&text, Style::default(), None),
+        normal,
+        "recovered"
+    );
+    assert!(
+        stack
+            .draw(&broken, 1.0, [0, 0, 0, 255])
+            .pixels
+            .iter()
+            .any(|b| *b != 0)
+    );
+}

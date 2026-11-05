@@ -20,7 +20,8 @@
 //!   word, reads correctly; the Unicode bidi algorithm is not applied: the paragraph
 //!   direction is always left-to-right, mirrored characters (brackets) are not
 //!   mirrored, and neutral characters between runs of different directions keep their
-//!   logical order.
+//!   logical order. The Arabic result (letters joined, run in visual order) is
+//!   unverified by a reader of Arabic.
 //! - No IME, no vertical text; grayscale anti-aliasing only; COLRv1 colour glyphs are
 //!   not drawn.
 //!
