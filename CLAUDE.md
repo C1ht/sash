@@ -1150,6 +1150,63 @@ change this file without the owner's approval.
   cache eviction never frees a glyph in use; timing and memory as in
   step 1 on the real crate; a test that nothing from titles reaches the
   recorder, screenshots or logs.
+- After M14 (owner):
+  1. Fonts are read into memory, never memory-mapped; the ~20 MB of
+     Noto Sans CJK is a known cost (docs/plan.md lists when to
+     reconsider).
+  2. The release profile's panic strategy is unwind (Cargo's default; no
+     profile sets it). It is not changed without asking. A release-build
+     test proves a panic inside the swash call is caught and the line
+     becomes an ellipsis.
+  3. The golden test runner prints the skipped goldens with their reason
+     and never counts them as passed.
+  4. Right-to-left: each run is reordered by swash; the full bidi
+     algorithm (paragraph direction, bracket mirroring) is missing; the
+     Arabic result is unverified by a reader.
+  5. Recorder bundles that predate the app-id fix are removed from the
+     test fixtures; the fixture check covers every fixture.
+
+## Window titles (M15, owner)
+
+- sash-wm depends on sash-text only, never on sash-ui.
+- Titles come from xdg_toplevel.set_title and are untrusted: held as
+  sash-text's client text (1024 bytes, 256 glyphs, ellipsis). Never
+  logged or recorded, never in outline screenshots, bundles or replay
+  fixtures; the leak test covers the bars. app_id is never a fallback:
+  a window with no title shows an empty bar.
+- Bars exist only on floating windows (also snapped and maximized,
+  M11b): tiled windows show no title (known limit; the dock and the
+  Activity Manager will show titles).
+- Bar layout: the buttons on the left as built; the title follows them,
+  left-aligned, with 12 px padding, cut with an ellipsis at the right
+  padding. No tooltips, no double-click action.
+- Typeface Manrope at 13 px (a constant). Focused: weight 500, #FFFFFF at
+  92% alpha; unfocused: weight 400, #FFFFFF at 55% alpha. Focus shows by
+  weight and brightness as well as the border, not by colour alone. The
+  contrast of the unfocused title on the bar fill #2C2C2E is reported.
+- Debug builds only: SASH_DEBUG_FONT_PX sets the title size, to compare
+  13, 14 and 15 px by eye on hardware; tools/check-release.sh proves it
+  is absent from release builds. No setting.
+- Scale: the drawing takes the output scale; only 1 is used until
+  fractional scale exists; goldens test 1.5 and 2 through the API.
+- Redraw: a title change redraws only that window's bar, at most once
+  per frame and at most 20 shapings per second per window (the rest
+  coalesced, the last title wins). A client changing its title 10 000
+  times a second must not raise CPU use visibly (tested). Glyphs come
+  from sash-text's cache.
+- Hit-testing: the title area is part of the bar and is the drag
+  handle; nothing else changes.
+- Tests: bars with Latin, Danish, accents, CJK, emoji and an empty
+  title; very long, invalid and zero-width titles; truncation at the
+  button and padding edges at several widths; a title change while
+  dragging, snapped, maximized and fullscreen (no bar); focus changes
+  weight and brightness; goldens at scale 1, 1.5 and 2 (trixie); the
+  leak test over bars; replay fixtures still match; property tests keep
+  every layout invariant; the VM scenario (foot sets a title, the bar
+  shows it, the outline screenshot shows no text).
+- Measure: bar redraw time, the title spam test, binary size added, idle
+  CPU and RAM with 10 windows with bars. Standard checks, similarity
+  (pinned), push main, tag m15, STOP. M16 is not started.
 
 ## Protocol support and known limits
 
