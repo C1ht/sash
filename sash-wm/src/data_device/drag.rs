@@ -180,7 +180,7 @@ impl Sash {
         if self.clipboard.drag.is_none() {
             return;
         }
-        let hit = self.surface_at(location);
+        let hit = self.drop_target_at(location);
         let same = matches!(
             (&self.clipboard.drag.as_ref().and_then(|d| d.target.as_ref()), &hit),
             (Some(t), Some((s, _))) if t.surface == *s && s.alive()

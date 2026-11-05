@@ -696,6 +696,33 @@ impl Sash {
         }
     }
 
+    /// The surface a drag and drop targets at a global position: the surface there,
+    /// or, in a gap, the window the gap belongs to, at the nearest point of its
+    /// surface (owner, after M15b step 1: a drop never lands on nothing because of a
+    /// gap).
+    pub fn drop_target_at(&self, location: Point<f64, Logical>) -> Option<SurfaceHit> {
+        if let Some(hit) = self.surface_at(location) {
+            return Some(hit);
+        }
+        let (x, y) = (location.x.floor() as i32, location.y.floor() as i32);
+        let id = self.windows.layout.gap_owner(x, y)?;
+        let visible = self.visible_windows().into_iter().find(|v| v.id == id)?;
+        let surface = visible.window.toplevel()?.wl_surface().clone();
+        let r = visible.rect;
+        let clamped = Point::<f64, Logical>::from((
+            location
+                .x
+                .clamp(f64::from(r.x), f64::from(r.right() - 1).max(f64::from(r.x))),
+            location.y.clamp(
+                f64::from(r.y),
+                f64::from(r.bottom() - 1).max(f64::from(r.y)),
+            ),
+        ));
+        // The origin is shifted so that `location - origin` is the clamped point.
+        let origin = visible.position.to_f64() + (location - clamped);
+        Some((surface, origin))
+    }
+
     /// The layer surface at a global position, if one is the topmost thing there.
     pub fn layer_at(
         &self,
@@ -949,7 +976,8 @@ impl Sash {
             }
         };
         layout.set_floating_rect(id, rect);
-        let preview = drag.zone.and_then(|z| layout.zone_rect(z));
+        // The rectangle the window will take: the zone inset by the gap.
+        let preview = drag.zone.and_then(|z| layout.zone_visible_rect(z));
         self.overlay.set_preview(preview);
         self.windows.note_input(Instant::now());
         self.schedule_arrange();

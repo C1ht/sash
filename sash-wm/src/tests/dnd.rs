@@ -588,3 +588,48 @@ fn pointer_to_frame_latency_during_a_drag() {
         release(&server);
     });
 }
+
+/// A gap (M15b) counts as part of the tile it belongs to: a drag over the gap enters
+/// that tile's client at the nearest point of its surface, and a drop there lands on
+/// it, never on nothing (owner, after M15b step 1).
+#[test]
+fn a_drop_in_a_gap_lands_on_the_tile_it_belongs_to() {
+    let mut harness = Harness::new();
+    harness
+        .server
+        .state
+        .windows
+        .layout
+        .set_gap(crate::layout::GAP);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut t = two_windows(&socket);
+        let _source = start_drag(&mut t, &server);
+        // x 401: inside tile 2's layout rectangle (400..800), in the gap before its
+        // visible rectangle (404..800, its client from 405 behind the 1 px border).
+        move_to(&server, 401.0, 300.0);
+        t.c2.roundtrip();
+        match t
+            .c2
+            .events
+            .data
+            .drag
+            .iter()
+            .find(|e| matches!(e, DragEvent::Enter { .. }))
+        {
+            Some(DragEvent::Enter { surface, x, y, .. }) => {
+                assert_eq!(surface, &t.w2.surface.id());
+                assert_eq!((*x, *y), (0.0, 300.0), "clamped to the surface's left edge");
+            }
+            other => panic!("no enter on tile 2: {other:?}"),
+        }
+        let _offer = accept(&mut t.c2);
+        release(&server);
+        t.c2.roundtrip();
+        assert_eq!(
+            t.c2.events.data.count(&DragEvent::Drop),
+            1,
+            "dropped on tile 2"
+        );
+    });
+}

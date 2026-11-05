@@ -249,6 +249,29 @@ impl MonitorLayout {
         &self.zones
     }
 
+    /// What a window snapped to `zone` shows: the zone inset by the gap (the top zone
+    /// fills the usable area, so it is exact). The snap preview draws this.
+    pub fn zone_visible_rect(&self, zone: ZoneId) -> Option<Rect> {
+        self.zone_rect(zone).map(|r| self.inset(r))
+    }
+
+    /// The window a gap at (x, y) belongs to, if (x, y) is in a gap: inside the layout
+    /// rectangle of a tile or snapped window but outside its visible rectangle, and no
+    /// window is shown there. Drag-and-drop targets it (owner, after M15b step 1).
+    pub fn gap_owner(&self, x: i32, y: i32) -> Option<WindowId> {
+        if self.window_at(x, y).is_some() {
+            return None;
+        }
+        self.stacking()
+            .into_iter()
+            .rev()
+            .filter(|(w, _, l)| matches!(l, Layer::Tiled | Layer::Floating) && self.gapped(*w))
+            .find(|(w, shown, _)| {
+                !shown.contains(x, y) && self.rect_of(*w).is_some_and(|r| r.contains(x, y))
+            })
+            .map(|(w, _, _)| w)
+    }
+
     /// A zone's rectangle on this monitor.
     pub fn zone_rect(&self, zone: ZoneId) -> Option<Rect> {
         self.zones.get(zone).map(|z| z.rect(self.area))
@@ -962,9 +985,10 @@ impl MonitorLayout {
             Mode::Tiled => {
                 // A remembered zone wins over the last floating rectangle.
                 let zone_rect = state.snap.and_then(|s| self.zone_rect(s.zone));
+                // A tile floats from its visible (inset) rectangle: nothing jumps.
                 let rect = zone_rect
                     .or(state.last_floating)
-                    .or_else(|| self.tree.rect_of(window));
+                    .or_else(|| self.tree.rect_of(window).map(|r| self.inset(r)));
                 self.windows
                     .get_mut(&window)
                     .expect("checked")
@@ -996,7 +1020,8 @@ impl MonitorLayout {
         if self.mode(window) != Some(Mode::Tiled) {
             return false;
         }
-        let Some(rect) = self.tree.rect_of(window) else {
+        // From its visible (inset) rectangle, so the window does not jump (M15b).
+        let Some(rect) = self.tree.rect_of(window).map(|r| self.inset(r)) else {
             return false;
         };
         if let Some(state) = self.windows.get_mut(&window) {
@@ -1019,7 +1044,9 @@ impl MonitorLayout {
                 .expect("every leaf is a window");
             state.maximized_tiled = false;
             let zone = state.snap.map(|s| s.zone);
-            let rect = zone.and_then(|z| self.zone_rect(z)).unwrap_or(tile);
+            let rect = zone
+                .and_then(|z| self.zone_rect(z))
+                .unwrap_or(self.inset(tile));
             self.set_own_mode(window, Mode::Floating);
             self.floating.insert_at(window, rect);
         }
@@ -2650,6 +2677,63 @@ mod tests {
         assert!(
             matches!(hit, Some(super::super::decor::Part::Resize(e)) if e.right),
             "{hit:?}"
+        );
+    }
+
+    /// A tile floats from its visible (inset) rectangle, and tile-all at gap 8 still
+    /// restores the identical tree and layout rectangles.
+    #[test]
+    fn a_tile_floats_from_its_visible_rectangle_and_tile_all_is_lossless() {
+        let mut layout = layout_with(3);
+        layout.set_gap(8);
+        let shown = layout.shown_rect(id(1)).expect("shown");
+        assert!(layout.float_in_place(id(1)));
+        assert_eq!(rect(&layout, 1), shown, "drag: no jump");
+        layout.tile_all();
+        let tree = layout.tree().clone();
+        let tiles = layout.tiled_rects();
+        let visible: Vec<Rect> = (1..=3)
+            .map(|n| layout.shown_rect(id(n)).expect("shown"))
+            .collect();
+        layout.float_all();
+        for n in 1..=3 {
+            assert_eq!(
+                Some(rect(&layout, n)),
+                Some(visible[n as usize - 1]),
+                "float-all: window {n}"
+            );
+        }
+        layout.tile_all();
+        assert_eq!(layout.tree(), &tree, "identical tree");
+        assert_eq!(layout.tiled_rects(), tiles, "identical layout rectangles");
+        // The keybind (toggle) too, the first time a tile floats.
+        let shown = layout.shown_rect(id(2)).expect("shown");
+        assert!(layout.toggle(id(2)));
+        assert_eq!(rect(&layout, 2), shown);
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn the_snap_preview_is_the_visible_rectangle() {
+        let mut layout = layout_with(1);
+        layout.set_gap(8);
+        assert_eq!(
+            layout.zone_visible_rect(ZoneId::LEFT),
+            Some(Rect::new(0, 0, 396, 600))
+        );
+        assert_eq!(
+            layout.zone_visible_rect(ZoneId::TOP_RIGHT),
+            Some(Rect::new(404, 0, 396, 296))
+        );
+        assert_eq!(
+            layout.zone_visible_rect(ZoneId::FULL),
+            Some(AREA),
+            "the top zone is exact"
+        );
+        assert!(layout.snap(id(1), ZoneId::LEFT));
+        assert_eq!(
+            layout.shown_rect(id(1)),
+            layout.zone_visible_rect(ZoneId::LEFT)
         );
     }
 }
