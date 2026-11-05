@@ -7,11 +7,17 @@
 //!   tiled leaves take space.
 //! - `FloatingLayout`: rectangles and stacking order of floating windows.
 //! - `MonitorLayout`: combines the two with per-window mode, focus and history.
+//! - `layers`: layer-shell surfaces: placement, the usable area, stacking.
 
 mod bsp;
 pub mod decor;
 mod floating;
 mod geometry;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the layout from M13b step 2")
+)]
+pub mod layers;
 mod monitor;
 #[cfg(test)]
 mod proptests;

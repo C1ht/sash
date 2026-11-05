@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9e5e1e1b3fe04d81a523b6f845e5097d8a747082f08559a7cede2bfcd95f103f # shrinks to output = Rect { x: 0, y: 0, w: 1, h: 1 }, list = [LayerSurface { id: LayerId(0), level: Background, anchor: Edges { left: true, right: true, top: true, bottom: false }, margin: Margins { top: 0, right: 0, bottom: 0, left: 0 }, size: (0, 0), exclusive: 1, mapped: 0 }]
