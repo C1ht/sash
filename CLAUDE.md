@@ -992,6 +992,27 @@ change this file without the owner's approval.
   the order the surfaces were mapped; one that would break the cap is
   ignored and logged, so a panel already there never moves because a
   new one arrived.
+- Protocol reading (owner, after M13b step 1): "The exclusive zone
+  includes the margin" (wlr-layer-shell-unstable-v1, version 5,
+  set_margin): a surface reserves exactly its exclusive zone. First-party
+  panels set their exclusive zone to their visible size plus their
+  margin (docs/plan.md).
+- Step 2 (owner, after M13b step 1), as briefed, plus:
+  1. A floating window moved to keep its top edge inside a new top
+     panel's usable area is not moved back when the panel goes away
+     (recorded behaviour).
+  2. Snapped and top-zone (maximized) windows are recomputed from the
+     usable area whenever it changes. Fullscreen still uses the whole
+     output: maximize and fullscreen now differ.
+  3. The 64 px rule counts visible pixels inside the usable area.
+  4. A panel change in the same frame as an output resize or mode change
+     gives one coherent result (one layout update, one configure batch).
+     Property tests: random sequences of panels appearing, changing and
+     disappearing, together with every earlier operation.
+  5. Bars and borders sit inside the usable area; a panel edge keeps its
+     border; a tiled window's panel edge has no resize zone; a floating
+     window's (also snapped or maximized) has.
+  Report with raw test output, then STOP and ask before step 3. No tag.
 
 ## Text stack (owner, after M12; built in M14)
 
