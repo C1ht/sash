@@ -304,8 +304,33 @@ Proposals (no work until approved):
     - Known limit: a window whose buffer has a transform (wl_surface.set_buffer_transform) is drawn square.
     - Open visual question for hardware: the corner rule (a corner is square only where both of its edges lie on the usable area's boundary), judged by eye by the owner.
     - The DRM scan-out claims above come from reading the code, not from hardware: whether a fullscreen window is really scanned out directly, and that rounded windows are always composited, are not verified on hardware.
-    - Measurement at three resolutions (owner, after M15b; report, fix nothing): see "Render time at 5120x1440, 3840x1080 and 1920x1080" below.
+    - Render time at three resolutions (owner, after M15b; reported, nothing fixed). `gpu_rounded_cost_by_resolution` (src/tests/gpu.rs, ignored without a GPU): headless EGL on the only GPU (NVIDIA, renderD128), release build, ten overlapping floating windows with bars (each 45% x 43% of the output, cascaded by 1/20 of it), every frame drawn whole (a new damage tracker) and waited for on the GPU, 300 frames per run, square and rounded alternated twice; two separate runs. Budget at 240 Hz: 4.17 ms.
+
+      | Output | Corners | p50 | p95 | p99 |
+      |---|---|---|---|---|
+      | 5120x1440 | square | 786-818 us | 2252-2331 us | 2847-3305 us |
+      | 5120x1440 | rounded | 722-734 us | 2035-2171 us | 2485-2659 us |
+      | 3840x1080 | square | 724-742 us | 2226-2342 us | 2699-3152 us |
+      | 3840x1080 | rounded | 611-622 us | 1955-2024 us | 2398-2666 us |
+      | 1920x1080 | square | 696-714 us | 2213-2270 us | 2453-3163 us |
+      | 1920x1080 | rounded | 535-543 us | 1912-1977 us | 2126-2402 us |
+
+      - Every p99 is inside the budget (the worst, 3305 us, is 79% of it). The largest single frame of each run was its first (the shm uploads: 14.6 and 15.3 ms at 5120x1440, square, the first run); after it the maximum was 3.9 ms.
+      - The time barely grows with the pixel count (3.6 times the pixels of 1920x1080 cost 1.1 to 1.35 times its p50), so a fixed per-frame cost (building the elements, the GPU wait) dominates, not the fill rate; not split further.
+      - Not included: the DRM commit and page flip, client buffer uploads after the first frame (the buffers are static), and real client content.
 - **M16 Shell and sash-ui: investigate and propose** (rules in CLAUDE.md, "Shell and sash-ui (M16, owner)"): no code in the repository; report in docs/m16-investigation.md (A. sash-ui architecture, B. accessibility and input methods, C. launching and the shell's data, D. the dock's right zone, E. a milestone plan), then STOP and ask. M17 is not started.
+  - Investigation done, waiting for the owner (docs/m16-investigation.md). Proposals:
+    - **Drawing:** CPU drawing with tiny-skia into shm through smithay-client-toolkit 0.21.1. Measured: a full 5120x1440 page is 1.4 ms to draw plus 2.0 ms for the RGBA to BGRA swap, so sash-wm should advertise wl_shm ABGR8888. Redraws only on change, with damage; idle 0 frames.
+    - **Toolkit internals:** a hand-written layout; theme tokens; logical state never waits for animation.
+    - **Accessibility:** the semantic tree and focus model built now. The AccessKit adapter (+4.0 MB, 103 crates, measured) is a known limit dated before the v1 gates. The IME is a known limit dated with the IME trust question.
+    - **Keyboard and contrast:** keyboard navigation rules from day one; contrast constraints from the computed ratios.
+    - **Icons:** WhiteSur dropped (GPL-3.0, not in Debian). Instead, a first-party symbolic set, hicolor, then adwaita-icon-theme, and resvg.
+    - **App data:** our own .desktop parser; "Recent" lists launched apps only.
+    - **Launching:** the dock launches apps itself (no shell, setsid, allow-listed environment, descriptors closed, signals reset).
+    - **Running windows:** Smithay's ext-foreign-toplevel-list behind the privileged filter, a small native window protocol (state; activate, close) and xdg-activation.
+    - **Right zone:** the clock first; zbus later for power, network, notifications and the tray.
+    - **Steps:** E1 to E7, from the first layer-surface draw to the launcher.
+    - Eleven questions are listed at the top of the report.
 - **Later (owner, after M14 step 1):** cargo-fuzz for sash-text's public API: a separate fuzz/ directory outside the workspace, nightly only, never part of a normal or release build; done before the v1 gates.
 - **Roadmap (owner, after M14 step 1):** the full bidi algorithm (paragraph direction, bracket mirroring; right-to-left runs are already reordered per run, the Arabic result is unverified by a reader) in sash-text before the first apps that show user content (Text Editor, Files).
 

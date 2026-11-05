@@ -422,6 +422,13 @@ fn gpu_rebuild_restores_windows_and_cursor_without_client_help() {
 /// they negotiated decorations (bar and border), else they have the border only. The
 /// pointer rests on window 10's bar; window 10 has focus.
 fn ten_floating(harness: &mut Harness, server_side: bool) {
+    ten_floating_on(harness, server_side, (800, 600));
+}
+
+/// `ten_floating` on an output of `size`: the same cascade scaled to it (at 800x600,
+/// windows of 360x260 every 40 px right and 30 px down).
+fn ten_floating_on(harness: &mut Harness, server_side: bool, (ow, oh): (i32, i32)) {
+    harness.server.state.set_layout_area((ow, oh).into());
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
         let mut clients = Vec::new();
@@ -437,10 +444,15 @@ fn ten_floating(harness: &mut Harness, server_side: bool) {
             c.ack_and_commit(&w);
             clients.push((c, w));
         }
-        server.on_server(|h| {
+        server.on_server(move |h| {
             h.chord(&[ALT, crate::tests::harness::keys::SHIFT, F]); // float all
             for i in 0..10 {
-                let rect = crate::layout::Rect::new(20 + 40 * i, 20 + 30 * i, 360, 260);
+                let rect = crate::layout::Rect::new(
+                    20 + ow / 20 * i,
+                    20 + oh / 20 * i,
+                    ow * 9 / 20,
+                    oh * 13 / 30,
+                );
                 h.server
                     .state
                     .windows
@@ -449,7 +461,7 @@ fn ten_floating(harness: &mut Harness, server_side: bool) {
             }
             h.server.state.focus_window(crate::layout::WindowId(10));
             h.server.state.arrange();
-            h.pointer_to(560.0, 300.0);
+            h.pointer_to(f64::from(ow) * 0.7, f64::from(oh) * 0.5);
         });
         for (c, w) in &mut clients {
             c.roundtrip();
@@ -908,5 +920,51 @@ fn gpu_rounded_cost() {
             &format!("hover frames, damage tracked, radius {radius}"),
             tracked,
         );
+    }
+}
+
+/// After M15b (owner): full-frame render time with ten windows with bars, square and
+/// rounded, at the owner's 5120x1440, at 3840x1080 and at 1920x1080, against the
+/// 4.17 ms budget of a 240 Hz frame. Every frame is drawn whole (a new damage tracker
+/// each time) and waited for on the GPU.
+/// Run: `cargo test --release -p sash-wm -- --ignored --nocapture gpu_rounded_cost_by_resolution`.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_rounded_cost_by_resolution() {
+    let mut renderer = renderer();
+    for (w, h) in [(5120, 1440), (3840, 1080), (1920, 1080)] {
+        let size: Size<i32, smithay::utils::Physical> = (w, h).into();
+        let mut target: GlesTexture = renderer
+            .create_buffer(Fourcc::Abgr8888, (w, h).into())
+            .expect("offscreen buffer");
+        let mut harness = Harness::new();
+        ten_floating_on(&mut harness, true, (w, h));
+        // Alternating, twice each; the first rounded run also compiles the shaders.
+        let rounded = crate::layout::shape::RADIUS;
+        for radius in [0, rounded, 0, rounded] {
+            harness.server.state.windows.layout.set_radius(radius);
+            let mut times = Vec::new();
+            for _ in 0..300 {
+                let start = Instant::now();
+                let elements = render::output_elements(&harness.server.state, &mut renderer, 1.0);
+                let mut framebuffer = renderer.bind(&mut target).expect("bind");
+                let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+                let result = damage
+                    .render_output(
+                        &mut renderer,
+                        &mut framebuffer,
+                        0,
+                        &elements,
+                        render::CLEAR_COLOR,
+                    )
+                    .expect("render");
+                result.sync.wait().expect("GPU done");
+                times.push(start.elapsed());
+            }
+            percentiles(
+                &format!("{w}x{h}, full frame, 10 windows with bars, radius {radius}"),
+                times,
+            );
+        }
     }
 }
