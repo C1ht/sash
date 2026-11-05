@@ -1134,6 +1134,62 @@ change this file without the owner's approval.
 - tools/check-all.sh, the VM scenario, trixie and the fresh clone; push
   main, tag m15b, STOP. M16 is not started.
 
+## Shell and sash-ui (M16, owner): investigate and propose first
+
+- After M15b (owner): measure render time with 10 windows with bars,
+  rounding on and off, at 5120x1440, 3840x1080 and 1920x1080 (headless
+  GPU, release build), p50/p95/p99 against the 4.17 ms budget at
+  240 Hz; report, fix nothing. Recorded in docs/plan.md: buffer-
+  transformed windows are square (known limit); the corner rule is an
+  open visual question for hardware; the DRM scan-out claims come from
+  the code and are not verified on hardware.
+- M16 is an investigation: tables and short notes with sources in
+  docs/m16-investigation.md and a summary in docs/plan.md, then STOP and
+  ask. No code in the repository; throwaway crates outside it are fine
+  for measurements. M17 is not started.
+- Decisions already made (keep):
+  - The dock is the only persistent chrome (no top bar). It shows three
+    running-states. The tray, clock and workspaces sit in its right zone.
+  - The launcher is an overlay in the style of the Windows 11 start
+    menu: pinned apps and folders, recent, all apps, and a footer with
+    Files, Downloads, Settings and power.
+  - Fixed neutral palette: dark #1C1C1E, #2C2C2E, #3A3A3C; light
+    #F2F2F7, #FFFFFF, #E5E5EA; text at 92/55/35% alpha; borders at 10%
+    alpha. Accent presets (default blue #0A84FF dark, #007AFF light).
+  - Manrope 13 px; weight 500 only for the selected item. Chrome radius
+    proportional to the element's size.
+  - No GTK or Qt in first-party apps; the UX rules under "UI" hold.
+- The report covers:
+  - A. sash-ui architecture: crate layout (sash-ui depends on sash-text;
+    sash-wm never depends on sash-ui; first-party apps are separate
+    binaries); Wayland client plumbing; CPU (tiny-skia into shm) versus
+    GPU drawing at 5120x1440 and 240 Hz; damage tracking, memory per
+    window, redraw only on change (idle is 0 frames); event loop and
+    timers; layout model, theming tokens, animation (the ~180 ms
+    animations never delay logical state); the widgets for the dock,
+    the launcher and a first Settings page; what is not in v1.
+  - B. Accessibility and input methods: AT-SPI through accesskit and
+    text-input-v3 on the client side, with a decision: build the hooks
+    now, or record them as known limits with a date. Keyboard
+    navigation and focus order are a rule from day one; high contrast
+    and large text are design constraints.
+  - C. Launching and the shell's data: .desktop files, icon themes (the
+    licence and Debian packaging of WhiteSur and the alternatives),
+    recent files; how the dock and launcher start apps without passing
+    privilege on and without a shell; environment hygiene; startup
+    notification (xdg-activation); who owns the list of running windows
+    (which foreign-toplevel protocol, what sash-wm builds, titles as
+    untrusted text); how workspaces fit later.
+  - D. The dock's right zone: clock (time zones), tray
+    (StatusNotifierItem over D-Bus), notifications daemon, volume and
+    network: for each the smallest useful version, the privilege it
+    needs and the risks.
+  - E. A milestone plan from "sash-ui draws a rectangle and text in a
+    layer surface" to "a dock with running apps and a working launcher",
+    each step with its tests and exclusions, including the order of the
+    icon theme, .desktop parsing, the foreign-toplevel protocol and a
+    test panel.
+
 ## Text stack (owner, after M12; built in M14)
 
 - cosmic-text and its crates are approved for a measurement only (binary
