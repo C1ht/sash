@@ -193,7 +193,7 @@ impl Titles {
     ) -> Option<Drawn> {
         let mut map = self.map.borrow_mut();
         let title = map.get_mut(&id)?;
-        if width <= 0 || (title.text.is_empty() && title.shaped_text.is_empty()) {
+        if width <= 0 {
             return None;
         }
         let mut stack = self.stack.borrow_mut();
