@@ -1063,6 +1063,32 @@ change this file without the owner's approval.
     deny, release check, glibc, trixie, VM scenario, fresh clone,
     similarity); push main, tag m13b, STOP. M14 is not started.
 
+## Gaps (M15b, owner)
+
+- Inner gaps only, no outer gap: the layout's rectangles stay exact (the
+  coverage and every earlier invariant are unchanged); each window's
+  visible rectangle is inset on every edge that is not on the usable
+  area's boundary (panel or output edge): its left and top interior
+  edges by floor(gap / 2), its right and bottom interior edges by
+  gap - floor(gap / 2), so two neighbours are exactly `gap` apart. A
+  visible rectangle is never less than 1 px wide or high.
+- The gap is a constant, 8 px. Debug builds only: SASH_DEBUG_GAP_PX sets
+  it (tools/check-release.sh proves it absent from release builds). No
+  setting.
+- Tiles and snapped windows follow the rule; a maximized window fills
+  the usable area (no interior edge); plain floating and fullscreen
+  windows are untouched.
+- The visible rectangle is what the window is: its configure size, where
+  it and its decorations are drawn, its border, its resize zones (inside
+  the visible rectangle) and its hit-testing. A gap belongs to nothing:
+  the pointer there is over the background, a click there focuses
+  nothing and reaches no client. Rule A (the tile under the pointer for a
+  new window) and every layout operation still use the exact layout
+  rectangles; replay snapshots record layout rectangles and still match.
+- Step 1 (geometry only): the above, with property tests over every
+  earlier operation, replay fixtures matching, outline screenshots
+  showing the gaps. Report, then STOP before step 2.
+
 ## Text stack (owner, after M12; built in M14)
 
 - cosmic-text and its crates are approved for a measurement only (binary
@@ -1352,10 +1378,15 @@ change this file without the owner's approval.
   libwayland 1.23, xkbcommon 1.7, libinput 1.28. Compatibility is proven by
   building in a `debian:trixie` container with the same pinned toolchain;
   report any library-version problem found there.
-- Release binary glibc floor: currently GLIBC_2.39 (`pidfd_spawnp`,
-  `pidfd_getpid` from Rust std process spawning); trixie ships 2.41. Do
-  not raise it silently: check `objdump -T` on the release binary every
-  milestone and report any change.
+- Release binary glibc floor (owner, after M15): measured on the release
+  binary built in the debian:trixie container (the shipped binary).
+  Hard limit GLIBC_2.41 (what trixie ships); currently GLIBC_2.39
+  (`pidfd_spawnp`, `pidfd_getpid` from Rust std process spawning). Any
+  rise is a reported, visible change, never silent. A release build on
+  the development host is a development artifact: tools/check-release.sh
+  reports its floor (the host's newer glibc can version symbols newer,
+  e.g. acosf at 2.43 on glibc 2.44) but only the trixie value can fail
+  the check.
 - Dependency licenses are checked with `cargo deny check` (`deny.toml`).
   A dependency outside the allowed list is reported to the owner, never
   allowed on my own.
@@ -1375,3 +1406,10 @@ change this file without the owner's approval.
 
 - After each milestone: build/clippy/fmt/test output, trixie container
   build, push `main` to the private remote, then STOP for approval.
+- tools/check-all.sh (owner, after M15): fmt, clippy and tests in all
+  three configurations, cargo deny, the release check, check-clients,
+  similarity with the pinned references, and a summary of passed,
+  skipped and failed per step. It runs before every tag. A git pre-push
+  hook script lives in tools/ (installed by hand, never automatically).
+- A tag is moved only by the owner: if a re-run on the tagged commit
+  differs from the report, the owner is told and the tag stays.
