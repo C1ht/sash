@@ -4,6 +4,9 @@
 # and each distinct sash-wm block of >= MIN_LINES lines with the references it matches.
 # Usage: python -I tools/similarity/summary.py SASH_SRC REF_ROOT NOISE GUARANTEE MIN_LINES
 import sys, pathlib, collections
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import pinned
+header = pinned.setup(sys.argv[2])
 from copydetect import CodeFingerprint, compare_files
 
 sash, ref = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
@@ -14,7 +17,8 @@ refs = sorted((ref / "smallvil/src").rglob("*.rs")) + sorted((ref / "anvil/src")
 fp = {f: CodeFingerprint(str(f), k, win) for f in tests + refs}
 line = lambda code, i: code.count("\n", 0, i) + 1
 
-print(f"tool: copydetect 0.5.0 (winnowing, pygments Rust lexer, identifiers normalized); noise_t={k} guarantee_t={guarantee}")
+print(header)
+print(f"method: winnowing, pygments Rust lexer, identifiers normalized; noise_t={k} guarantee_t={guarantee}")
 print(f"{'sash-wm file':28} {'max vs smallvil':>16} {'max vs anvil':>13}")
 blocks = collections.defaultdict(set)
 for t in tests:

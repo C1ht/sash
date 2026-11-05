@@ -2,7 +2,10 @@
 #
 # Shows the filtered tokens copydetect matched between two files (side by side check).
 # Usage: python -I tools/similarity/pair.py SASH_FILE REF_FILE NOISE GUARANTEE
-import sys
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import pinned
+print(pinned.setup())
 from copydetect import CodeFingerprint, compare_files
 from copydetect.utils import get_copied_slices, find_fingerprint_overlap
 a, b, k, g = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
