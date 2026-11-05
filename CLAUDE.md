@@ -1115,6 +1115,41 @@ change this file without the owner's approval.
     that nothing from titles reaches the recorder, screenshots or logs.
     Standard checks, trixie, fresh clone, similarity (pinned
     references); push main, tag m14 after step 2 only, STOP.
+- Decisions after M14 step 1 (owner):
+  1. Engine: swash alone, behind sash-text's own API. No cosmic-text, no
+     deny.toml exceptions. docs/plan.md records the MSRV and maintenance
+     state of swash and its crates and the exact new crates in Cargo.lock.
+  2. Colour emoji stay in colour. The fallback order is a constant, with
+     Noto Color Emoji before DejaVu Sans; a test proves the two emoji that
+     came out monochrome in the measurement (😀, ❤) come out coloured.
+  3. Manrope is embedded (include_bytes) with OFL.txt beside it in
+     sash-text/fonts/; NOTICE lists it; the .deb (when packaging exists)
+     installs the licence. Weights 400 and 500: confirmed as instances of
+     the variable font (wght axis) or static files, and shown to render.
+  4. Tests: a long-running proptest on stable (duration and case count
+     stated). cargo-fuzz is a later task (docs/plan.md): a separate fuzz/
+     directory outside the workspace, nightly only, never in a normal or
+     release build, done before the v1 gates.
+  5. Constants: glyph cache 4 MiB in total across all scale factors, LRU
+     eviction; client text 1024 bytes and 256 glyphs; at most 8 fallback
+     fonts. Right-to-left text is drawn but not reordered in M14 (known
+     limit); bidi is on the roadmap before the first apps that show user
+     content (Text Editor, Files).
+  6. The font size is a constant, compared by eye on hardware at 13, 14
+     and 15 px at scale 1; no setting.
+  7. Goldens needing the Noto fallback fonts (CJK, emoji, and the Arabic
+     and Devanagari report) run in the debian:trixie container with the
+     trixie font packages (tools/text-goldens.sh); where the fonts are
+     missing those tests say "skipped: font not installed" visibly, never
+     a silent pass. Manrope-only goldens run everywhere.
+  Step 2 also: goldens for Latin, Danish, accents, CJK and emoji fallback,
+  plus a report (not pass or fail) for Arabic and Devanagari; the client
+  text type has no Debug or Display output; truncation at every byte
+  position; zero-width and combining characters; invalid and overlong
+  input never panics; determinism; measurement against drawn bounds;
+  cache eviction never frees a glyph in use; timing and memory as in
+  step 1 on the real crate; a test that nothing from titles reaches the
+  recorder, screenshots or logs.
 
 ## Protocol support and known limits
 
