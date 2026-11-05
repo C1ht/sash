@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Runs sash-text's tests in a debian:trixie container with the trixie fallback fonts
+# Runs sash-text's tests, and sash-wm's window-title tests (with the bar goldens that
+# need the fallback fonts, ignored elsewhere), in a debian:trixie container with the
+# trixie fallback fonts
 # (fonts-dejavu-core, fonts-noto-core, fonts-noto-cjk, fonts-noto-color-emoji; about
 # 81 MB downloaded inside the container), so the fallback goldens (CJK, emoji) run
 # instead of being skipped (owner, after M14 step 1). The container's Rust toolchain and
@@ -40,14 +42,21 @@ set -e
 apt-get update -qq > /dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends build-essential \
     curl ca-certificates fonts-dejavu-core fonts-noto-core fonts-noto-cjk \
-    fonts-noto-color-emoji > /dev/null 2>&1
+    fonts-noto-color-emoji pkg-config libxkbcommon-dev libwayland-client0 libseat-dev \
+    libinput-dev libudev-dev libgbm-dev > /dev/null 2>&1
 [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs |
     sh -s -- -y -q --default-toolchain none --profile minimal --no-modify-path > /dev/null 2>&1
 export PATH=/cache/cargo/bin:$PATH
 cd /src
 env ${BLESS:+SASH_TEXT_BLESS=1} ${REPORT:+SASH_TEXT_REPORT=$REPORT} \
     cargo test --locked -p sash-text -- --nocapture 2>&1 | grep -E "^test |test result|^golden|skipped|report |wrote|panicked|FAILED" || true
-if [ -n "$BLESS" ]; then mkdir -p /cache/blessed && cp sash-text/tests/golden/*.png /cache/blessed/; fi
+env ${BLESS:+SASH_TEXT_BLESS=1} cargo test --locked -p sash-wm titles::bars_ -- --include-ignored 2>&1 |
+    grep -E "^test |test result|wrote|panicked|FAILED" || true
+if [ -n "$BLESS" ]; then
+    mkdir -p /cache/blessed /cache/blessed-titles
+    cp sash-text/tests/golden/*.png /cache/blessed/
+    cp sash-wm/src/tests/fixtures/titles/*.png /cache/blessed-titles/
+fi
 if [ -n "$LONG" ]; then
     SASH_TEXT_LONG_SECONDS=$LONG cargo test --locked --release -p sash-text --test text \
         -- --ignored --nocapture long_run 2>&1 | grep -E "long run|test result|panicked"
@@ -59,5 +68,6 @@ fi
 ' 2>&1 | grep -v '^info:\|^warn:'
 if [ -n "$bless" ]; then
     cp "$CACHE"/blessed/*.png "$ROOT"/sash-text/tests/golden/
+    cp "$CACHE"/blessed-titles/*.png "$ROOT"/sash-wm/src/tests/fixtures/titles/
     echo "blessed goldens copied to sash-text/tests/golden/ (look at each before committing)"
 fi

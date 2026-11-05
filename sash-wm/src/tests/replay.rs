@@ -690,7 +690,11 @@ fn no_fixture_holds_client_text() {
             }
             let text = fs::read_to_string(&path).unwrap();
             for forbidden in ["app_id", "title"] {
-                assert!(!text.contains(forbidden), "{} contains {forbidden}", path.display());
+                assert!(
+                    !text.contains(forbidden),
+                    "{} contains {forbidden}",
+                    path.display()
+                );
             }
             checked += 1;
         }

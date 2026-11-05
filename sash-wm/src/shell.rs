@@ -51,6 +51,11 @@ impl XdgShellHandler for Sash {
         self.add_toplevel(Window::new_wayland_window(surface));
     }
 
+    /// The title is untrusted client text: kept for the bar, never logged (titles.rs).
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        Sash::title_changed(self, &surface);
+    }
+
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         self.forget_toplevel(surface.wl_surface());
     }

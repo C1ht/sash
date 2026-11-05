@@ -163,6 +163,9 @@ fn a_regional_indicator_pair_and_a_joiner() -> Outcome {
     Outcome::Passed
 }
 
+/// A named golden case.
+type Case = (&'static str, fn() -> Outcome);
+
 /// How a case ended (a failure is a panic).
 enum Outcome {
     Passed,
@@ -170,7 +173,7 @@ enum Outcome {
 }
 
 fn main() {
-    let cases: [(&str, fn() -> Outcome); 7] = [
+    let cases: [Case; 7] = [
         (
             "latin_danish_and_accents_at_three_scales",
             latin_danish_and_accents_at_three_scales,

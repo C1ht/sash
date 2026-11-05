@@ -58,6 +58,7 @@ mod surface;
 mod synthetic;
 #[cfg(test)]
 mod tests;
+mod titles;
 mod trust;
 mod windows;
 

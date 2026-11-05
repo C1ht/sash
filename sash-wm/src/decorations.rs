@@ -327,6 +327,20 @@ where
             }
         }
     }
+    // The title, above the bar's fill (titles.rs).
+    if let Some((drawn, location)) = state.bar_title(id, outer, decoration, scale)
+        && let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            location,
+            &drawn.buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        )
+    {
+        out.push(OutputElement::Memory(element));
+    }
     // Front to back: the last piece is on top.
     out.reverse();
     out

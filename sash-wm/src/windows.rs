@@ -436,6 +436,7 @@ impl Sash {
         record!(self, "destroy", "window" => id);
         self.leave_layout(id);
         self.windows.list.retain(|m| m.id != id);
+        self.titles.forget(id);
     }
 
     fn leave_layout(&mut self, id: WindowId) {

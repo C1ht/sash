@@ -32,7 +32,9 @@ pub(crate) struct Placed {
     pub y: f32,
 }
 
-/// A shaped line, ready to draw. Measurements are in logical pixels.
+/// A shaped line, ready to draw. Measurements are in logical pixels. It keeps its
+/// whole shaped text, so [`Line::fit`] can cut it to another width without shaping
+/// again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Line {
     pub(crate) glyphs: Vec<Placed>,
@@ -42,6 +44,21 @@ pub struct Line {
     descent: f32,
     truncated: bool,
     fonts_used: Vec<&'static str>,
+    shaped: Shaped,
+}
+
+/// Everything shaped for a line, before it is cut to a width.
+#[derive(Clone, Debug, PartialEq)]
+struct Shaped {
+    glyphs: Vec<Placed>,
+    clusters: Vec<ClusterStart>,
+    pen: f32,
+    /// The text was cut (bytes or glyphs): the line always ends with an ellipsis.
+    cut: bool,
+    ellipsis: Vec<Placed>,
+    ellipsis_width: f32,
+    /// Font index and name of every font used, Manrope first.
+    fonts: Vec<(usize, &'static str)>,
 }
 
 impl Line {
@@ -73,6 +90,62 @@ impl Line {
     pub fn fonts_used(&self) -> &[&'static str] {
         &self.fonts_used
     }
+
+    /// The same text cut to `max_width` (None: the whole text), with an ellipsis if it
+    /// does not fit, without shaping again: cluster boundaries and the ellipsis were
+    /// kept when the line was shaped.
+    pub fn fit(&self, max_width: Option<f32>) -> Line {
+        let full = &self.shaped;
+        let max_width = max_width.map(|w| if w.is_finite() { w.max(0.0) } else { 0.0 });
+        let mut glyphs = full.glyphs.clone();
+        let mut width = full.pen;
+        let truncated = full.cut || max_width.is_some_and(|m| width > m);
+        if truncated {
+            let limit = max_width.unwrap_or(f32::INFINITY) - full.ellipsis_width;
+            if limit < 0.0 {
+                glyphs.clear();
+                width = 0.0;
+            } else {
+                // Keep whole clusters whose end is within the limit.
+                let end = ClusterStart {
+                    glyph: glyphs.len(),
+                    pen: width,
+                };
+                let keep = full
+                    .clusters
+                    .iter()
+                    .chain(std::iter::once(&end))
+                    .rev()
+                    .find(|c| c.pen <= limit)
+                    .copied()
+                    .unwrap_or(ClusterStart { glyph: 0, pen: 0.0 });
+                glyphs.truncate(keep.glyph);
+                glyphs.extend(full.ellipsis.iter().map(|g| Placed {
+                    x: g.x + keep.pen,
+                    ..*g
+                }));
+                width = keep.pen + full.ellipsis_width;
+            }
+        }
+        let fonts_used = full
+            .fonts
+            .iter()
+            .filter(|(index, _)| {
+                *index == 0 || glyphs.iter().any(|g| usize::from(g.font) == *index)
+            })
+            .map(|(_, name)| *name)
+            .collect();
+        Line {
+            glyphs,
+            style: self.style,
+            width,
+            ascent: self.ascent,
+            descent: self.descent,
+            truncated,
+            fonts_used,
+            shaped: self.shaped.clone(),
+        }
+    }
 }
 
 /// A run of text set in one font and script.
@@ -84,7 +157,7 @@ struct Segment {
 }
 
 /// Where each cluster starts: its first glyph and the pen position.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ClusterStart {
     glyph: usize,
     pen: f32,
@@ -98,21 +171,20 @@ pub(crate) fn line(
     style: Style,
     max_width: Option<f32>,
 ) -> Line {
-    let max_width = max_width.map(|w| if w.is_finite() { w.max(0.0) } else { 0.0 });
     // swash runs on untrusted text: should it ever panic, the line is drawn as an
     // ellipsis and the shaping state is replaced.
     let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         shape_runs(fonts, shaper, text, style)
     }));
-    let Shaped {
-        mut glyphs,
-        mut clusters,
+    let Runs {
+        glyphs,
+        clusters,
         pen,
         capped,
         used,
     } = shaped.unwrap_or_else(|_| {
         *shaper = ShapeContext::new();
-        Shaped {
+        Runs {
             glyphs: Vec::new(),
             clusters: Vec::new(),
             pen: 0.0,
@@ -120,60 +192,40 @@ pub(crate) fn line(
             used: vec![0],
         }
     });
-    let mut width = pen;
-    let too_wide = max_width.is_some_and(|m| width > m);
-    let truncated = cut || capped || too_wide;
-    if truncated {
-        let (ellipsis, ellipsis_width) = ellipsis(fonts, shaper, style);
-        let limit = max_width.unwrap_or(f32::INFINITY) - ellipsis_width;
-        if limit < 0.0 {
-            glyphs.clear();
-            width = 0.0;
-        } else {
-            // Keep whole clusters whose end is within the limit.
-            clusters.push(ClusterStart {
-                glyph: glyphs.len(),
-                pen: width,
-            });
-            let keep = clusters
-                .iter()
-                .rev()
-                .find(|c| c.pen <= limit)
-                .copied()
-                .unwrap_or(ClusterStart { glyph: 0, pen: 0.0 });
-            glyphs.truncate(keep.glyph);
-            glyphs.extend(ellipsis.into_iter().map(|g| Placed {
-                x: g.x + keep.pen,
-                ..g
-            }));
-            width = keep.pen + ellipsis_width;
-        }
-    }
+    let (ellipsis, ellipsis_width) = ellipsis(fonts, shaper, style);
     let (mut ascent, mut descent) = (0.0f32, 0.0f32);
-    let mut fonts_used = Vec::new();
+    let mut used_fonts = Vec::new();
     for index in used {
         if let Some(font) = fonts.loaded(index) {
             let metrics = font.font().metrics(&[]).scale(style.size);
             ascent = ascent.max(metrics.ascent);
             descent = descent.max(metrics.descent.abs());
-            if index == 0 || glyphs.iter().any(|g| usize::from(g.font) == index) {
-                fonts_used.push(font.name);
-            }
+            used_fonts.push((index, font.name));
         }
     }
-    Line {
-        glyphs,
+    let whole = Line {
+        glyphs: Vec::new(),
         style,
-        width,
+        width: 0.0,
         ascent,
         descent,
-        truncated,
-        fonts_used,
-    }
+        truncated: false,
+        fonts_used: Vec::new(),
+        shaped: Shaped {
+            glyphs,
+            clusters,
+            pen,
+            cut: cut || capped,
+            ellipsis,
+            ellipsis_width,
+            fonts: used_fonts,
+        },
+    };
+    whole.fit(max_width)
 }
 
 /// The shaped glyphs of a line before the ellipsis.
-struct Shaped {
+struct Runs {
     glyphs: Vec<Placed>,
     clusters: Vec<ClusterStart>,
     pen: f32,
@@ -181,7 +233,7 @@ struct Shaped {
     used: Vec<usize>,
 }
 
-fn shape_runs(fonts: &mut Fonts, shaper: &mut ShapeContext, text: &str, style: Style) -> Shaped {
+fn shape_runs(fonts: &mut Fonts, shaper: &mut ShapeContext, text: &str, style: Style) -> Runs {
     let segments = segments(fonts, text);
     let mut glyphs: Vec<Placed> = Vec::new();
     let mut clusters: Vec<ClusterStart> = Vec::new();
@@ -238,7 +290,7 @@ fn shape_runs(fonts: &mut Fonts, shaper: &mut ShapeContext, text: &str, style: S
             }
         });
     }
-    Shaped {
+    Runs {
         glyphs,
         clusters,
         pen,

@@ -49,6 +49,50 @@ def shot(vm, name):
     return path
 
 
+def read_png(path):
+    """An 8-bit RGB or RGBA PNG: (width, height, bytes per pixel, rows)."""
+    import zlib
+    data = open(path, "rb").read()
+    i, idat, width, height, kind = 8, b"", 0, 0, 2
+    while i < len(data):
+        n = int.from_bytes(data[i:i + 4], "big")
+        tag, chunk = data[i + 4:i + 8], data[i + 8:i + 8 + n]
+        if tag == b"IHDR":
+            width, height = int.from_bytes(chunk[0:4], "big"), int.from_bytes(chunk[4:8], "big")
+            kind = chunk[9]
+        elif tag == b"IDAT":
+            idat += chunk
+        i += 12 + n
+    bpp = 4 if kind == 6 else 3
+    raw, rows, prev, p = zlib.decompress(idat), [], bytearray(width * bpp), 0
+    for _ in range(height):
+        f, line = raw[p], bytearray(raw[p + 1:p + 1 + width * bpp])
+        p += 1 + width * bpp
+        for x in range(width * bpp):
+            a = line[x - bpp] if x >= bpp else 0
+            b = prev[x]
+            c = prev[x - bpp] if x >= bpp else 0
+            if f == 1:
+                line[x] = (line[x] + a) & 255
+            elif f == 2:
+                line[x] = (line[x] + b) & 255
+            elif f == 3:
+                line[x] = (line[x] + (a + b) // 2) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(line)
+        prev = line
+    return width, height, bpp, rows
+
+
+def region(png, x0, y0, x1, y1):
+    """The RGB pixels of a PNG in [x0, x1) x [y0, y1)."""
+    width, height, bpp, rows = png
+    return [tuple(rows[y][x * bpp:x * bpp + 3])
+            for y in range(max(y0, 0), min(y1, height)) for x in range(max(x0, 0), min(x1, width))]
+
+
 def sh(vm, command, timeout=120):
     return vm.run(command, timeout=timeout)[0]
 
@@ -652,6 +696,59 @@ try:
           negotiated >= 1 and foot_before == "yes" and foot_after == "no"
           and active(vm) == "active",
           f"negotiated {negotiated}, foot before the click {foot_before}, after {foot_after}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 17g. Window titles (M15): foot sets a title; floated (Super+F) it has a bar, and the
+    # title is drawn after the buttons (the guest's display, a screendump: bright pixels
+    # in the title area, none in the padding before it). The recorder's outline
+    # screenshot of the same moment has no text in the bar (at most the outline's few
+    # colours there). The recording build, so a bundle can be written.
+    sh(vm, "rm -rf /home/sash/rec17g")
+    start(vm, binary=RECORD_BIN, env="SASH_DEBUG_RECORD=/home/sash/rec17g", windows=1)
+    w17, h17, _ = output_mode(vm)
+    vm.keys("meta_l", "f")
+    time.sleep(1.0)
+    vm.pointer_abs(w17 // 2, h17 // 2, w17, h17)
+    time.sleep(0.5)
+    dump = read_png(shot(vm, "17g-title"))
+    fill = (0x2C, 0x2C, 0x2E)
+    # Bar inside the 1 px border: y 1..33; buttons x 1..65; title from 77 (12 px padding).
+    title_px = [p for p in region(dump, 77, 6, min(w17 - 13, 400), 28) if sum(p) > 3 * 110]
+    padding = [p for p in region(dump, 66, 6, 76, 28) if p != fill]
+    vm.keys("meta_l", "f11")
+    time.sleep(2)
+    b17 = sh(vm, "ls -d /home/sash/rec17g/bundle-* | tail -1").strip()
+    outline_name = sh(vm, f"ls {b17}/screenshots/ | tail -1").strip()
+    encoded = sh(vm, f"base64 -w0 {b17}/screenshots/{outline_name}", timeout=300)
+    outline_path = os.path.join(OUT, "17g-outline.png")
+    with open(outline_path, "wb") as f:
+        f.write(base64.b64decode(encoded))
+    outline = read_png(outline_path)
+    scale17 = outline[0] / w17
+    colours = set(region(outline, int(77 * scale17), int(6 * scale17),
+                         int(400 * scale17), int(28 * scale17)))
+    check("titles: foot's title is drawn in its bar after the buttons; the outline "
+          "screenshot has no text there",
+          len(title_px) > 20 and not padding and len(colours) <= 3,
+          f"bright title pixels {len(title_px)}, padding pixels off the fill {len(padding)}, "
+          f"colours in the outline's title area {len(colours)}")
+    sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
+
+    # 17h. Idle CPU and memory with 10 windows: floating with bars and titles (Super+Shift+F),
+    # then tiled (Super+Shift+T, border only), 30 s each, release build.
+    start(vm, windows=10)
+    p = pid(vm)
+    idle_cmd = f"""a=$(awk '{{print $14+$15}}' /proc/{p}/stat); sleep 30; b=$(awk '{{print $14+$15}}' /proc/{p}/stat);
+    echo "ticks=$((b-a)) hz=$(getconf CLK_TCK)"; grep -E 'VmRSS|RssAnon' /proc/{p}/status | tr -s ' '"""
+    vm.keys("meta_l", "shift", "f")
+    time.sleep(2)
+    floating_idle = sh(vm, idle_cmd, timeout=120)
+    vm.keys("meta_l", "shift", "t")
+    time.sleep(2)
+    tiled_idle = sh(vm, idle_cmd, timeout=120)
+    print("idle 30 s, 10 floating windows with bars and titles:", floating_idle.replace("\n", "; "))
+    print("idle 30 s, 10 tiled windows (no bars):", tiled_idle.replace("\n", "; "))
+    check("idle with 10 windows with bars measured", "ticks=" in floating_idle and "ticks=" in tiled_idle)
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
     # 17c. Clipboard (M10): copy in one client, paste in another, on the DRM backend.

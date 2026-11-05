@@ -1210,6 +1210,21 @@ impl MonitorLayout {
                     "{window:?} ({layer:?}) at {rect:?}: border edges against the output {o:?}"
                 );
             }
+            // The title (M15) sits in the bar, after the buttons and their padding.
+            if let Some(title) = decoration.title_rect(rect) {
+                let bar = decoration.bar_rect(rect).expect("a title needs a bar");
+                let start = bar.x
+                    + super::decor::BUTTONS.len() as i32 * super::decor::BUTTON
+                    + super::decor::TITLE_PADDING;
+                assert!(
+                    title.w > 0
+                        && title.x >= start
+                        && title.right() <= bar.right() - super::decor::TITLE_PADDING
+                        && title.y == bar.y
+                        && title.h == bar.h,
+                    "{window:?}: title {title:?} outside its place in the bar {bar:?}"
+                );
+            }
             let inner = decoration.inner(rect);
             assert!(
                 inner.x >= rect.x

@@ -357,7 +357,8 @@ fn clipboard_and_drag_data_never_reach_a_bundle() {
 }
 
 /// Window titles and app ids are untrusted client text (owner, M14): none of it reaches
-/// a bundle, its screenshots or the log, whatever the client sets and changes.
+/// a bundle, its screenshots or the log, whatever the client sets and changes, also
+/// while the title is drawn in a bar (owner, M15).
 #[test]
 fn titles_and_app_ids_never_reach_a_bundle() {
     const TITLE: &str = "TITLE-MARKER-7f3a";
@@ -382,6 +383,8 @@ fn titles_and_app_ids_never_reach_a_bundle() {
     harness.run_with_remote(move |server| {
         let mut c = TestClient::connect(&socket);
         let w = c.create_window_without_commit();
+        // Server-side decorations: the window gets a bar with its title when floating.
+        let _decoration = c.decorate(&w, None);
         w.toplevel.set_title(TITLE.into());
         w.toplevel.set_app_id(APP_ID.into());
         w.surface.commit();
@@ -403,7 +406,14 @@ fn titles_and_app_ids_never_reach_a_bundle() {
         d.dispatch_until("configure", |e| e.configures > seen);
         d.ack_and_commit(&w2);
         server.on_server(|h| {
+            // Focus the titled window and float it: its bar shows the title.
+            h.server.state.focus_window(crate::layout::WindowId(1));
             h.chord(&[KEY_ALT, KEY_F]);
+            let drawn = h.server.state.titles.draws.get();
+            h.run_until("the title drawn in the bar", |h| {
+                h.server.state.request_redraw();
+                h.server.state.titles.draws.get() > drawn
+            });
             h.chord(&[KEY_ALT, KEY_F11]);
             record::flush_bundle(&mut h.server.state);
         });

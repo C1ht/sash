@@ -21,6 +21,7 @@ mod replay;
 mod snapping;
 mod tiled_resize;
 mod tiling;
+mod titles;
 mod trust;
 mod usable_area;
 

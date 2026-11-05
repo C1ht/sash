@@ -137,6 +137,8 @@ impl Harness {
         if self.presenting && self.redraw_requested.replace(false) {
             self.server.state.frame_started();
             self.server.state.flush_pending_arrange();
+            // What drawing does for the bars' titles (shaping, the rate limit).
+            self.server.state.draw_bar_titles();
             self.frames += 1;
             self.server.state.frame_presented(&self.output);
             // As the DRM backend does after each frame.

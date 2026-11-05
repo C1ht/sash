@@ -104,6 +104,8 @@ pub struct Sash {
     pub overlay: Overlay,
     /// Server-side decorations: the pointer on them and their buffers.
     pub decorations: crate::decorations::Decorations,
+    /// Window titles for the bars (titles.rs).
+    pub titles: crate::titles::Titles,
     /// Privileged connections (trust.rs).
     pub trust: crate::trust::Trust,
     pub keybinds: Keybinds,
@@ -167,6 +169,7 @@ impl Sash {
             fatal: None,
             overlay: Overlay::new(),
             decorations: crate::decorations::Decorations::new(),
+            titles: Default::default(),
             trust: crate::trust::Trust::new(&loop_handle),
             keybinds: Keybinds::new(modifier, socket_name),
             started,

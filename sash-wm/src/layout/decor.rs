@@ -22,6 +22,8 @@ pub const GLYPH: i32 = 12;
 pub const ZONE: i32 = 6;
 /// A corner zone is CORNER x CORNER from the outer corner.
 pub const CORNER: i32 = 16;
+/// Space before and after the title (owner, M15).
+pub const TITLE_PADDING: i32 = 12;
 
 /// Which end of the bar holds the buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,6 +147,19 @@ impl Decoration {
             (outer.w - l - r).max(0),
             BAR.min((outer.h - t).max(0)),
         ))
+    }
+
+    /// Where the title goes: the bar after the buttons, less TITLE_PADDING on both
+    /// sides (the right one is where the title's ellipsis stops). None without a bar
+    /// or when no width is left. Part of the bar for hit-testing (the drag handle).
+    pub fn title_rect(self, outer: Rect) -> Option<Rect> {
+        let bar = self.bar_rect(outer)?;
+        let buttons = BUTTONS.len() as i32 * BUTTON;
+        let (left, right) = match BUTTON_SIDE {
+            Side::Left => (bar.x + buttons + TITLE_PADDING, bar.right() - TITLE_PADDING),
+            Side::Right => (bar.x + TITLE_PADDING, bar.right() - buttons - TITLE_PADDING),
+        };
+        (right > left).then(|| Rect::new(left, bar.y, right - left, bar.h))
     }
 
     /// A button's hit area, clipped to the bar.
@@ -482,6 +497,33 @@ mod tests {
         assert_eq!(
             d.hit(Rect::new(0, 0, 3, 35), Edges::ALL, AREA, 1, 20),
             Some(Part::Button(Button::Close))
+        );
+    }
+
+    #[test]
+    fn the_title_follows_the_buttons_with_padding_and_is_part_of_the_bar() {
+        let d = Decoration::FULL;
+        // Bar inside the 1 px border: x 101..499; buttons 101..165; title 177..487.
+        assert_eq!(d.title_rect(OUTER), Some(Rect::new(177, 101, 310, BAR)));
+        for x in [177, 300, 486] {
+            assert_eq!(d.hit(OUTER, Edges::NONE, AREA, x, 120), Some(Part::Bar));
+        }
+        // Narrow windows: the title shrinks to nothing, never negative.
+        for w in [0, 1, 10, 66, 89, 90, 91, 200] {
+            let outer = Rect::new(0, 0, w, 100);
+            if let Some(t) = d.title_rect(outer) {
+                assert!(
+                    t.w > 0 && t.x >= 1 + 2 * BUTTON + TITLE_PADDING,
+                    "{w}: {t:?}"
+                );
+                assert_eq!(t.right(), outer.right() - 1 - TITLE_PADDING, "{w}");
+            }
+        }
+        assert_eq!(d.title_rect(Rect::new(0, 0, 90, 100)), None);
+        assert_eq!(
+            Decoration::BORDER.title_rect(OUTER),
+            None,
+            "no bar, no title"
         );
     }
 }

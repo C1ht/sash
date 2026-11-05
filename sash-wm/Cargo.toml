@@ -14,6 +14,8 @@ default = []
 debug-record = []
 
 [dependencies]
+# Window titles in the bars (M15): sash-wm depends on sash-text only, never on sash-ui.
+sash-text = { path = "../sash-text" }
 # Debug-only offscreen capture (SIGUSR1): signal source and PNG encoder.
 calloop = { version = "0.14", features = ["signals"] }
 png = "0.18"

@@ -40,6 +40,8 @@ markers=(
     SASH_DEBUG_STOP_FLIPS
     # M13a: the stand-in privileged global exists in test builds only.
     "privileged stand-in global (tests only)"
+    # M15: the title size override exists in debug builds only.
+    SASH_DEBUG_FONT_PX
     # M13b: the layer-shell test client exists in test builds only.
     "layer-shell test client (tests only)"
 )
@@ -72,7 +74,7 @@ fi
 cargo build --locked -p sash-wm
 for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
     "--mode: only the requested mode is tried" SASH_DEBUG_REJECT_MODES \
-    SASH_DEBUG_REJECT_ALL_MODES "fault injection"; do
+    SASH_DEBUG_REJECT_ALL_MODES "fault injection" SASH_DEBUG_FONT_PX; do
     if ! grep -aqF -- "$marker" target/debug/sash-wm; then
         echo "FAIL: control: debug binary lacks $marker, the check is stale"
         exit 1
@@ -117,4 +119,4 @@ done
 # Leave the default debug build in target/debug.
 cargo build --locked -p sash-wm
 
-echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection or debug recording code; the test-only privileged stand-in and layer-shell test client are in tests only"
+echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection, title size override or debug recording code; the test-only privileged stand-in and layer-shell test client are in tests only"

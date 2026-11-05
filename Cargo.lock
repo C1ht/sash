@@ -1602,6 +1602,7 @@ dependencies = [
  "nix",
  "png",
  "proptest",
+ "sash-text",
  "smithay",
  "tracing",
  "tracing-subscriber",
