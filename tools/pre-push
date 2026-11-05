@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# A git pre-push hook: runs tools/check-all.sh and refuses the push if a step failed.
+# Not installed automatically. To install it in this clone:
+#   ln -s ../../tools/pre-push .git/hooks/pre-push
+exec "$(git rev-parse --show-toplevel)/tools/check-all.sh"

@@ -42,6 +42,8 @@ markers=(
     "privileged stand-in global (tests only)"
     # M15: the title size override exists in debug builds only.
     SASH_DEBUG_FONT_PX
+    # M15b: the gap override exists in debug builds only.
+    SASH_DEBUG_GAP_PX
     # M13b: the layer-shell test client exists in test builds only.
     "layer-shell test client (tests only)"
 )
@@ -74,7 +76,7 @@ fi
 cargo build --locked -p sash-wm
 for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
     "--mode: only the requested mode is tried" SASH_DEBUG_REJECT_MODES \
-    SASH_DEBUG_REJECT_ALL_MODES "fault injection" SASH_DEBUG_FONT_PX; do
+    SASH_DEBUG_REJECT_ALL_MODES "fault injection" SASH_DEBUG_FONT_PX SASH_DEBUG_GAP_PX; do
     if ! grep -aqF -- "$marker" target/debug/sash-wm; then
         echo "FAIL: control: debug binary lacks $marker, the check is stale"
         exit 1
@@ -119,4 +121,33 @@ done
 # Leave the default debug build in target/debug.
 cargo build --locked -p sash-wm
 
-echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection, title size override or debug recording code; the test-only privileged stand-in and layer-shell test client are in tests only"
+# glibc floor (owner, after M15): the shipped binary is the one built in the
+# debian:trixie container (tools/vm/build-iso.sh puts it in the VM's ISO); its floor may
+# not pass GLIBC_2.41. The host's release build is reported only (a newer host glibc
+# versions some symbols newer). SASH_TRIXIE_RELEASE=<path> names the trixie binary;
+# by default it is taken from ~/.cache/sash/vm/sash.iso.
+floor() { objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1; }
+echo "glibc floor, host release build (reported only): $(floor "$bin")"
+trixie=${SASH_TRIXIE_RELEASE:-}
+iso=$HOME/.cache/sash/vm/sash.iso
+if [ -z "$trixie" ] && [ -f "$iso" ] && command -v xorriso > /dev/null; then
+    extracted=$(mktemp -d)
+    trap 'rm -rf -- "$extracted"' EXIT
+    if xorriso -osirrox on -indev "$iso" -extract /sash-wm-release "$extracted/sash-wm" \
+        > /dev/null 2>&1; then
+        trixie=$extracted/sash-wm
+        echo "trixie release build: from $iso ($(date -r "$iso" '+%Y-%m-%d %H:%M'))"
+    fi
+fi
+if [ -z "$trixie" ]; then
+    echo "SKIPPED: glibc floor of the trixie build (no build: run tools/vm/build-iso.sh)"
+else
+    trixie_floor=$(floor "$trixie")
+    echo "glibc floor, trixie release build: $trixie_floor (limit GLIBC_2.41)"
+    if [ "$(printf '%s\nGLIBC_2.41\n' "$trixie_floor" | sort -V | tail -1)" != GLIBC_2.41 ]; then
+        echo "FAIL: the trixie release build needs $trixie_floor, above GLIBC_2.41"
+        exit 1
+    fi
+fi
+
+echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection, title size and gap overrides or debug recording code; the test-only privileged stand-in and layer-shell test client are in tests only"
