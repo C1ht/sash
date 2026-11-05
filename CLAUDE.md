@@ -1088,6 +1088,51 @@ change this file without the owner's approval.
 - Step 1 (geometry only): the above, with property tests over every
   earlier operation, replay fixtures matching, outline screenshots
   showing the gaps. Report, then STOP before step 2.
+- After step 1 (owner):
+  1. Floating a tile (drag, float-all, keybind) starts from its visible
+     (inset) rectangle, so nothing jumps; tile-all still restores the
+     exact tree (tested at gap 8: the identical tree and layout
+     rectangles; replay fixtures still match).
+  2. The snap preview shows the visible rectangle the window will take
+     (inset for halves and quarters, exact for the top zone).
+  3. During drags a gap counts as part of the tile it belongs to: a
+     drag-and-drop over a gap targets that tile (the position reported to
+     its client is clamped to the nearest point of its surface) and a
+     drop never lands on nothing because of a gap; snap triggers stay at
+     the true output edge.
+  5. Corners: a window corner is rounded unless both of its edges lie on
+     the usable area's boundary. An open visual question, to judge by eye
+     on hardware.
+
+## Rounded corners (M15b step 2, owner)
+
+- A signed-distance shape (a rectangle with per-corner radius) masks the
+  window in a shader; the border is drawn from the same shape (one
+  continuous 1 px ring, no seams, anti-aliased); the bar, its fills and
+  hover squares are clipped by the same shape. Popups, drag icons, the
+  cursor and layer surfaces are never clipped.
+- Masked: every window that negotiated server-side decorations, floating
+  or tiled, with its whole surface tree (subsurfaces too). Windows that
+  draw their own decorations and fullscreen windows stay square.
+- Radius: a constant, 10 px. Debug builds only: SASH_DEBUG_RADIUS_PX
+  (tools/check-release.sh proves it absent from release builds). No
+  setting. The corner rule above decides which corners are rounded.
+- Hit-testing: a point outside the shape (a cut-off corner) falls
+  through to what is below; resize zones at the corners still work
+  inside the shape.
+- The shape is pure Rust (distance, coverage, the ring), mirrored exactly
+  by the GLSL. Goldens come from the CPU reference at scales 1, 1.5 and 2
+  (four-corner symmetry, border continuity) and run everywhere; GPU tests
+  (ignored without a GPU) render the same scenes through the real
+  shaders and must match the reference within a stated tolerance.
+- Tests: the corner rule at every output corner and edge with panels,
+  gaps, maximized and snapped windows; shm and dmabuf both masked; masks
+  kept after a renderer rebuild. Measure render time with 10 windows
+  with and without rounding (headless GPU), and report whether the DRM
+  path can still scan out fullscreen and ordinary windows without extra
+  composition.
+- tools/check-all.sh, the VM scenario, trixie and the fresh clone; push
+  main, tag m15b, STOP. M16 is not started.
 
 ## Text stack (owner, after M12; built in M14)
 
@@ -1409,7 +1454,9 @@ change this file without the owner's approval.
 - tools/check-all.sh (owner, after M15): fmt, clippy and tests in all
   three configurations, cargo deny, the release check, check-clients,
   similarity with the pinned references, and a summary of passed,
-  skipped and failed per step. It runs before every tag. A git pre-push
+  skipped and failed per step. It must pass before every tag (owner,
+  after M15b step 1): the whole script, never a hand-picked set of
+  checks. A git pre-push
   hook script lives in tools/ (installed by hand, never automatically).
 - A tag is moved only by the owner: if a re-run on the tagged commit
   differs from the report, the owner is told and the tag stays.
