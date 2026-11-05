@@ -143,3 +143,34 @@ fn a_resize_and_a_panel_change_together_send_one_configure_each() {
         assert_eq!(b.config(&wb).expect("configured").size, (499, 639));
     });
 }
+
+/// A snapped window keeps its resize zone against a panel; a resize from it unsnaps
+/// the window and continues from the snapped rectangle (owner, after M13b step 2).
+#[test]
+fn a_resize_from_the_panel_edge_unsnaps_and_keeps_the_rectangle() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let (mut c, w, _d) = decorated(&socket, None);
+        floating(&server, 1);
+        server.on_server(|h| {
+            h.server.state.set_layer_surfaces(vec![top_panel(1, 40)]);
+            let layout = &mut h.server.state.windows.layout;
+            assert!(layout.snap(WindowId(1), crate::layout::ZoneId::LEFT));
+            h.server.state.arrange();
+        });
+        c.roundtrip();
+        c.ack_and_commit(&w);
+        server.on_server(|h| {
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 40, 400, 560)));
+            // The top zone, inside the 1 px border on the panel edge.
+            h.pointer_to(200.0, 43.0);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+            h.pointer_to(200.0, 103.0);
+            h.button(BTN_LEFT, ButtonState::Released);
+            let layout = &h.server.state.windows.layout;
+            assert_eq!(layout.snapped_zone(WindowId(1)), None, "unsnapped");
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 100, 400, 500)));
+        });
+    });
+}

@@ -278,14 +278,15 @@ impl MonitorLayout {
     }
 
     /// The edges of the window that have resize zones: all four on a plain floating
-    /// window; on a snapped or a maximized window those not on the output boundary;
-    /// on a tile those not on the usable area's boundary (no zone against a panel
-    /// either); none while fullscreen.
+    /// window; on a snapped or maximized floating window those not on the output
+    /// boundary; on a tile, maximized or not, those not on the usable area's boundary
+    /// (moving that split would change hidden tiles; owner, after M13b step 2); none
+    /// while fullscreen.
     pub fn resize_zones(&self, window: WindowId) -> Edges {
         if !self.contains(window) || self.fullscreen == Some(window) {
             return Edges::NONE;
         }
-        let tiled = self.mode(window) == Some(Mode::Tiled) && !self.is_maximized(window);
+        let tiled = self.mode(window) == Some(Mode::Tiled);
         match self.boundary_placed(window) {
             Some(rect) if tiled => self.edges_inside(rect, self.area),
             Some(rect) => self.interior_edges(rect),
@@ -1229,10 +1230,9 @@ impl MonitorLayout {
             if !plain_floating {
                 // No zone on the output boundary; a tile none on the usable area's
                 // boundary either (an edge against a panel).
-                let a = if layer == Layer::Tiled {
-                    self.area
-                } else {
-                    self.output
+                let a = match layer {
+                    Layer::Tiled | Layer::Maximized => self.area,
+                    _ => self.output,
                 };
                 assert!(
                     !(zones.left && rect.x <= a.x
@@ -1242,7 +1242,7 @@ impl MonitorLayout {
                     "{window:?}: a resize zone on the boundary of {a:?}"
                 );
                 // A snapped or maximized window keeps its zones against a panel.
-                if layer != Layer::Tiled && layer != Layer::Fullscreen {
+                if layer == Layer::Floating {
                     let o = self.output;
                     assert!(
                         (zones.left || rect.x <= o.x)
@@ -2368,6 +2368,22 @@ mod tests {
         );
         let border = layout.decoration(id(2)).border;
         assert!(border.top && !border.left && !border.bottom);
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn a_maximized_tile_has_no_zone_on_the_usable_boundary_a_maximized_float_does() {
+        let mut layout = layout_with(2);
+        layout.set_geometry(AREA, UNDER_TOP_PANEL);
+        layout.set_maximized(id(1), true);
+        assert_eq!(layout.resize_zones(id(1)), Edges::NONE, "maximized tile");
+        assert!(layout.snap(id(2), ZoneId::FULL));
+        let zones = layout.resize_zones(id(2));
+        assert_eq!(
+            (zones.left, zones.right, zones.top, zones.bottom),
+            (false, false, true, false),
+            "a maximized floating window keeps its zone against the panel"
+        );
         layout.check_invariants();
     }
 
