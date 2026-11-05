@@ -21,6 +21,7 @@ pub mod layers;
 mod monitor;
 #[cfg(test)]
 mod proptests;
+pub mod shape;
 mod snap;
 
 #[cfg(test)]

@@ -134,6 +134,8 @@ pub struct MonitorLayout {
     /// The inner gap between tiles and snapped windows (M15b): their visible
     /// rectangles are inset on edges inside the usable area.
     gap: i32,
+    /// The corner radius of windows with server-side decorations (M15b step 2).
+    radius: i32,
 }
 
 /// The inner gap (owner, M15b): a constant; debug builds may override it.
@@ -152,14 +154,35 @@ impl MonitorLayout {
             history: Vec::new(),
             zones: Zones::default(),
             fullscreen: None,
-            // The compositor sets GAP (windows.rs); a bare layout has none.
+            // The compositor sets GAP and RADIUS (windows.rs); a bare layout has none.
             gap: 0,
+            radius: 0,
         }
     }
 
     #[cfg(feature = "debug-record")]
     pub fn gap(&self) -> i32 {
         self.gap
+    }
+
+    /// Sets the corner radius (never negative).
+    pub fn set_radius(&mut self, radius: i32) {
+        self.radius = radius.max(0);
+    }
+
+    /// A window's rounded shape at `scale` (owner, M15b step 2): windows with
+    /// server-side decorations, not fullscreen; its visible rectangle with the radius
+    /// on every corner that does not have both edges on the usable area's boundary.
+    /// None for a square window (no decorations of ours, fullscreen, or radius 0).
+    pub fn shape(&self, window: WindowId, scale: f32) -> Option<super::shape::Shape> {
+        let state = self.windows.get(&window)?;
+        if !state.server_side || self.fullscreen == Some(window) || self.radius == 0 {
+            return None;
+        }
+        let rect = self.shown_rect(window)?;
+        let corners = super::shape::rounded_corners(rect, self.area);
+        let shape = super::shape::Shape::new(rect, corners, self.radius, scale);
+        (!shape.is_square()).then_some(shape)
     }
 
     /// Sets the inner gap (never negative).
@@ -602,10 +625,16 @@ impl MonitorLayout {
             let f = self.fullscreen?;
             return self.shown_rect(f).filter(|r| r.contains(x, y)).map(|_| f);
         }
+        // A cut-off corner falls through to what is below (M15b step 2).
         self.stacking()
             .into_iter()
             .rev()
-            .find(|(_, r, _)| r.contains(x, y))
+            .find(|(w, r, _)| {
+                r.contains(x, y)
+                    && self
+                        .shape(*w, 1.0)
+                        .is_none_or(|shape| shape.contains_logical(x, y, 1.0))
+            })
             .map(|(w, _, _)| w)
     }
 
@@ -2735,5 +2764,61 @@ mod tests {
             layout.shown_rect(id(1)),
             layout.zone_visible_rect(ZoneId::LEFT)
         );
+    }
+
+    /// Which corners of a window are rounded, top-left, top-right, bottom-right,
+    /// bottom-left (None: drawn square).
+    fn corners(layout: &MonitorLayout, n: u64) -> Option<[bool; 4]> {
+        layout.shape(id(n), 1.0).map(|s| s.radii.map(|r| r > 0.0))
+    }
+
+    /// The corner rule (owner, M15b step 2) at every output corner and edge, with a
+    /// panel, gaps, maximized, snapped, floating and fullscreen windows.
+    #[test]
+    fn the_corner_rule_with_panels_gaps_maximize_and_snaps() {
+        let mut layout = layout_with(3); // 1 | (2 / 3)
+        for n in 1..=3 {
+            layout.set_server_side(id(n), true);
+        }
+        layout.set_gap(8);
+        layout.set_radius(10);
+        // A 32 px top panel: its edge is the usable area's boundary.
+        layout.set_geometry(AREA, Rect::new(0, 32, 800, 568));
+        assert_eq!(layout.shown_rect(id(1)), Some(Rect::new(0, 32, 396, 568)));
+        let (t, f) = (true, false);
+        assert_eq!(corners(&layout, 1), Some([f, t, t, f]), "left tile");
+        assert_eq!(corners(&layout, 2), Some([t, f, t, t]), "top-right tile");
+        assert_eq!(corners(&layout, 3), Some([t, t, f, t]), "bottom-right tile");
+        // The scale changes the radius, not the rule.
+        let shape = layout.shape(id(2), 2.0).expect("rounded");
+        assert_eq!(shape.radii, [20.0, 0.0, 20.0, 20.0]);
+        // Maximized: every corner on the boundary, square.
+        assert!(layout.set_maximized(id(1), true));
+        assert_eq!(corners(&layout, 1), None, "maximized");
+        assert!(layout.set_maximized(id(1), false));
+        // Snapped halves and quarters: the corners on the boundary are square.
+        assert!(layout.float_in_place(id(1)));
+        assert!(layout.snap(id(1), ZoneId::LEFT));
+        assert_eq!(corners(&layout, 1), Some([f, t, t, f]), "left half");
+        assert!(layout.snap(id(1), ZoneId::TOP_RIGHT));
+        assert_eq!(corners(&layout, 1), Some([t, f, t, t]), "top-right quarter");
+        assert!(layout.snap(id(1), ZoneId::BOTTOM_LEFT));
+        assert_eq!(
+            corners(&layout, 1),
+            Some([t, t, t, f]),
+            "bottom-left quarter"
+        );
+        // A floating window away from the edges: all four rounded.
+        layout.set_floating_rect(id(1), Rect::new(100, 100, 300, 200));
+        assert_eq!(corners(&layout, 1), Some([t; 4]), "floating");
+        // Fullscreen is square; so are windows with their own decorations.
+        assert!(layout.set_fullscreen(id(1), true));
+        assert_eq!(corners(&layout, 1), None, "fullscreen");
+        assert!(layout.set_fullscreen(id(1), false));
+        layout.set_server_side(id(2), false);
+        assert_eq!(corners(&layout, 2), None, "client-side decorations");
+        // Radius 0 (SASH_DEBUG_RADIUS_PX=0): everything square.
+        layout.set_radius(0);
+        assert_eq!(corners(&layout, 3), None, "radius 0");
     }
 }

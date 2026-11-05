@@ -9,7 +9,6 @@
 use smithay::{
     backend::allocator::Fourcc,
     backend::renderer::{
-        ImportAll, ImportMem, Renderer, Texture,
         element::{
             Kind,
             memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
@@ -18,6 +17,7 @@ use smithay::{
             surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             utils::CropRenderElement,
         },
+        gles::{GlesRenderer, element::PixelShaderElement},
     },
     input::pointer::CursorImageStatus,
     utils::{Point, Rectangle, Scale, Transform},
@@ -26,6 +26,7 @@ use smithay::{
 use crate::{
     layout::{Layer, Rect, layers::Level},
     popups::popups_of,
+    rounded::MaskedSurface,
     state::Sash,
     windows::Visible,
 };
@@ -40,11 +41,17 @@ const PREVIEW_BORDER: i32 = 2;
 const BACKDROP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 render_elements! {
-    pub OutputElement<R> where R: ImportAll + ImportMem;
-    Tiled=CropRenderElement<WaylandSurfaceRenderElement<R>>,
-    Window=WaylandSurfaceRenderElement<R>,
+    pub OutputElement<=GlesRenderer>;
+    /// A tiled window's surface: masked by its shape, clipped to its tile.
+    Tiled=CropRenderElement<MaskedSurface>,
+    /// A floating, maximized or fullscreen window's surface, masked by its shape.
+    Masked=MaskedSurface,
+    /// Popups, layer surfaces, the drag icon and client cursors: never masked.
+    Window=WaylandSurfaceRenderElement<GlesRenderer>,
     Solid=SolidColorRenderElement,
-    Memory=MemoryRenderBufferRenderElement<R>,
+    Memory=MemoryRenderBufferRenderElement<GlesRenderer>,
+    /// Shape-clipped fills and the border ring (rounded.rs).
+    Shader=PixelShaderElement,
 }
 
 /// Size of the built-in arrow cursor (drawn by the DRM backend for named shapes until
@@ -96,15 +103,11 @@ pub fn arrow_buffer() -> MemoryRenderBuffer {
 /// A named cursor shape at the pointer (DRM backend): the theme's image (the current
 /// frame of an animation) at the pointer minus its hotspot, or the built-in arrow when
 /// the theme has none.
-pub fn arrow_element<R>(
+pub fn arrow_element(
     state: &Sash,
-    renderer: &mut R,
+    renderer: &mut GlesRenderer,
     arrow: &MemoryRenderBuffer,
-) -> Option<OutputElement<R>>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-{
+) -> Option<OutputElement> {
     if !matches!(state.cursor.image(), CursorImageStatus::Named(_)) {
         return None;
     }
@@ -235,47 +238,45 @@ impl Overlay {
 
 /// The cursor surface sash-wm draws, if the cursor is one: on top of everything.
 /// Not part of `output_elements`, so offscreen captures show no cursor.
-pub fn cursor_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-{
+pub fn cursor_elements(
+    state: &Sash,
+    renderer: &mut GlesRenderer,
+    scale: f64,
+) -> Vec<OutputElement> {
     let Some((surface, origin)) = state.cursor_surface() else {
         return Vec::new();
     };
     let scale = Scale::from(scale);
-    let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
-        renderer,
-        &surface,
-        origin.to_physical_precise_round(scale),
-        scale,
-        1.0,
-        Kind::Cursor,
-    );
-    surfaces.into_iter().map(OutputElement::Window).collect()
-}
-
-/// Render elements of the layer surfaces of `level` and their popups, top first.
-fn layer_elements<R>(
-    state: &Sash,
-    renderer: &mut R,
-    level: Level,
-    scale: Scale<f64>,
-) -> Vec<OutputElement<R>>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-{
-    let mut out = Vec::new();
-    for (surface, origin) in state.layers_to_draw(level) {
-        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+    let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+        render_elements_from_surface_tree(
             renderer,
             &surface,
             origin.to_physical_precise_round(scale),
             scale,
             1.0,
-            Kind::Unspecified,
+            Kind::Cursor,
         );
+    surfaces.into_iter().map(OutputElement::Window).collect()
+}
+
+/// Render elements of the layer surfaces of `level` and their popups, top first.
+fn layer_elements(
+    state: &Sash,
+    renderer: &mut GlesRenderer,
+    level: Level,
+    scale: Scale<f64>,
+) -> Vec<OutputElement> {
+    let mut out = Vec::new();
+    for (surface, origin) in state.layers_to_draw(level) {
+        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            render_elements_from_surface_tree(
+                renderer,
+                &surface,
+                origin.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
         out.extend(surfaces.into_iter().map(OutputElement::Window));
     }
     out
@@ -285,24 +286,25 @@ where
 /// (the first element is drawn on top). Order (layout::layers::STACKING): drag icon,
 /// overlay layer, a fullscreen window, top layer, the other windows (snap preview
 /// among them), bottom layer, background layer; each layer's popups above it.
-pub fn output_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-{
+pub fn output_elements(
+    state: &Sash,
+    renderer: &mut GlesRenderer,
+    scale: f64,
+) -> Vec<OutputElement> {
     let scale = Scale::from(scale);
     let dragged = state.dragged_window();
     let mut elements = Vec::new();
     // A drag-and-drop icon is above everything: windows, popups and overlays.
     if let Some((icon, origin)) = state.drag_icon() {
-        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
-            renderer,
-            &icon,
-            origin.to_physical_precise_round(scale),
-            scale,
-            1.0,
-            Kind::Unspecified,
-        );
+        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            render_elements_from_surface_tree(
+                renderer,
+                &icon,
+                origin.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
         elements.extend(surfaces.into_iter().map(OutputElement::Window));
     }
     elements.extend(layer_elements(state, renderer, Level::Overlay, scale));
@@ -313,17 +315,18 @@ where
     let visible_windows = state.visible_windows();
     let drawn: Vec<_> = visible_windows.iter().map(|v| v.id).collect();
     state.decorations.retain(&drawn);
-    let popup_elements = |renderer: &mut R, visible: &Visible<'_>| {
+    let popup_elements = |renderer: &mut GlesRenderer, visible: &Visible<'_>| {
         let mut out = Vec::new();
         for (popup, origin) in popups_of(visible.window, visible.rect) {
-            let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
-                renderer,
-                popup.wl_surface(),
-                origin.to_physical_precise_round(scale),
-                scale,
-                1.0,
-                Kind::Unspecified,
-            );
+            let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    renderer,
+                    popup.wl_surface(),
+                    origin.to_physical_precise_round(scale),
+                    scale,
+                    1.0,
+                    Kind::Unspecified,
+                );
             out.extend(surfaces.into_iter().map(OutputElement::Window));
         }
         out
@@ -349,17 +352,25 @@ where
                 elements.extend(popup_elements(renderer, tiled));
             }
         }
-        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = match visible.window.toplevel() {
-            Some(toplevel) => render_elements_from_surface_tree(
-                renderer,
-                toplevel.wl_surface(),
-                visible.position.to_physical_precise_round(scale),
-                scale,
-                1.0,
-                Kind::Unspecified,
-            ),
-            None => Vec::new(),
-        };
+        // Windows with server-side decorations are drawn through their rounded shape
+        // (M15b step 2), the toplevel and its subsurfaces alike.
+        let mask = state
+            .windows
+            .layout
+            .shape(visible.id, scale.x as f32)
+            .and_then(|shape| crate::rounded::programs(renderer).map(|p| (p.mask, shape)));
+        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            match visible.window.toplevel() {
+                Some(toplevel) => render_elements_from_surface_tree(
+                    renderer,
+                    toplevel.wl_surface(),
+                    visible.position.to_physical_precise_round(scale),
+                    scale,
+                    1.0,
+                    Kind::Unspecified,
+                ),
+                None => Vec::new(),
+            };
         // Bar and border above the client's surfaces (a client's shadow stays below).
         elements.extend(crate::decorations::decoration_elements(
             state,
@@ -377,12 +388,15 @@ where
                 elements.extend(
                     surfaces
                         .into_iter()
+                        .map(|surface| MaskedSurface::new(surface, mask.clone()))
                         .filter_map(|surface| CropRenderElement::from_element(surface, scale, clip))
                         .map(OutputElement::Tiled),
                 );
             }
             Layer::Maximized | Layer::Floating | Layer::Fullscreen => {
-                elements.extend(surfaces.into_iter().map(OutputElement::Window));
+                elements.extend(surfaces.into_iter().map(|surface| {
+                    OutputElement::Masked(MaskedSurface::new(surface, mask.clone()))
+                }));
             }
         }
         if visible.layer == Layer::Fullscreen {

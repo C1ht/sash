@@ -62,6 +62,21 @@ fn gap_px() -> i32 {
     crate::layout::GAP
 }
 
+/// The corner radius (layout::shape::RADIUS, 10 px). Debug builds only:
+/// SASH_DEBUG_RADIUS_PX (0 to 64) overrides it, to judge by eye; no setting.
+fn radius_px() -> i32 {
+    #[cfg(debug_assertions)]
+    if let Some(px) = std::env::var("SASH_DEBUG_RADIUS_PX")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|px| (0..=64).contains(px))
+    {
+        tracing::info!(px, "SASH_DEBUG_RADIUS_PX: corner radius");
+        return px;
+    }
+    crate::layout::shape::RADIUS
+}
+
 /// How long drag configures wait for a frame before they are sent anyway.
 const FRAME_FALLBACK: Duration = Duration::from_millis(16);
 
@@ -146,6 +161,7 @@ impl Windows {
     pub fn new() -> Self {
         let mut layout = MonitorLayout::new(Rect::default());
         layout.set_gap(gap_px());
+        layout.set_radius(radius_px());
         Self {
             layout,
             list: Vec::new(),

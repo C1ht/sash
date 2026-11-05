@@ -228,7 +228,6 @@ impl Nested {
     #[cfg(debug_assertions)]
     fn capture(&mut self, state: &Sash) {
         use crate::capture::{CAPTURE_DIR_VAR, write_png};
-        use smithay::backend::renderer::gles::GlesTexture;
         let Some(dir) = std::env::var_os(CAPTURE_DIR_VAR) else {
             tracing::warn!("SIGUSR1: set {CAPTURE_DIR_VAR} to capture the output");
             return;
@@ -238,7 +237,7 @@ impl Nested {
             std::path::Path::new(&dir).join(format!("sash-wm-capture-{}.png", self.captures));
         let size = self.backend.window_size();
         let start = std::time::Instant::now();
-        match write_png::<_, GlesTexture>(self.backend.renderer(), state, size, &path) {
+        match write_png(self.backend.renderer(), state, size, &path) {
             Ok(()) => tracing::info!(
                 path = %path.display(),
                 w = size.w,
@@ -410,11 +409,7 @@ impl Nested {
             );
         }
         let size = self.backend.window_size();
-        crate::record::after_frame::<_, smithay::backend::renderer::gles::GlesTexture>(
-            state,
-            self.backend.renderer(),
-            size,
-        );
+        crate::record::after_frame(state, self.backend.renderer(), size);
     }
 
     /// Shows the cursor clients asked for on the host window: a named shape, or no

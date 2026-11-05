@@ -29,7 +29,6 @@ use std::{
 };
 
 use smithay::{
-    backend::renderer::{Bind, ExportMem, ImportAll, ImportMem, Offscreen, Renderer, Texture},
     input::keyboard::{Keysym, ModifiersState},
     reexports::calloop::timer::{TimeoutAction, Timer},
     utils::{Physical, Size},
@@ -753,12 +752,11 @@ pub fn flush_bundle(state: &mut Sash) {
 
 /// After a frame was drawn: takes a requested screenshot through the offscreen render
 /// path (never the screen), then writes a pending bundle.
-pub fn after_frame<R, T>(state: &mut Sash, renderer: &mut R, size: Size<i32, Physical>)
-where
-    R: Renderer + ImportAll + ImportMem + Offscreen<T> + Bind<T> + ExportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-    R::Error: 'static,
-{
+pub fn after_frame(
+    state: &mut Sash,
+    renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+    size: Size<i32, Physical>,
+) {
     if !state
         .recorder
         .as_ref()
@@ -776,7 +774,7 @@ where
         flush_bundle(state);
         return;
     };
-    match capture::render_rgba::<R, T>(renderer, state, size) {
+    match capture::render_rgba(renderer, state, size) {
         Ok(pixels) => {
             let (w, h) = (size.w as usize, size.h as usize);
             let (scaled, sw, sh) = downscale(&pixels, w, h, MAX_SHOT_WIDTH);

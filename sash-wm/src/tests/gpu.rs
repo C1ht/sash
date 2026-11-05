@@ -89,7 +89,7 @@ fn gpu_capture_snap_preview() {
     );
     let mut renderer = renderer();
     let path = std::path::Path::new(&dir).join("m5-snap-preview.png");
-    crate::capture::write_png::<_, GlesTexture>(
+    crate::capture::write_png(
         &mut renderer,
         &harness.server.state,
         (800, 600).into(),
@@ -282,7 +282,7 @@ fn gpu_dmabuf_windows_and_popup() {
         harness.step();
     }
     let path = std::path::Path::new(&dir).join("m8-dmabuf.png");
-    crate::capture::write_png::<_, GlesTexture>(
+    crate::capture::write_png(
         &mut renderer,
         &harness.server.state,
         (800, 600).into(),
@@ -520,7 +520,7 @@ fn gpu_decorations_cost() {
         #[cfg(debug_assertions)]
         if let Some(dir) = std::env::var_os(crate::capture::CAPTURE_DIR_VAR) {
             let path = std::path::Path::new(&dir).join("m11b-ten-bars.png");
-            crate::capture::write_png::<_, GlesTexture>(
+            crate::capture::write_png(
                 &mut renderer,
                 &harness.server.state,
                 (800, 600).into(),
@@ -573,5 +573,340 @@ fn gpu_decorations_cost() {
         }
         harness.button(BTN_LEFT, ButtonState::Released);
         percentiles("bar drag frame (motion, configure, render)", frames);
+    }
+}
+
+/// Two floating windows with server-side decorations and rounded corners (M15b step
+/// 2): window 1 a green wl_shm buffer (focused), window 2 a red dmabuf. Their outer
+/// rectangles are `ROUNDED_RECTS`; titles are empty and the pointer is away from both.
+#[cfg(debug_assertions)]
+const ROUNDED_RECTS: [(i32, i32, i32, i32); 2] = [(40, 40, 302, 235), (400, 300, 302, 235)];
+
+#[cfg(debug_assertions)]
+fn rounded_scene(renderer: &mut GlesRenderer) -> Harness {
+    use smithay::backend::renderer::ImportDma;
+    // Client size: outer minus 1 px borders and the 32 px bar.
+    let red = colour_dmabuf(renderer, (300, 201), [1.0, 0.0, 0.0, 1.0]);
+    let formats = renderer.dmabuf_formats().into_iter().collect();
+    let mut harness = Harness::with_dmabuf_formats(formats);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let mut w1 = c1.create_window_without_commit();
+        w1.color = 0xff_00_ff_00;
+        w1.toplevel.set_title(String::new());
+        std::mem::forget(c1.decorate(&w1, None));
+        w1.surface.commit();
+        c1.dispatch_until("configure", |e| e.configures >= 1);
+        c1.ack_and_commit(&w1);
+        let mut c2 = TestClient::connect(&socket);
+        let w2 = c2.create_window_without_commit();
+        w2.toplevel.set_title(String::new());
+        std::mem::forget(c2.decorate(&w2, None));
+        w2.surface.commit();
+        c2.dispatch_until("configure", |e| e.configures >= 1);
+        c2.ack_and_commit(&w2);
+        server.on_server(|h| {
+            h.chord(&[ALT, crate::tests::harness::keys::SHIFT, F]); // float all
+            let layout = &mut h.server.state.windows.layout;
+            layout.set_radius(crate::layout::shape::RADIUS);
+            for (i, (x, y, w, hh)) in ROUNDED_RECTS.into_iter().enumerate() {
+                layout.set_floating_rect(
+                    crate::layout::WindowId(i as u64 + 1),
+                    crate::layout::Rect::new(x, y, w, hh),
+                );
+            }
+            h.server.state.focus_window(crate::layout::WindowId(1));
+            h.server.state.arrange();
+            h.pointer_to(790.0, 10.0);
+        });
+        c1.roundtrip();
+        c1.ack_and_commit(&w1);
+        c2.roundtrip();
+        let serial = c2.events.serials[&wayland_client::Proxy::id(&w2.xdg_surface)];
+        w2.xdg_surface.ack_configure(serial);
+        let buffer = c2.dmabuf_buffer(&red);
+        w2.surface.attach(Some(&buffer), 0, 0);
+        w2.surface.damage_buffer(0, 0, 300, 201);
+        w2.surface.commit();
+        c2.roundtrip();
+        std::mem::forget((c1, c2, w1, w2));
+    });
+    for _ in 0..10 {
+        harness.step();
+    }
+    harness
+}
+
+/// Renders the output at `scale` into an offscreen buffer: RGBA rows.
+#[cfg(debug_assertions)]
+fn frame_at_scale(
+    renderer: &mut GlesRenderer,
+    state: &crate::state::Sash,
+    scale: f64,
+) -> (usize, usize, Vec<u8>) {
+    use smithay::backend::renderer::ExportMem;
+    use smithay::utils::{Buffer, Physical, Rectangle};
+    let (w, h) = (
+        (800.0 * scale).round() as i32,
+        (600.0 * scale).round() as i32,
+    );
+    let size: Size<i32, Physical> = (w, h).into();
+    let buffer_size = Size::<i32, Buffer>::from((w, h));
+    let mut target: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, buffer_size)
+        .expect("offscreen buffer");
+    let elements = render::output_elements(state, renderer, scale);
+    let mapping = {
+        let mut framebuffer = renderer.bind(&mut target).expect("bind");
+        let mut damage = OutputDamageTracker::new(size, scale, Transform::Normal);
+        damage
+            .render_output(
+                renderer,
+                &mut framebuffer,
+                0,
+                &elements,
+                render::CLEAR_COLOR,
+            )
+            .expect("render");
+        renderer
+            .copy_framebuffer(
+                &framebuffer,
+                Rectangle::from_size(buffer_size),
+                Fourcc::Abgr8888,
+            )
+            .expect("copy")
+    };
+    (
+        w as usize,
+        h as usize,
+        renderer.map_texture(&mapping).expect("map").to_vec(),
+    )
+}
+
+/// What the CPU reference (layout::shape) says a pixel of window `id` looks like: the
+/// background, the client's colour masked by the shape inside the client rectangle,
+/// the bar clipped by the shape, the ring on top. None where something else is drawn
+/// (the buttons).
+#[cfg(debug_assertions)]
+fn reference_pixel(
+    state: &crate::state::Sash,
+    id: crate::layout::WindowId,
+    content: [f32; 3],
+    background: [f32; 3],
+    scale: f64,
+    (x, y): (usize, usize),
+) -> [f32; 3] {
+    use crate::decorations::{BAR_FILL, BORDER_FOCUSED, BORDER_UNFOCUSED};
+    let layout = &state.windows.layout;
+    let shape = layout.shape(id, scale as f32).expect("a rounded window");
+    let outer = layout.shown_rect(id).expect("shown");
+    let decoration = layout.decoration(id);
+    let phys = |r: crate::layout::Rect| {
+        let x0 = (r.x as f64 * scale).round();
+        let y0 = (r.y as f64 * scale).round();
+        (
+            x0,
+            y0,
+            x0 + (r.w as f64 * scale).round(),
+            y0 + (r.h as f64 * scale).round(),
+        )
+    };
+    let inside =
+        |r: (f64, f64, f64, f64), px: f64, py: f64| px >= r.0 && px < r.2 && py >= r.1 && py < r.3;
+    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+    let cov = shape.coverage(px, py);
+    let mut c = background;
+    let blend = |c: &mut [f32; 3], over: [f32; 3], a: f32| {
+        for i in 0..3 {
+            c[i] = over[i] * a + c[i] * (1.0 - a);
+        }
+    };
+    if inside(phys(decoration.inner(outer)), px as f64, py as f64) {
+        blend(&mut c, content, cov);
+    }
+    if let Some(bar) = decoration.bar_rect(outer)
+        && inside(phys(bar), px as f64, py as f64)
+    {
+        blend(
+            &mut c,
+            [BAR_FILL[0], BAR_FILL[1], BAR_FILL[2]].map(|v| v * 255.0),
+            cov,
+        );
+    }
+    let ring = if layout.focused() == Some(id) {
+        BORDER_FOCUSED
+    } else {
+        BORDER_UNFOCUSED
+    };
+    let rc = shape.ring_coverage(
+        px,
+        py,
+        crate::layout::decor::BORDER as f32 * scale as f32,
+        decoration.border,
+    );
+    blend(&mut c, [ring[0], ring[1], ring[2]].map(|v| v * 255.0), rc);
+    c
+}
+
+/// Rounded corners on the GPU against the CPU reference (M15b step 2), at scales 1,
+/// 1.5 and 2: the three corners without buttons of a shm and a dmabuf window, pixel by
+/// pixel within a tolerance; the cut-off corner shows the background. Then the same
+/// frame from a rebuilt renderer: the masks survive a rebuild. With SASH_CAPTURE_DIR
+/// set, writes the frames (solid-colour test windows only).
+/// Run: `cargo test -p sash-wm -- --ignored --nocapture gpu_rounded`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_rounded_corners_match_the_cpu_reference() {
+    let device = EGLDevice::enumerate()
+        .expect("EGL device enumeration")
+        .find(|d| d.render_device_path().is_ok())
+        .expect("a GPU render node");
+    // Safety: the display outlives every context made on it in this test.
+    let display = unsafe { EGLDisplay::new(device) }.expect("EGL display");
+    let new_renderer = || {
+        let context = EGLContext::new(&display).expect("EGL context");
+        unsafe { GlesRenderer::new(context) }.expect("GLES renderer")
+    };
+    let mut client_gpu = new_renderer();
+    let harness = rounded_scene(&mut client_gpu);
+    let state = &harness.server.state;
+    let mut renderer = new_renderer();
+    const TOLERANCE: f32 = 3.0;
+    for scale in [1.0, 1.5, 2.0] {
+        let (w, _h, pixels) = frame_at_scale(&mut renderer, state, scale);
+        let at = |x: usize, y: usize| {
+            let i = (y * w + x) * 4;
+            [pixels[i] as f32, pixels[i + 1] as f32, pixels[i + 2] as f32]
+        };
+        let background = at(2, 2);
+        let mut worst = 0.0f32;
+        let mut compared = 0;
+        for (i, content) in [[0.0, 255.0, 0.0], [255.0, 0.0, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            let id = crate::layout::WindowId(i as u64 + 1);
+            let (ox, oy, ow, oh) = ROUNDED_RECTS[i];
+            let s = |v: i32| (v as f64 * scale).round() as usize;
+            let boxed = s(crate::layout::shape::RADIUS + 3);
+            // Top right, bottom right, bottom left (top left holds the buttons).
+            let corners = [
+                (s(ox + ow) - boxed, s(oy)),
+                (s(ox + ow) - boxed, s(oy + oh) - boxed),
+                (s(ox), s(oy + oh) - boxed),
+            ];
+            for (cx, cy) in corners {
+                for y in cy..cy + boxed {
+                    for x in cx..cx + boxed {
+                        let want = reference_pixel(state, id, content, background, scale, (x, y));
+                        let got = at(x, y);
+                        let diff = (0..3).map(|k| (want[k] - got[k]).abs()).fold(0.0, f32::max);
+                        worst = worst.max(diff);
+                        compared += 1;
+                        assert!(
+                            diff <= TOLERANCE,
+                            "x{scale}, window {}: pixel {x},{y} is {got:?}, the reference {want:?}",
+                            i + 1
+                        );
+                    }
+                }
+            }
+            // The outermost corner pixel is cut off: background.
+            assert_eq!(
+                at(s(ox + ow) - 1, s(oy + oh) - 1),
+                background,
+                "x{scale}: cut-off corner"
+            );
+        }
+        println!("x{scale}: {compared} pixels compared, worst difference {worst}");
+        if let Some(dir) = std::env::var_os(crate::capture::CAPTURE_DIR_VAR) {
+            let png = crate::capture::encode_png(&pixels, w as u32, (pixels.len() / 4 / w) as u32)
+                .expect("png");
+            let path = std::path::Path::new(&dir).join(format!("m15b-rounded-x{scale}.png"));
+            std::fs::write(&path, png).expect("write");
+            println!("wrote {}", path.display());
+        }
+    }
+    let before = frame_at_scale(&mut renderer, state, 1.0);
+    drop(renderer);
+    let mut rebuilt = new_renderer();
+    let after = frame_at_scale(&mut rebuilt, state, 1.0);
+    assert!(
+        before == after,
+        "a rebuilt renderer draws the same rounded frame"
+    );
+}
+
+/// M15b step 2 measurement: full-frame render time with ten floating windows with bars
+/// (overlapping, all corners rounded), square (radius 0) and rounded (the constant),
+/// on the headless GPU path; and the frames after a pointer motion over a bar (damage
+/// tracked from frame to frame, as the backends do).
+/// Run: `cargo test -p sash-wm -- --ignored --nocapture gpu_rounded_cost`.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_rounded_cost() {
+    let size: Size<i32, smithay::utils::Physical> = (800, 600).into();
+    let mut renderer = renderer();
+    let mut target: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, (800, 600).into())
+        .expect("offscreen buffer");
+    let mut harness = Harness::new();
+    ten_floating(&mut harness, true);
+    // Alternating, twice each, so warm-up does not favour either; the first rounded
+    // frame compiles the shaders (its max).
+    let rounded = crate::layout::shape::RADIUS;
+    for radius in [0, rounded, 0, rounded] {
+        harness.server.state.windows.layout.set_radius(radius);
+        let mut full = Vec::new();
+        for _ in 0..300 {
+            let start = Instant::now();
+            let elements = render::output_elements(&harness.server.state, &mut renderer, 1.0);
+            let mut framebuffer = renderer.bind(&mut target).expect("bind");
+            let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+            let result = damage
+                .render_output(
+                    &mut renderer,
+                    &mut framebuffer,
+                    0,
+                    &elements,
+                    render::CLEAR_COLOR,
+                )
+                .expect("render");
+            result.sync.wait().expect("GPU done");
+            full.push(start.elapsed());
+        }
+        percentiles(
+            &format!("full frame, 10 windows with bars, radius {radius}"),
+            full,
+        );
+        // Damage-tracked frames while the hovered button changes (a pointer moving
+        // over window 10's bar), so only the decorations are redrawn.
+        let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+        let mut tracked = Vec::new();
+        for i in 0..300 {
+            // Window 10's close button, then its bar.
+            let x = if i % 2 == 0 { 396.0 } else { 560.0 };
+            harness.server.state.decoration_hover((x, 306.0).into());
+            let start = Instant::now();
+            let elements = render::output_elements(&harness.server.state, &mut renderer, 1.0);
+            let mut framebuffer = renderer.bind(&mut target).expect("bind");
+            let result = damage
+                .render_output(
+                    &mut renderer,
+                    &mut framebuffer,
+                    0,
+                    &elements,
+                    render::CLEAR_COLOR,
+                )
+                .expect("render");
+            result.sync.wait().expect("GPU done");
+            tracked.push(start.elapsed());
+        }
+        percentiles(
+            &format!("hover frames, damage tracked, radius {radius}"),
+            tracked,
+        );
     }
 }

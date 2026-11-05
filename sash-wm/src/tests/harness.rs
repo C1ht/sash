@@ -105,6 +105,8 @@ impl Harness {
         // The tests written before gaps (M15b) expect exact tiles: the harness starts
         // with no gap; the gap tests set it (tests/gaps.rs).
         server.state.windows.layout.set_gap(0);
+        // Likewise square corners (M15b step 2); the rounded-corner tests set a radius.
+        server.state.windows.layout.set_radius(0);
         let output = output::create(&mut server.state, "headless", (800, 600).into());
         server.state.set_layout_area((800, 600).into());
 

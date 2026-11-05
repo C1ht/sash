@@ -49,6 +49,7 @@ mod popups;
 #[cfg(feature = "debug-record")]
 mod record;
 mod render;
+mod rounded;
 pub mod seat;
 mod server;
 mod shell;

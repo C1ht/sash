@@ -10,8 +10,9 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind, ExportMem, ImportAll, ImportMem, Offscreen, Renderer, Texture,
+            Bind, ExportMem, Offscreen,
             damage::OutputDamageTracker,
+            gles::{GlesRenderer, GlesTexture},
         },
     },
     utils::{Buffer, Physical, Rectangle, Size, Transform},
@@ -23,18 +24,13 @@ pub const CAPTURE_DIR_VAR: &str = "SASH_CAPTURE_DIR";
 
 /// Renders what the output shows right now (`size` in physical pixels, scale 1) and
 /// writes it to `path` as an 8-bit RGBA PNG.
-pub fn write_png<R, T>(
-    renderer: &mut R,
+pub fn write_png(
+    renderer: &mut GlesRenderer,
     state: &Sash,
     size: Size<i32, Physical>,
     path: &Path,
-) -> Result<(), Box<dyn Error>>
-where
-    R: Renderer + ImportAll + ImportMem + Offscreen<T> + Bind<T> + ExportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-    R::Error: 'static,
-{
-    let pixels = render_rgba::<R, T>(renderer, state, size)?;
+) -> Result<(), Box<dyn Error>> {
+    let pixels = render_rgba(renderer, state, size)?;
     let png = encode_png(&pixels, size.w as u32, size.h as u32)?;
     std::fs::write(path, png)?;
     Ok(())
@@ -42,19 +38,14 @@ where
 
 /// Renders what the output shows right now into an offscreen buffer (never the
 /// screen) and reads it back: RGBA, 8 bits per channel, rows top to bottom.
-pub fn render_rgba<R, T>(
-    renderer: &mut R,
+pub fn render_rgba(
+    renderer: &mut GlesRenderer,
     state: &Sash,
     size: Size<i32, Physical>,
-) -> Result<Vec<u8>, Box<dyn Error>>
-where
-    R: Renderer + ImportAll + ImportMem + Offscreen<T> + Bind<T> + ExportMem,
-    R::TextureId: Texture + Send + Clone + 'static,
-    R::Error: 'static,
-{
+) -> Result<Vec<u8>, Box<dyn Error>> {
     let buffer_size = Size::<i32, Buffer>::from((size.w, size.h));
     // ABGR8888 is R, G, B, A in memory: PNG's RGBA byte order.
-    let mut target = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
+    let mut target: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     let elements = render::output_elements(state, renderer, 1.0);
     let mapping = {
         let mut framebuffer = renderer.bind(&mut target)?;

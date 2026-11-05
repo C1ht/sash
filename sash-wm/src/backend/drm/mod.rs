@@ -1030,11 +1030,7 @@ impl Drm {
             );
         }
         let (w, h) = self.mode.size();
-        crate::record::after_frame::<_, smithay::backend::renderer::gles::GlesTexture>(
-            state,
-            &mut self.renderer,
-            (w as i32, h as i32).into(),
-        );
+        crate::record::after_frame(state, &mut self.renderer, (w as i32, h as i32).into());
     }
 
     /// Nothing new went on screen: clients still get their frame callbacks, one refresh

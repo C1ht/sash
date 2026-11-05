@@ -244,7 +244,7 @@ fn screenshots_are_scaled_to_at_most_1920_wide() {
 #[test]
 fn screenshots_use_the_offscreen_path_only() {
     let source = include_str!("mod.rs");
-    assert!(source.contains("capture::render_rgba::<R, T>(renderer, state, size)"));
+    assert!(source.contains("capture::render_rgba(renderer, state, size)"));
     for forbidden in [
         "copy_framebuffer",
         "screencopy",

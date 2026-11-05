@@ -572,3 +572,55 @@ fn snap_bands_trigger_at_the_true_output_edge() {
         );
     });
 }
+
+/// Rounded corners (M15b step 2): a pointer in the cut-off part of a corner falls
+/// through to the window below; the corner's resize zone still works inside the shape.
+#[test]
+fn cut_off_corners_fall_through_and_corner_zones_work_inside_the_shape() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut below = TestClient::connect(&socket);
+        let _below = below.map_window();
+        let (mut c, _w, _d) = decorated(&socket, None);
+        floating(&server, 2);
+        c.roundtrip();
+        server.on_server(|h| {
+            h.server
+                .state
+                .windows
+                .layout
+                .set_radius(crate::layout::shape::RADIUS);
+            let state = &h.server.state;
+            let layout = &state.windows.layout;
+            let (r, b) = (FLOAT.right() - 1, FLOAT.bottom() - 1);
+            // The outermost pixel of the bottom-right corner is outside the shape.
+            assert_eq!(layout.window_at(r, b), Some(WindowId(1)), "falls through");
+            assert_eq!(
+                state.decoration_at((r as f64 + 0.5, b as f64 + 0.5).into()),
+                None
+            );
+            // Five pixels in on each axis is inside the arc: the corner's zone.
+            let (x, y) = (r - 4, b - 4);
+            assert_eq!(layout.window_at(x, y), Some(WindowId(2)));
+            assert_eq!(
+                state.decoration_at((x as f64 + 0.5, y as f64 + 0.5).into()),
+                Some((
+                    WindowId(2),
+                    crate::layout::decor::Part::Resize(crate::layout::Edges {
+                        left: false,
+                        top: false,
+                        right: true,
+                        bottom: true,
+                    })
+                ))
+            );
+            // Without rounding the outermost pixel is the window's again.
+            h.server.state.windows.layout.set_radius(0);
+            assert_eq!(
+                h.server.state.windows.layout.window_at(r, b),
+                Some(WindowId(2))
+            );
+        });
+    });
+}
