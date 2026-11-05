@@ -1076,6 +1076,45 @@ change this file without the owner's approval.
   respected. DejaVu and Noto are fallbacks only.
 - Window titles are untrusted input: length and content limits, fuzz
   tests, never recorded by the debug recorder.
+- M14 (owner, after M13b), two steps, a STOP after each; M15 is not
+  started:
+  - sash-text: shaping, glyph cache, CPU rasterisation; no Wayland, no
+    UI, no dependency on sash-ui. sash-ui will depend on it later;
+    sash-wm may depend on sash-text only (never on sash-ui).
+  - Typeface: Manrope bundled; its SIL OFL licence and the attribution
+    duty are recorded, and the licence file is kept next to the font
+    file. DejaVu and Noto only as system fallbacks read from
+    /usr/share/fonts, never downloaded or bundled.
+  - Text from clients (titles, app ids) is untrusted: UTF-8 validated,
+    length-capped, truncated with an ellipsis, never panics, and never
+    written to the debug recorder, screenshots or logs.
+  - Step 1, measure and propose (then STOP and ask): cosmic-text (current
+    version) and its crates (licences through cargo deny, the crate list
+    and count, MSRV, what each does, which are avoidable by disabling
+    features); measured in a throwaway crate outside the repository:
+    release binary size added, load time of Manrope and the fallback set,
+    shape and rasterise time of a 40-character title at 13 px at scale
+    1, 1.5 and 2, glyph cache memory after 1000 distinct titles,
+    first-use latency; Danish letters, accents, CJK and emoji fallback,
+    colour emoji and what to do about it; known limits stated plainly
+    (bidi, IME, vertical text, hinting on a 5120x1440 panel); brief
+    alternatives (fontdue, ab_glyph, swash with own shaping); a proposed
+    API and crate layout. No code in the repository.
+  - Step 2 (after approval): build sash-text: font loading, shaping,
+    single-line layout with ellipsis, a glyph cache with a size cap and
+    eviction, CPU rasterisation to ARGB8888 at a given scale, text
+    measurement; constants for the cache size, the maximum text length
+    (bytes and glyphs) and the number of fallback fonts. Tests: golden
+    images (Latin, Danish letters, accents, CJK, an emoji fallback) with
+    stated tolerance rules; truncation at every position; zero-width and
+    combining characters; right-to-left strings (documented as rendered
+    but not reordered, if true); invalid UTF-8 and overlong strings
+    never panic; a fuzz target for the public API, run for a stated
+    time; property tests of measurement against drawn bounds;
+    determinism between runs; timing and memory as in step 1; a test
+    that nothing from titles reaches the recorder, screenshots or logs.
+    Standard checks, trixie, fresh clone, similarity (pinned
+    references); push main, tag m14 after step 2 only, STOP.
 
 ## Protocol support and known limits
 
@@ -1090,6 +1129,9 @@ change this file without the owner's approval.
   no data-control.
 - `zxdg_decoration_manager_v1` (version 1) from M11b: every negotiating
   client is answered server_side (see "Decorations (M11b, owner)").
+- `zwlr_layer_shell_v1` (version 4, what Smithay 0.7 offers) from M13b:
+  privileged, visible only to clients started by sash-wm (see
+  "Layer-shell (owner, after M12; built in M13b)").
 - xdg-shell protocol errors are limited by Smithay 0.7, which does not
   expose a toplevel's `xdg_surface`:
   - a buffer before the first `ack_configure` gets
@@ -1204,6 +1246,10 @@ change this file without the owner's approval.
   list it in NOTICE.
 - Each milestone report includes a code-similarity check of
   sash-wm/src against smallvil and anvil.
+- The similarity reference is pinned (owner, after M13b): Smithay
+  v0.7.0's commit and a hash of the smallvil and anvil sources are
+  recorded in tools/similarity/, verified on every run, and printed with
+  the scores.
 
 ## Toolchain and target compatibility
 
