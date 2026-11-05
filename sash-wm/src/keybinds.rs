@@ -65,6 +65,13 @@ pub enum Action {
 }
 
 impl Action {
+    /// Whether the action works whatever holds the keyboard (owner, after M12): quit.
+    /// VT switches and the debug hotkey are handled before the table. Every other
+    /// action targets windows.
+    pub fn is_global(self) -> bool {
+        matches!(self, Action::Quit)
+    }
+
     /// Whether the action moves keyboard focus (it cancels a drag and drop first).
     pub fn changes_focus(self) -> bool {
         matches!(

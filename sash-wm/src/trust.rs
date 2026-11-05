@@ -91,13 +91,6 @@ impl Trust {
 }
 
 /// A global filter: true only for connections sash-wm created for a program it started.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no privileged global exists outside the tests yet"
-    )
-)]
 pub fn privileged_only(client: &Client) -> bool {
     client
         .get_data::<ClientState>()
@@ -162,6 +155,27 @@ impl Sash {
         self.trust.open = self.trust.open.saturating_sub(1);
         tracing::info!(program, pid, "privileged connection closed");
         record!(self, "privileged_closed", "program" => program, "pid" => pid);
+    }
+}
+
+#[cfg(test)]
+impl Sash {
+    /// Tests: a privileged connection inside the test process (no program started);
+    /// returns the client's end. Same bookkeeping as `spawn_privileged`.
+    pub fn privileged_connection_for_tests(&mut self) -> UnixStream {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let privileged = Privileged {
+            program: "test".into(),
+            pid: std::process::id(),
+            closed: self.trust.closed.clone(),
+        };
+        let watch = Watch::new(&ours, None, self.trust.cut_off.clone());
+        let data = Arc::new(ClientState::privileged(privileged, watch));
+        self.display_handle
+            .insert_client(ours, data)
+            .expect("privileged test client");
+        self.trust.open += 1;
+        theirs
     }
 }
 

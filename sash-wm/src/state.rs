@@ -46,6 +46,8 @@ pub struct Protocols {
         reason = "the global lives on the display; this keeps its id"
     )]
     pub xdg_decoration: XdgDecorationState,
+    /// wlr-layer-shell, privileged (layer_shell.rs).
+    pub layer_shell: smithay::wayland::shell::wlr_layer::WlrLayerShellState,
     /// The tests' stand-in privileged global (trust.rs).
     #[cfg(test)]
     #[expect(
@@ -65,6 +67,10 @@ impl Protocols {
             seat: SeatState::new(),
             cursor_shape: CursorShapeManagerState::new::<Sash>(display),
             xdg_decoration: XdgDecorationState::new::<Sash>(display),
+            layer_shell: smithay::wayland::shell::wlr_layer::WlrLayerShellState::new_with_filter::<
+                Sash,
+                _,
+            >(display, crate::trust::privileged_only),
             #[cfg(test)]
             stand_in: crate::trust::stand_in::advertise(display),
         }
@@ -84,6 +90,8 @@ pub struct Sash {
     pub output: Option<Output>,
     pub windows: Windows,
     pub popups: Popups,
+    /// Layer-shell surfaces (layer_shell.rs).
+    pub layers: crate::layer_shell::Layers,
     /// Clipboard and drag and drop (M10).
     pub clipboard: crate::data_device::DataDevices,
     pub dmabufs: Dmabufs,
@@ -151,6 +159,7 @@ impl Sash {
             output: None,
             windows: Windows::new(),
             popups: Popups::default(),
+            layers: Default::default(),
             clipboard,
             dmabufs: Dmabufs::default(),
             cursor: Cursor::default(),
@@ -211,6 +220,9 @@ impl Sash {
         }
         if let Some((icon, _)) = self.drag_icon() {
             send_frames_surface_tree(&icon, output, time, None, |_, _| Some(output.clone()));
+        }
+        for surface in self.layer_surfaces_shown() {
+            send_frames_surface_tree(&surface, output, time, None, |_, _| Some(output.clone()));
         }
         self.space.refresh();
     }

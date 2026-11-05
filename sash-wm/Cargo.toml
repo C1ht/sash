@@ -29,3 +29,5 @@ xcursor = "=0.3.11"
 proptest = "1"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+# The layer-shell test client (tests only; already in the tree through Smithay).
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

@@ -30,6 +30,11 @@ impl CompositorHandler for Sash {
             .compositor
     }
 
+    fn destroyed(&mut self, surface: &WlSurface) {
+        // A layer surface's wl_surface gone before its layer_surface: unmapped.
+        self.forget_layer(surface);
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         if self.reject_invalid_commit(surface) {
             return;
@@ -44,6 +49,8 @@ impl CompositorHandler for Sash {
             self.request_redraw();
         } else if self.drag_icon_committed(&root) {
             // The drag icon: drawn at the pointer, redrawn.
+        } else if self.layer_committed(&root) {
+            // A layer surface (layer_shell.rs).
         } else {
             self.root_committed(&root);
         }

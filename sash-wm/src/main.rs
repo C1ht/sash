@@ -41,6 +41,7 @@ mod decorations;
 mod dmabuf;
 mod grab;
 mod keybinds;
+mod layer_shell;
 mod layout;
 mod limits;
 mod output;

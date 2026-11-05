@@ -131,6 +131,9 @@ impl Popups {
 impl Sash {
     /// Global origin of a window's geometry, if it is mapped and shown.
     fn shown_origin(&self, root: &WlSurface) -> Option<Point<i32, Logical>> {
+        if let Some(origin) = self.layer_origin(root) {
+            return Some(origin);
+        }
         let managed = self.windows.by_surface(root).filter(|m| m.mapped)?;
         let rect = self.windows.layout.shown_rect(managed.id)?;
         Some((rect.x, rect.y).into())
@@ -154,6 +157,12 @@ impl Sash {
 
     pub fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         let kind = PopupKind::Xdg(surface.clone());
+        // No parent yet: a layer surface's popup, assigned by layer_surface.get_popup
+        // (layer_shell.rs calls this again then).
+        if surface.get_parent_surface().is_none() {
+            surface.with_pending_state(|state| state.positioner = positioner);
+            return;
+        }
         // A parent popup that was dismissed (no longer tracked): dismiss this one too.
         if let Some(parent) = surface.get_parent_surface()
             && compositor::get_role(&parent) == Some(XDG_POPUP_ROLE)
@@ -322,12 +331,13 @@ impl Sash {
     /// output change (`output_changed`) they are dismissed instead, since they may
     /// not be configured again (owner decision).
     pub fn reconstrain_popups(&mut self, output_changed: bool) {
-        let roots: Vec<WlSurface> = self
+        let mut roots: Vec<WlSurface> = self
             .windows
             .all()
             .filter(|m| m.mapped)
             .filter_map(|m| m.window.toplevel().map(|t| t.wl_surface().clone()))
             .collect();
+        roots.extend(self.layer_roots());
         for root in roots {
             // Parents before children.
             let popups: Vec<PopupKind> = PopupManager::popups_for_surface(&root)

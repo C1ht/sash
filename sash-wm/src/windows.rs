@@ -469,13 +469,6 @@ impl Sash {
     }
 
     /// Sets the output's layer surfaces and re-arranges.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the layer-shell protocol from M13b step 3"
-        )
-    )]
     pub fn set_layer_surfaces(&mut self, surfaces: Vec<LayerSurface>) {
         let size = (self.windows.output.w, self.windows.output.h).into();
         self.set_output_and_layers(size, surfaces);
@@ -616,13 +609,15 @@ impl Sash {
     /// nothing. While that window has a grabbed popup chain, its topmost popup gets
     /// it; a grab on any other window ends.
     pub fn sync_keyboard_focus(&mut self) {
-        let focused = self
-            .windows
-            .layout
-            .focused()
-            .and_then(|id| self.windows.by_id(id))
-            .filter(|m| m.mapped)
-            .and_then(|m| m.window.toplevel().map(|t| t.wl_surface().clone()));
+        // A layer surface holding the keyboard comes first (layer_shell.rs).
+        let focused = self.layer_keyboard_target().or_else(|| {
+            self.windows
+                .layout
+                .focused()
+                .and_then(|id| self.windows.by_id(id))
+                .filter(|m| m.mapped)
+                .and_then(|m| m.window.toplevel().map(|t| t.wl_surface().clone()))
+        });
         let popup_target = self.popup_focus(focused.as_ref());
         #[cfg(feature = "debug-record")]
         let popup = popup_target.is_some();
@@ -655,6 +650,7 @@ impl Sash {
     /// Focuses and raises a window (click or keyboard). Focusing another window ends
     /// fullscreen, which needs configures.
     pub fn focus_window(&mut self, id: WindowId) {
+        self.layer_focus_lost();
         if self.windows.layout.focus(id) {
             self.arrange();
         }
@@ -662,13 +658,38 @@ impl Sash {
 
     /// The mapped window at a global position, counting its popups: floating windows
     /// above tiled ones.
+    /// None where a layer surface above the windows is.
     pub fn window_at(&self, location: Point<f64, Logical>) -> Option<WindowId> {
+        if self.layer_above(location).is_some() {
+            return None;
+        }
         self.hit(location).map(|(id, _)| id)
     }
 
-    /// The surface at a global position and the global position of its origin.
+    /// The surface at a global position and the global position of its origin:
+    /// layer surfaces above the windows, the windows, then layer surfaces below.
     pub fn surface_at(&self, location: Point<f64, Logical>) -> Option<SurfaceHit> {
-        self.hit(location).and_then(|(_, surface)| surface)
+        if let Some((_, surface)) = self.layer_above(location) {
+            return Some(surface);
+        }
+        match self.hit(location) {
+            Some((_, surface)) => surface,
+            None => self.layer_below(location).map(|(_, surface)| surface),
+        }
+    }
+
+    /// The layer surface at a global position, if one is the topmost thing there.
+    pub fn layer_at(
+        &self,
+        location: Point<f64, Logical>,
+    ) -> Option<crate::layout::layers::LayerId> {
+        if let Some((id, _)) = self.layer_above(location) {
+            return Some(id);
+        }
+        match self.hit(location) {
+            Some(_) => None,
+            None => self.layer_below(location).map(|(id, _)| id),
+        }
     }
 
     /// What is at a global position, top first: a window's popups (anywhere, drawn
@@ -752,6 +773,9 @@ impl Sash {
     /// The decoration under a global position, if the topmost thing there is one
     /// (popups and windows above it win).
     pub fn decoration_at(&self, location: Point<f64, Logical>) -> Option<(WindowId, Part)> {
+        if self.layer_above(location).is_some() {
+            return None;
+        }
         let (id, surface) = self.hit(location)?;
         if surface.is_some() {
             return None;

@@ -24,7 +24,7 @@ use smithay::{
 };
 
 use crate::{
-    layout::{Layer, Rect},
+    layout::{Layer, Rect, layers::Level},
     popups::popups_of,
     state::Sash,
     windows::Visible,
@@ -255,8 +255,36 @@ where
     surfaces.into_iter().map(OutputElement::Window).collect()
 }
 
+/// Render elements of the layer surfaces of `level` and their popups, top first.
+fn layer_elements<R>(
+    state: &Sash,
+    renderer: &mut R,
+    level: Level,
+    scale: Scale<f64>,
+) -> Vec<OutputElement<R>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Texture + Send + Clone + 'static,
+{
+    let mut out = Vec::new();
+    for (surface, origin) in state.layers_to_draw(level) {
+        let surfaces: Vec<WaylandSurfaceRenderElement<R>> = render_elements_from_surface_tree(
+            renderer,
+            &surface,
+            origin.to_physical_precise_round(scale),
+            scale,
+            1.0,
+            Kind::Unspecified,
+        );
+        out.extend(surfaces.into_iter().map(OutputElement::Window));
+    }
+    out
+}
+
 /// Render elements for the output at the origin with the given scale, front to back
-/// (the first element is drawn on top).
+/// (the first element is drawn on top). Order (layout::layers::STACKING): drag icon,
+/// overlay layer, a fullscreen window, top layer, the other windows (snap preview
+/// among them), bottom layer, background layer; each layer's popups above it.
 pub fn output_elements<R>(state: &Sash, renderer: &mut R, scale: f64) -> Vec<OutputElement<R>>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -277,6 +305,10 @@ where
         );
         elements.extend(surfaces.into_iter().map(OutputElement::Window));
     }
+    elements.extend(layer_elements(state, renderer, Level::Overlay, scale));
+    // The top layer goes below a fullscreen window and above every other window.
+    let mut top_drawn = false;
+    let mut windows_start = elements.len();
     let mut preview_drawn = false;
     let visible_windows = state.visible_windows();
     let drawn: Vec<_> = visible_windows.iter().map(|v| v.id).collect();
@@ -300,6 +332,11 @@ where
     // have no order among themselves, so their popups go above all of them.
     let mut tiled_popups_drawn = false;
     for visible in visible_windows.iter().rev() {
+        if !top_drawn && visible.layer != Layer::Fullscreen {
+            top_drawn = true;
+            elements.extend(layer_elements(state, renderer, Level::Top, scale));
+            windows_start = elements.len();
+        }
         if visible.layer != Layer::Tiled {
             elements.extend(popup_elements(renderer, visible));
         } else if !tiled_popups_drawn {
@@ -367,14 +404,21 @@ where
             preview_drawn = true;
         }
     }
+    if !top_drawn {
+        elements.extend(layer_elements(state, renderer, Level::Top, scale));
+        windows_start = elements.len();
+    }
     if !preview_drawn {
+        // Above the windows, below the top layer.
         let preview: Vec<_> = state
             .overlay
             .preview_elements(scale)
             .map(OutputElement::Solid)
             .collect();
-        elements.splice(0..0, preview);
+        elements.splice(windows_start..windows_start, preview);
     }
+    elements.extend(layer_elements(state, renderer, Level::Bottom, scale));
+    elements.extend(layer_elements(state, renderer, Level::Background, scale));
     elements
 }
 

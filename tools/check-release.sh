@@ -40,6 +40,8 @@ markers=(
     SASH_DEBUG_STOP_FLIPS
     # M13a: the stand-in privileged global exists in test builds only.
     "privileged stand-in global (tests only)"
+    # M13b: the layer-shell test client exists in test builds only.
+    "layer-shell test client (tests only)"
 )
 found=0
 for marker in "${markers[@]}"; do
@@ -92,6 +94,18 @@ if grep -aqF -- "privileged stand-in global (tests only)" target/debug/sash-wm; 
     echo "FAIL: the debug sash-wm binary contains the test-only stand-in global"
     exit 1
 fi
+# Control for the layer-shell test client: its marker is in the test binary, and in no
+# sash-wm binary.
+for marker in "layer-shell test client (tests only)"; do
+    if ! grep -aqF -- "$marker" "$test_bin"; then
+        echo "FAIL: control: the test binary lacks $marker, the check is stale"
+        exit 1
+    fi
+    if grep -aqF -- "$marker" target/debug/sash-wm; then
+        echo "FAIL: the debug sash-wm binary contains the layer-shell test client ($marker)"
+        exit 1
+    fi
+done
 # Control for the recorder: its markers are in a debug build with the feature.
 cargo build --locked -p sash-wm --features debug-record
 for marker in SASH_DEBUG_RECORD SASH_DEBUG_KEYS "DEBUG RECORDING" "sash_wm::record" "debug bundle"; do
@@ -103,4 +117,4 @@ done
 # Leave the default debug build in target/debug.
 cargo build --locked -p sash-wm
 
-echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection or debug recording code; the test-only privileged stand-in is in tests only"
+echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection or debug recording code; the test-only privileged stand-in and layer-shell test client are in tests only"

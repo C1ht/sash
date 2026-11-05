@@ -11,6 +11,7 @@ mod dnd;
 mod floating;
 mod gpu;
 mod harness;
+mod layer_shell;
 mod limits;
 mod popups;
 #[cfg(feature = "debug-record")]

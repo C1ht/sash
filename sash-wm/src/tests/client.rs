@@ -54,6 +54,7 @@ use wayland_protocols::xdg::shell::client::{
 };
 
 pub mod data;
+pub mod layer;
 
 pub const WINDOW_SIZE: (i32, i32) = (100, 100);
 
@@ -73,7 +74,7 @@ pub struct ToplevelConfig {
 
 #[derive(Default)]
 pub struct Events {
-    compositor: Option<WlCompositor>,
+    pub compositor: Option<WlCompositor>,
     seat: Option<WlSeat>,
     shm: Option<WlShm>,
     wm_base: Option<XdgWmBase>,
@@ -81,7 +82,7 @@ pub struct Events {
     dmabuf: Option<ZwpLinuxDmabufV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
-    registry: Option<WlRegistry>,
+    pub registry: Option<WlRegistry>,
     /// Every global advertised to this client: (name, interface).
     pub globals: Vec<(u32, String)>,
     /// Per xdg_toplevel_decoration: the modes its configure events gave, in order.
@@ -129,6 +130,8 @@ pub struct Events {
     pub dmabuf_feedback_done: bool,
     /// Clipboard and drag and drop (client/data.rs).
     pub data: data::DataEvents,
+    /// Layer-shell (privileged clients only).
+    pub layers: layer::LayerEvents,
 }
 
 /// What a test popup asks for (an xdg_positioner).
@@ -633,6 +636,11 @@ impl TestClient {
     /// An ARGB8888 shm buffer, backed by an unlinked file in XDG_RUNTIME_DIR.
     /// A buffer for a window or popup: wl_shm, or a (fake) LINEAR ARGB8888 dmabuf when
     /// `dmabuf_buffers` is set.
+    /// A plain buffer of `size` (protocol error tests).
+    pub fn buffer_for_tests(&mut self, size: (i32, i32)) -> WlBuffer {
+        self.buffer(size, 0)
+    }
+
     fn buffer(&mut self, (width, height): (i32, i32), color: u32) -> WlBuffer {
         if self.dmabuf_buffers {
             let file = buffer_file((width * 4 * height) as u64);
@@ -761,6 +769,10 @@ impl Dispatch<WlRegistry, ()> for Events {
             }
             "wl_data_device_manager" => {
                 events.data.manager = Some(registry.bind(name, version.min(3), qh, ()))
+            }
+            "zwlr_layer_shell_v1" => {
+                tracing::trace!("{}", layer::MARKER);
+                events.layers.shell = Some(registry.bind(name, version.min(4), qh, ()))
             }
             _ => {}
         }

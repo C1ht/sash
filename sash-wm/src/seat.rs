@@ -201,6 +201,16 @@ impl Sash {
                             mods,
                             key.raw_latin_sym_or_raw_current_sym(),
                         ) {
+                            // While an exclusive layer surface holds the keyboard,
+                            // window keybinds do nothing (the key is still kept).
+                            Some(action)
+                                if !action.is_global() && state.exclusive_layer().is_some() =>
+                            {
+                                state.keybinds.swallowed.push(code);
+                                tracing::debug!(?action, "keybind blocked: exclusive layer surface");
+                                record!(state, "keybind_blocked", "action" => format!("{action:?}"));
+                                FilterResult::Intercept(None)
+                            }
                             Some(action) => {
                                 state.keybinds.swallowed.push(code);
                                 FilterResult::Intercept(Some(Intercepted::Action(action)))
@@ -295,6 +305,10 @@ impl Sash {
                 if modifier.held(&mods) {
                     // Every mod+click is kept from clients, bound or not.
                     self.windows.swallowed_buttons.push(button);
+                    // Window mouse bindings do nothing under an exclusive layer surface.
+                    if self.exclusive_layer().is_some() {
+                        return;
+                    }
                     let action = keybinds::lookup_button(modifier, &mods, button);
                     // A resize keeps the window's popups (they follow it); any other
                     // mod+click dismisses them, and a grabbed chain elsewhere.
@@ -343,10 +357,13 @@ impl Sash {
                     }
                 } else if keybinds::lookup_button(modifier, &mods, button)
                     == Some(Action::ClickFocus)
-                    && let Some(window) = under
                 {
-                    record_context!(self, "click");
-                    self.focus_window(window);
+                    if let Some(window) = under {
+                        record_context!(self, "click");
+                        self.focus_window(window);
+                    } else if let Some(layer) = self.layer_at(location) {
+                        self.layer_clicked(layer);
+                    }
                 }
                 if let Some(focus) = pointer.current_focus() {
                     self.popups.note_button_press(serial, focus);
