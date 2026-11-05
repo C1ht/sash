@@ -21,6 +21,7 @@ mod snapping;
 mod tiled_resize;
 mod tiling;
 mod trust;
+mod usable_area;
 
 use std::{sync::mpsc, thread};
 

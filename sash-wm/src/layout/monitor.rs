@@ -116,6 +116,10 @@ pub struct NewWindow {
 
 #[derive(Clone, Debug)]
 pub struct MonitorLayout {
+    /// The whole output: fullscreen windows, the border rule, decoration hit-testing.
+    output: Rect,
+    /// The usable area: the output minus layer-shell reservations (layers.rs). Tiles,
+    /// snap zones, maximize, the 64 px rule and the top-edge rule use it.
     area: Rect,
     default_mode: Mode,
     tree: BspTree,
@@ -132,6 +136,7 @@ pub struct MonitorLayout {
 impl MonitorLayout {
     pub fn new(area: Rect) -> Self {
         Self {
+            output: area,
             area,
             default_mode: Mode::Tiled,
             tree: BspTree::new(area),
@@ -144,12 +149,35 @@ impl MonitorLayout {
         }
     }
 
+    /// The usable area.
     pub fn area(&self) -> Rect {
         self.area
     }
 
-    /// Output resize: tiles are recomputed, floating windows clamped back.
+    pub fn output(&self) -> Rect {
+        self.output
+    }
+
+    /// An output resize with no reservations: the usable area is the whole output.
+    #[cfg(test)]
     pub fn set_area(&mut self, area: Rect) {
+        self.set_geometry(area, area);
+    }
+
+    /// A new output rectangle, usable area, or both at once (one coherent update):
+    /// tiles are recomputed over the usable area, floating windows clamped back into
+    /// it (64 px rule, top edge), snapped and maximized windows follow it. A window a
+    /// shrinking area pushed is not moved back when the area grows again.
+    pub fn set_geometry(&mut self, output: Rect, usable: Rect) {
+        debug_assert!(
+            usable.x >= output.x
+                && usable.y >= output.y
+                && usable.right() <= output.right()
+                && usable.bottom() <= output.bottom(),
+            "usable area {usable:?} outside the output {output:?}"
+        );
+        self.output = output;
+        let area = usable;
         self.area = area;
         self.tree.set_area(area);
         self.floating.set_area(area);
@@ -250,13 +278,16 @@ impl MonitorLayout {
     }
 
     /// The edges of the window that have resize zones: all four on a plain floating
-    /// window; on a tile, a snapped or a maximized window only those not on the output
-    /// boundary; none while fullscreen.
+    /// window; on a snapped or a maximized window those not on the output boundary;
+    /// on a tile those not on the usable area's boundary (no zone against a panel
+    /// either); none while fullscreen.
     pub fn resize_zones(&self, window: WindowId) -> Edges {
         if !self.contains(window) || self.fullscreen == Some(window) {
             return Edges::NONE;
         }
+        let tiled = self.mode(window) == Some(Mode::Tiled) && !self.is_maximized(window);
         match self.boundary_placed(window) {
+            Some(rect) if tiled => self.edges_inside(rect, self.area),
             Some(rect) => self.interior_edges(rect),
             None => Edges::ALL,
         }
@@ -274,9 +305,14 @@ impl MonitorLayout {
         }
     }
 
-    /// The edges of `r` that are not on the output boundary.
+    /// The edges of `r` that are not on the true output boundary (an edge against a
+    /// panel keeps its border).
     fn interior_edges(&self, r: Rect) -> Edges {
-        let a = self.area;
+        self.edges_inside(r, self.output)
+    }
+
+    /// The edges of `r` that are not on the boundary of `a`.
+    fn edges_inside(&self, r: Rect, a: Rect) -> Edges {
         Edges {
             left: r.x > a.x,
             right: r.right() < a.right(),
@@ -509,13 +545,13 @@ impl MonitorLayout {
             return Some(if limits.is_fixed() {
                 let (w, h) = limits.min;
                 Rect::new(
-                    self.area.x + (self.area.w - w).div_euclid(2),
-                    self.area.y + (self.area.h - h).div_euclid(2),
+                    self.output.x + (self.output.w - w).div_euclid(2),
+                    self.output.y + (self.output.h - h).div_euclid(2),
                     w,
                     h,
                 )
             } else {
-                self.area
+                self.output
             });
         }
         if state.maximized_tiled && state.mode() == Mode::Tiled {
@@ -527,7 +563,11 @@ impl MonitorLayout {
     /// Behind a fixed-size fullscreen window, an opaque backdrop covers the output.
     pub fn fullscreen_backdrop(&self) -> Option<Rect> {
         let f = self.fullscreen?;
-        self.windows.get(&f)?.limits.is_fixed().then_some(self.area)
+        self.windows
+            .get(&f)?
+            .limits
+            .is_fixed()
+            .then_some(self.output)
     }
 
     /// Every placed window in drawing order, bottom first: tiled, maximized tiled
@@ -605,7 +645,7 @@ impl MonitorLayout {
         };
         if self.fullscreen == Some(window) {
             return Some(Presentation {
-                size: size(self.area),
+                size: size(self.output),
                 fullscreen: true,
                 ..plain
             });
@@ -1108,7 +1148,7 @@ impl MonitorLayout {
             );
             assert!(
                 rect.y >= self.area.y,
-                "{window:?} at {rect:?} has its top edge above the output"
+                "{window:?} at {rect:?} has its top edge above the usable area"
             );
         }
         match self.focused {
@@ -1153,6 +1193,22 @@ impl MonitorLayout {
                     .with_border(self.interior_edges(rect)),
             };
             assert_eq!(decoration, expected, "{window:?} ({layer:?}) decorations");
+            // Only the true output boundary removes a border (owner, after M12): an
+            // edge against a panel keeps it. Checked against the output directly.
+            if !plain_floating && layer != Layer::Fullscreen {
+                let o = self.output;
+                let border = decoration.border;
+                assert_eq!(
+                    (border.left, border.right, border.top, border.bottom),
+                    (
+                        rect.x > o.x,
+                        rect.right() < o.right(),
+                        rect.y > o.y,
+                        rect.bottom() < o.bottom()
+                    ),
+                    "{window:?} ({layer:?}) at {rect:?}: border edges against the output {o:?}"
+                );
+            }
             let inner = decoration.inner(rect);
             assert!(
                 inner.x >= rect.x
@@ -1171,14 +1227,48 @@ impl MonitorLayout {
             }
             let zones = self.resize_zones(window);
             if !plain_floating {
-                let a = self.area;
+                // No zone on the output boundary; a tile none on the usable area's
+                // boundary either (an edge against a panel).
+                let a = if layer == Layer::Tiled {
+                    self.area
+                } else {
+                    self.output
+                };
                 assert!(
                     !(zones.left && rect.x <= a.x
                         || zones.right && rect.right() >= a.right()
                         || zones.top && rect.y <= a.y
                         || zones.bottom && rect.bottom() >= a.bottom()),
-                    "{window:?}: a resize zone on the output boundary"
+                    "{window:?}: a resize zone on the boundary of {a:?}"
                 );
+                // A snapped or maximized window keeps its zones against a panel.
+                if layer != Layer::Tiled && layer != Layer::Fullscreen {
+                    let o = self.output;
+                    assert!(
+                        (zones.left || rect.x <= o.x)
+                            && (zones.right || rect.right() >= o.right())
+                            && (zones.top || rect.y <= o.y)
+                            && (zones.bottom || rect.bottom() >= o.bottom()),
+                        "{window:?}: a floating window lost a zone away from the output edge"
+                    );
+                }
+            }
+            // Everything but a fullscreen window lies inside the usable area.
+            if layer != Layer::Fullscreen {
+                let u = self.area;
+                if matches!(layer, Layer::Tiled | Layer::Maximized)
+                    || self.snapped_zone(window).is_some()
+                {
+                    assert!(
+                        rect.x >= u.x
+                            && rect.y >= u.y
+                            && rect.right() <= u.right()
+                            && rect.bottom() <= u.bottom(),
+                        "{window:?} ({layer:?}) at {rect:?} outside the usable area {u:?}"
+                    );
+                }
+            } else if !state.limits.is_fixed() {
+                assert_eq!(rect, self.output, "fullscreen covers the whole output");
             }
         }
         let drawn: Vec<WindowId> = self.stacking().iter().map(|(w, _, _)| *w).collect();
@@ -2219,5 +2309,96 @@ mod tests {
             assert!(!layout.snap_quarter(id(1), zone));
         }
         assert_eq!(layout.rect_of(id(1)), before);
+    }
+
+    /// A 30 px top panel on AREA.
+    const UNDER_TOP_PANEL: Rect = Rect::new(0, 30, 800, 570);
+
+    #[test]
+    fn tiles_and_maximize_use_the_usable_area_and_fullscreen_the_output() {
+        let mut layout = layout_with(2);
+        layout.set_geometry(AREA, UNDER_TOP_PANEL);
+        assert_eq!(rect(&layout, 1), Rect::new(0, 30, 400, 570));
+        assert_eq!(rect(&layout, 2), Rect::new(400, 30, 400, 570));
+        layout.set_maximized(id(1), true);
+        assert_eq!(layout.shown_rect(id(1)), Some(UNDER_TOP_PANEL));
+        layout.set_fullscreen(id(2), true);
+        assert_eq!(layout.shown_rect(id(2)), Some(AREA));
+        let size = |n| layout.presentation(id(n)).and_then(|p| p.size);
+        assert_ne!(size(1), size(2), "maximize and fullscreen differ");
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn snapped_and_maximized_windows_follow_the_usable_area() {
+        let mut layout = layout_with(2);
+        assert!(layout.snap(id(1), ZoneId::LEFT));
+        assert!(layout.snap(id(2), ZoneId::FULL));
+        layout.set_geometry(AREA, UNDER_TOP_PANEL);
+        assert_eq!(rect(&layout, 1), Rect::new(0, 30, 400, 570));
+        assert_eq!(rect(&layout, 2), UNDER_TOP_PANEL);
+        layout.set_geometry(AREA, AREA);
+        assert_eq!(rect(&layout, 1), Rect::new(0, 0, 400, 600));
+        assert_eq!(rect(&layout, 2), AREA);
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn a_panel_edge_keeps_its_border_and_only_a_tile_loses_its_zone_there() {
+        let mut layout = layout_with(2);
+        layout.set_geometry(AREA, UNDER_TOP_PANEL);
+        // Tile 1: left and bottom on the output edge, top against the panel.
+        let border = layout.decoration(id(1)).border;
+        assert_eq!(
+            (border.left, border.right, border.top, border.bottom),
+            (false, true, true, false)
+        );
+        let zones = layout.resize_zones(id(1));
+        assert_eq!(
+            (zones.left, zones.right, zones.top, zones.bottom),
+            (false, true, false, false),
+            "a tile has no zone against the panel"
+        );
+        // Snapped to the left half: a floating window keeps its zone on the panel edge.
+        assert!(layout.snap(id(2), ZoneId::LEFT));
+        let zones = layout.resize_zones(id(2));
+        assert_eq!(
+            (zones.left, zones.right, zones.top, zones.bottom),
+            (false, true, true, false)
+        );
+        let border = layout.decoration(id(2)).border;
+        assert!(border.top && !border.left && !border.bottom);
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn a_floating_window_under_a_new_top_panel_moves_down_and_stays() {
+        let mut layout = layout_with(1);
+        layout.toggle(id(1));
+        layout.set_floating_rect(id(1), Rect::new(100, 10, 300, 200));
+        layout.set_geometry(AREA, UNDER_TOP_PANEL);
+        assert_eq!(rect(&layout, 1), Rect::new(100, 30, 300, 200));
+        layout.set_geometry(AREA, AREA);
+        assert_eq!(
+            rect(&layout, 1),
+            Rect::new(100, 30, 300, 200),
+            "not moved back"
+        );
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn the_64_px_rule_counts_pixels_inside_the_usable_area() {
+        let mut layout = layout_with(1);
+        layout.toggle(id(1));
+        layout.set_floating_rect(id(1), Rect::new(100, 560, 300, 200));
+        // A 100 px bottom panel: at least 64 px must stay above it.
+        let above_panel = Rect::new(0, 0, 800, 500);
+        layout.set_geometry(AREA, above_panel);
+        assert_eq!(rect(&layout, 1), Rect::new(100, 436, 300, 200));
+        // A drag towards the panel stops at the same place.
+        layout.set_floating_rect(id(1), Rect::new(100, 590, 300, 200));
+        assert_eq!(rect(&layout, 1), Rect::new(100, 436, 300, 200));
+        layout.check_invariants();
     }
 }

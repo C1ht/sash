@@ -28,10 +28,10 @@ use crate::{
 
 const AREA: Rect = Rect::new(0, 0, 800, 600);
 /// Where `floating` puts the window (outer rectangle).
-const FLOAT: Rect = Rect::new(100, 100, 400, 300);
+pub(super) const FLOAT: Rect = Rect::new(100, 100, 400, 300);
 
 /// A client that negotiates decorations (asking for `mode`) before its first commit.
-fn decorated(
+pub(super) fn decorated(
     socket: &std::path::Path,
     mode: Option<DecorationMode>,
 ) -> (
@@ -50,7 +50,7 @@ fn decorated(
 }
 
 /// Floats window `id` at FLOAT.
-fn floating(server: &Remote, id: u64) {
+pub(super) fn floating(server: &Remote, id: u64) {
     server.on_server(move |h| {
         h.chord(&[ALT, F]);
         h.server
@@ -70,7 +70,7 @@ fn click(server: &Remote, x: f64, y: f64) {
     });
 }
 
-fn size(c: &TestClient, w: &TestWindow) -> (i32, i32) {
+pub(super) fn size(c: &TestClient, w: &TestWindow) -> (i32, i32) {
     c.config(w).expect("configured").size
 }
 

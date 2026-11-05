@@ -145,7 +145,11 @@ impl Sash {
     ) -> Option<Rectangle<i32, Logical>> {
         let root = find_popup_root_surface(popup).ok()?;
         let parent_origin = self.shown_origin(&root)? + get_popup_toplevel_coords(popup);
-        Some(place(positioner, parent_origin, self.windows.layout.area()))
+        Some(place(
+            positioner,
+            parent_origin,
+            self.windows.layout.output(),
+        ))
     }
 
     pub fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {

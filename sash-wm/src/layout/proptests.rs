@@ -7,9 +7,75 @@
 use proptest::prelude::*;
 
 use super::{
-    Direction, MIN_TILE, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId,
-    monitor::Layer, resize_zone,
+    Direction, Edges, MIN_TILE, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId,
+    layers::{self, LayerId, LayerSurface, Level, Margins},
+    monitor::Layer,
+    resize_zone,
 };
+
+/// What the operations change besides the layout: window ids and the output's layer
+/// surfaces (panels).
+#[derive(Default)]
+struct World {
+    next: u64,
+    panels: Vec<LayerSurface>,
+    /// Ids and mapping order of panels.
+    panel_serial: u64,
+}
+
+impl World {
+    /// Applies the output and the current panels to the layout in one update, as the
+    /// compositor does (`set_output_and_layers`).
+    fn apply_geometry(&self, layout: &mut MonitorLayout, output: Rect) {
+        let usable = layers::arrange(output, &self.panels).usable;
+        layout.set_geometry(output, usable);
+    }
+
+    fn add_panel(&mut self, mut panel: LayerSurface) {
+        self.panel_serial += 1;
+        panel.id = LayerId(self.panel_serial);
+        panel.mapped = self.panel_serial;
+        self.panels.push(panel);
+    }
+
+    fn change_panel(&mut self, index: usize, panel: LayerSurface) {
+        if self.panels.is_empty() {
+            return;
+        }
+        let i = index % self.panels.len();
+        let (id, mapped) = (self.panels[i].id, self.panels[i].mapped);
+        self.panels[i] = LayerSurface {
+            id,
+            mapped,
+            ..panel
+        };
+    }
+
+    fn remove_panel(&mut self, index: usize) {
+        if !self.panels.is_empty() {
+            let i = index % self.panels.len();
+            self.panels.remove(i);
+        }
+    }
+}
+
+/// A panel change.
+#[derive(Clone, Debug)]
+enum PanelOp {
+    Add(LayerSurface),
+    Change(usize, LayerSurface),
+    Remove(usize),
+}
+
+impl PanelOp {
+    fn apply(&self, world: &mut World) {
+        match self {
+            PanelOp::Add(panel) => world.add_panel(*panel),
+            PanelOp::Change(i, panel) => world.change_panel(*i, *panel),
+            PanelOp::Remove(i) => world.remove_panel(*i),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 enum Op {
@@ -57,6 +123,11 @@ enum Op {
     Cycle(usize),
     /// mod+right-drag on a tiled window from a 3x3 cell by (dx, dy).
     TiledDrag(usize, (u8, u8), i32, i32),
+    /// Panels appear, change or disappear.
+    Panels(Vec<PanelOp>),
+    /// An output resize (or mode change) and panel changes in the same frame: one
+    /// update.
+    ResizeWithPanels(Rect, Vec<PanelOp>),
 }
 
 /// A tiled resize never makes a tile smaller than min(MIN_TILE, its size before) on
@@ -95,6 +166,58 @@ fn area() -> impl Strategy<Value = Rect> {
         1 => (0..2i32, 0..2i32, 1..6i32, 1..6i32),
     ]
     .prop_map(|(x, y, w, h)| Rect::new(x, y, w, h))
+}
+
+/// A layer surface; mostly reserving panels on one edge, sometimes anything.
+fn panel() -> impl Strategy<Value = LayerSurface> {
+    let edge = prop_oneof![
+        Just("t"),
+        Just("b"),
+        Just("l"),
+        Just("r"),
+        Just("tlr"),
+        Just("blr"),
+        Just("ltb"),
+        Just("rtb"),
+        Just("tl"),
+        Just("lr"),
+        Just(""),
+        Just("tlrb"),
+    ];
+    (
+        edge,
+        prop_oneof![Just(Level::Top), Just(Level::Bottom), Just(Level::Overlay)],
+        (0u32..600, 0u32..600),
+        prop_oneof![4 => 1i32..700, 1 => Just(0), 1 => Just(-1)],
+        (-20i32..40, -20i32..40),
+    )
+        .prop_map(|(edge, level, size, exclusive, (m1, m2))| LayerSurface {
+            id: LayerId(0),
+            level,
+            anchor: Edges {
+                left: edge.contains('l'),
+                right: edge.contains('r'),
+                top: edge.contains('t'),
+                bottom: edge.contains('b'),
+            },
+            margin: Margins {
+                top: m1,
+                right: m2,
+                bottom: m1,
+                left: m2,
+            },
+            size,
+            exclusive,
+            mapped: 0,
+        })
+}
+
+fn panel_op() -> impl Strategy<Value = PanelOp> {
+    prop_oneof![
+        3 => panel().prop_map(PanelOp::Add),
+        2 => (any::<usize>(), panel()).prop_map(|(i, p)| PanelOp::Change(i, p)),
+        2 => any::<usize>().prop_map(PanelOp::Remove),
+    ]
 }
 
 fn size() -> impl Strategy<Value = (i32, i32)> {
@@ -136,6 +259,9 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (index, any::<bool>(), prop::option::of(any::<usize>()))
             .prop_map(|(i, f, p)| Op::SetForced(i, f, p)),
         1 => area().prop_map(Op::SetArea),
+        3 => prop::collection::vec(panel_op(), 1..4).prop_map(Op::Panels),
+        1 => (area(), prop::collection::vec(panel_op(), 1..4))
+            .prop_map(|(a, p)| Op::ResizeWithPanels(a, p)),
         1 => prop_oneof![Just(Mode::Tiled), Just(Mode::Floating)].prop_map(Op::SetDefault),
         3 => (index, 0..8u16).prop_map(|(i, z)| Op::Snap(i, z)),
         3 => (index, direction()).prop_map(|(i, d)| Op::SnapKey(i, d)),
@@ -155,7 +281,8 @@ fn pick(layout: &MonitorLayout, index: usize) -> Option<WindowId> {
     (!windows.is_empty()).then(|| windows[index % windows.len()])
 }
 
-fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
+fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
+    let next = &mut world.next;
     match op.clone() {
         Op::Open {
             forced,
@@ -309,7 +436,21 @@ fn apply(layout: &mut MonitorLayout, next: &mut u64, op: &Op) {
                 layout.set_forced(w, forced || fixed, parent);
             }
         }
-        Op::SetArea(area) => layout.set_area(area),
+        // An output resize keeps the panels.
+        Op::SetArea(area) => world.apply_geometry(layout, area),
+        Op::Panels(changes) => {
+            for change in &changes {
+                change.apply(world);
+            }
+            let output = layout.output();
+            world.apply_geometry(layout, output);
+        }
+        Op::ResizeWithPanels(area, changes) => {
+            for change in &changes {
+                change.apply(world);
+            }
+            world.apply_geometry(layout, area);
+        }
         Op::SetDefault(mode) => layout.set_default_mode(mode),
         Op::Snap(i, zone) => {
             if let Some(w) = pick(layout, i)
@@ -400,9 +541,9 @@ proptest! {
     #[test]
     fn random_operations_keep_invariants(area in area(), ops in prop::collection::vec(op(), 1..80)) {
         let mut layout = MonitorLayout::new(area);
-        let mut next = 0;
+        let mut world = World::default();
         for op in &ops {
-            apply(&mut layout, &mut next, op);
+            apply(&mut layout, &mut world, op);
             layout.check_invariants();
         }
     }
@@ -418,18 +559,19 @@ proptest! {
             (any::<usize>(), -2000..2000i32, -2000..2000i32).prop_map(|(i, w, h)| Op::ResizeBy(i, w, h)),
             any::<usize>().prop_map(Op::Focus),
             area().prop_map(Op::SetArea),
+            prop::collection::vec(panel_op(), 1..4).prop_map(Op::Panels),
         ], 0..20),
     ) {
         let mut layout = MonitorLayout::new(area);
-        let mut next = 0;
+        let mut world = World::default();
         for op in &setup {
-            apply(&mut layout, &mut next, op);
+            apply(&mut layout, &mut world, op);
         }
         layout.tile_all();
         let mut expected = layout.tree().clone();
         layout.float_all();
         for op in &between {
-            apply(&mut layout, &mut next, op);
+            apply(&mut layout, &mut world, op);
             layout.check_invariants();
         }
         layout.tile_all();
@@ -437,5 +579,94 @@ proptest! {
         expected.set_area(layout.area());
         prop_assert_eq!(layout.tree(), &expected);
         prop_assert_eq!(layout.tiled_rects(), expected.rects());
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    /// Windows already floating when a top panel appears are moved down just enough
+    /// to keep their top edge inside the usable area (size kept); when the panel goes
+    /// away they stay where they were moved (owner, after M13b step 1).
+    #[test]
+    fn floating_windows_under_a_new_top_panel(
+        area in (0..2i32, 0..2i32, 800..5000i32, 600..3000i32)
+            .prop_map(|(x, y, w, h)| Rect::new(x, y, w, h)),
+        setup in prop::collection::vec(op(), 0..40),
+        height in 1i32..300,
+    ) {
+        let mut layout = MonitorLayout::new(area);
+        let mut world = World::default();
+        for op in &setup {
+            if matches!(op, Op::SetArea(_) | Op::Panels(_) | Op::ResizeWithPanels(..)) {
+                continue;
+            }
+            apply(&mut layout, &mut world, op);
+        }
+        let plain: Vec<(WindowId, Rect)> = layout
+            .floating_rects()
+            .into_iter()
+            .filter(|(w, _)| layout.snapped_zone(*w).is_none())
+            .collect();
+        world.add_panel(LayerSurface {
+            id: LayerId(0),
+            level: Level::Top,
+            anchor: Edges { left: true, right: true, top: true, bottom: false },
+            margin: Margins::default(),
+            size: (0, height as u32),
+            exclusive: height,
+            mapped: 0,
+        });
+        world.apply_geometry(&mut layout, area);
+        layout.check_invariants();
+        let usable = layout.area();
+        let reserved = usable.y - area.y;
+        let mut moved = Vec::new();
+        for (w, before) in &plain {
+            let after = layout.rect_of(*w).expect("still floating");
+            prop_assert_eq!((after.w, after.h), (before.w, before.h), "size kept");
+            prop_assert!(after.y >= usable.y, "{:?} above the usable area", after);
+            if before.y >= usable.y {
+                prop_assert_eq!(after.y, before.y, "a window below the panel moved");
+            } else {
+                prop_assert!(reserved > 0);
+            }
+            moved.push((*w, after));
+        }
+        world.remove_panel(0);
+        world.apply_geometry(&mut layout, area);
+        layout.check_invariants();
+        for (w, at) in moved {
+            prop_assert_eq!(layout.rect_of(w), Some(at), "moved back after the panel went");
+        }
+    }
+
+    /// An output resize and panel changes in the same frame: one update gives a state
+    /// that keeps every invariant and depends only on the final output and panels, not
+    /// on the order the panels were listed in.
+    #[test]
+    fn a_resize_and_panel_changes_together_are_one_update(
+        area in area(),
+        setup in prop::collection::vec(op(), 0..40),
+        output in area(),
+        changes in prop::collection::vec(panel_op(), 1..6),
+    ) {
+        let mut layout = MonitorLayout::new(area);
+        let mut world = World::default();
+        for op in &setup {
+            apply(&mut layout, &mut world, op);
+        }
+        for change in &changes {
+            change.apply(&mut world);
+        }
+        let mut reversed = layout.clone();
+        let mut together = layout.clone();
+        world.apply_geometry(&mut together, output);
+        together.check_invariants();
+        prop_assert_eq!(together.output(), output);
+        prop_assert_eq!(together.area(), layers::arrange(output, &world.panels).usable);
+        world.panels.reverse();
+        world.apply_geometry(&mut reversed, output);
+        prop_assert_eq!(format!("{together:?}"), format!("{reversed:?}"));
     }
 }

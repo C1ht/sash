@@ -40,6 +40,7 @@ use crate::{
         Direction, Edges, Layer, Mode, MonitorLayout, NewWindow, Presentation, Rect, STEP,
         SizeLimits, TiledResize, WindowId, ZoneId,
         decor::{Decoration, Part},
+        layers::{self, LayerSurface},
         resize_rect, resize_zone, snap_to_edges, stop_top_edge,
     },
     popups::popups_of,
@@ -118,6 +119,12 @@ pub struct Windows {
     pub swallowed_buttons: Vec<u32>,
     /// When the oldest input whose effect is not on screen yet arrived (latency logging).
     pub input_pending_since: Option<Instant>,
+    /// The output in logical pixels.
+    output: Rect,
+    /// The output's layer surfaces (M13b step 3 fills this from the protocol).
+    layer_surfaces: Vec<LayerSurface>,
+    /// Their arrangement on the output.
+    pub arrangement: layers::Arrangement,
 }
 
 impl Windows {
@@ -131,6 +138,9 @@ impl Windows {
             fallback_armed: false,
             swallowed_buttons: Vec::new(),
             input_pending_since: None,
+            output: Rect::default(),
+            layer_surfaces: Vec::new(),
+            arrangement: layers::Arrangement::default(),
         }
     }
 
@@ -452,13 +462,48 @@ impl Sash {
         self.arrange();
     }
 
-    /// Sets the area the layout covers (the output, logical pixels) and re-arranges.
-    /// A real size change also re-constrains or dismisses popups.
+    /// Sets the output size (logical pixels) and re-arranges.
     pub fn set_layout_area(&mut self, size: Size<i32, Logical>) {
-        let area = Rect::new(0, 0, size.w, size.h);
-        let changed = self.windows.layout.area() != area;
+        let surfaces = self.windows.layer_surfaces.clone();
+        self.set_output_and_layers(size, surfaces);
+    }
+
+    /// Sets the output's layer surfaces and re-arranges.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "called by the layer-shell protocol from M13b step 3"
+        )
+    )]
+    pub fn set_layer_surfaces(&mut self, surfaces: Vec<LayerSurface>) {
+        let size = (self.windows.output.w, self.windows.output.h).into();
+        self.set_output_and_layers(size, surfaces);
+    }
+
+    /// The output size and its layer surfaces together, as one layout update and one
+    /// configure batch: a panel change in the same frame as an output resize gives one
+    /// result. A real change of the output or the usable area also re-constrains or
+    /// dismisses popups.
+    pub fn set_output_and_layers(&mut self, size: Size<i32, Logical>, surfaces: Vec<LayerSurface>) {
+        let output = Rect::new(0, 0, size.w, size.h);
+        let arrangement = layers::arrange(output, &surfaces);
+        for id in &arrangement.ignored {
+            if !self.windows.arrangement.ignored.contains(id) {
+                tracing::warn!(
+                    layer_surface = id.0,
+                    "exclusive zone ignored: it would reserve more than half the output \
+                     or leave less than 640x360"
+                );
+            }
+        }
+        let layout = &self.windows.layout;
+        let changed = layout.output() != output || layout.area() != arrangement.usable;
         record_context!(self, "output size");
-        self.windows.layout.set_area(area);
+        self.windows.layout.set_geometry(output, arrangement.usable);
+        self.windows.output = output;
+        self.windows.layer_surfaces = surfaces;
+        self.windows.arrangement = arrangement;
         self.arrange();
         if changed {
             self.reconstrain_popups(true);
@@ -698,7 +743,7 @@ impl Sash {
         visible.decoration.hit(
             visible.outer,
             layout.resize_zones(visible.id),
-            layout.area(),
+            layout.output(),
             x,
             y,
         )
@@ -840,7 +885,9 @@ impl Sash {
                 let moved = Rect::new(from.x + dx, from.y + dy, w, h);
                 let fixed = layout.limits(id).is_fixed();
                 drag.zone = (!fixed)
-                    .then(|| layout.zones().at(area, px, py).map(|z| z.id))
+                    // Triggers at the true output edge; the zone's rectangle is in
+                    // the usable area.
+                    .then(|| layout.zones().at(layout.output(), px, py).map(|z| z.id))
                     .flatten();
                 if free {
                     moved
