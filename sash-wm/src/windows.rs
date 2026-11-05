@@ -47,6 +47,21 @@ use crate::{
     state::Sash,
 };
 
+/// The inner gap (layout::GAP, 8 px). Debug builds only: SASH_DEBUG_GAP_PX (0 to 64)
+/// overrides it, to compare by eye; no setting.
+fn gap_px() -> i32 {
+    #[cfg(debug_assertions)]
+    if let Some(px) = std::env::var("SASH_DEBUG_GAP_PX")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|px| (0..=64).contains(px))
+    {
+        tracing::info!(px, "SASH_DEBUG_GAP_PX: inner gap");
+        return px;
+    }
+    crate::layout::GAP
+}
+
 /// How long drag configures wait for a frame before they are sent anyway.
 const FRAME_FALLBACK: Duration = Duration::from_millis(16);
 
@@ -129,8 +144,10 @@ pub struct Windows {
 
 impl Windows {
     pub fn new() -> Self {
+        let mut layout = MonitorLayout::new(Rect::default());
+        layout.set_gap(gap_px());
         Self {
-            layout: MonitorLayout::new(Rect::default()),
+            layout,
             list: Vec::new(),
             next_id: 1,
             drag: None,

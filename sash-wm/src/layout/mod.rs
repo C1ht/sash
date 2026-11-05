@@ -30,7 +30,7 @@ pub use bsp::OutlineNode;
 pub use bsp::{BspTree, Side, SplitHandle};
 pub use floating::FloatingLayout;
 pub use geometry::{Edges, SizeLimits, resize_rect, resize_zone, stop_top_edge};
-pub use monitor::{Layer, MonitorLayout, NewWindow, Presentation, STEP, TiledResize};
+pub use monitor::{GAP, Layer, MonitorLayout, NewWindow, Presentation, STEP, TiledResize};
 pub use snap::{ZoneId, snap_to_edges};
 
 /// Identifies a window in a layout. Assigned by the compositor, never reused.

@@ -128,6 +128,8 @@ enum Op {
     /// An output resize (or mode change) and panel changes in the same frame: one
     /// update.
     ResizeWithPanels(Rect, Vec<PanelOp>),
+    /// The inner gap (M15b; the debug override in a real session).
+    SetGap(i32),
 }
 
 /// A tiled resize never makes a tile smaller than min(MIN_TILE, its size before) on
@@ -263,6 +265,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (area(), prop::collection::vec(panel_op(), 1..4))
             .prop_map(|(a, p)| Op::ResizeWithPanels(a, p)),
         1 => prop_oneof![Just(Mode::Tiled), Just(Mode::Floating)].prop_map(Op::SetDefault),
+        1 => prop_oneof![Just(0i32), Just(8), 1i32..65].prop_map(Op::SetGap),
         3 => (index, 0..8u16).prop_map(|(i, z)| Op::Snap(i, z)),
         3 => (index, direction()).prop_map(|(i, d)| Op::SnapKey(i, d)),
         3 => (index, 0..4u8).prop_map(|(i, q)| Op::SnapQuarter(i, q)),
@@ -445,6 +448,7 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
             let output = layout.output();
             world.apply_geometry(layout, output);
         }
+        Op::SetGap(gap) => layout.set_gap(gap),
         Op::ResizeWithPanels(area, changes) => {
             for change in &changes {
                 change.apply(world);
@@ -539,8 +543,13 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(1500))]
 
     #[test]
-    fn random_operations_keep_invariants(area in area(), ops in prop::collection::vec(op(), 1..80)) {
+    fn random_operations_keep_invariants(
+        area in area(),
+        gap in prop_oneof![Just(0i32), Just(8), 1i32..65],
+        ops in prop::collection::vec(op(), 1..80),
+    ) {
         let mut layout = MonitorLayout::new(area);
+        layout.set_gap(gap);
         let mut world = World::default();
         for op in &ops {
             apply(&mut layout, &mut world, op);

@@ -102,6 +102,9 @@ impl Harness {
         server
             .state
             .enable_dmabuf(FAKE_MAIN_DEVICE, formats, Box::new(|_| true));
+        // The tests written before gaps (M15b) expect exact tiles: the harness starts
+        // with no gap; the gap tests set it (tests/gaps.rs).
+        server.state.windows.layout.set_gap(0);
         let output = output::create(&mut server.state, "headless", (800, 600).into());
         server.state.set_layout_area((800, 600).into());
 

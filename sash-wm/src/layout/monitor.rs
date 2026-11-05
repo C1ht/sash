@@ -131,7 +131,13 @@ pub struct MonitorLayout {
     zones: Zones,
     /// At most one fullscreen window per monitor.
     fullscreen: Option<WindowId>,
+    /// The inner gap between tiles and snapped windows (M15b): their visible
+    /// rectangles are inset on edges inside the usable area.
+    gap: i32,
 }
+
+/// The inner gap (owner, M15b): a constant; debug builds may override it.
+pub const GAP: i32 = 8;
 
 impl MonitorLayout {
     pub fn new(area: Rect) -> Self {
@@ -146,6 +152,50 @@ impl MonitorLayout {
             history: Vec::new(),
             zones: Zones::default(),
             fullscreen: None,
+            // The compositor sets GAP (windows.rs); a bare layout has none.
+            gap: 0,
+        }
+    }
+
+    #[cfg(feature = "debug-record")]
+    pub fn gap(&self) -> i32 {
+        self.gap
+    }
+
+    /// Sets the inner gap (never negative).
+    pub fn set_gap(&mut self, gap: i32) {
+        self.gap = gap.max(0);
+    }
+
+    /// `rect` with the gap on its edges inside the usable area: floor(gap / 2) on the
+    /// left and top, the rest on the right and bottom, so two neighbours are exactly
+    /// `gap` apart. Never less than 1 px wide or high (unless `rect` already is).
+    pub fn inset(&self, rect: Rect) -> Rect {
+        let edges = self.edges_inside(rect, self.area);
+        let (head, tail) = (self.gap / 2, self.gap - self.gap / 2);
+        let axis = |start: i32, len: i32, lead: bool, trail: bool| {
+            let a = if lead { head } else { 0 };
+            let b = if trail { tail } else { 0 };
+            let shrunk = (len - a - b).max(len.min(1));
+            (start + a.min(len - shrunk), shrunk)
+        };
+        let (x, w) = axis(rect.x, rect.w, edges.left, edges.right);
+        let (y, h) = axis(rect.y, rect.h, edges.top, edges.bottom);
+        Rect::new(x, y, w, h)
+    }
+
+    /// Whether the window keeps gaps: tiles (not maximized) and snapped windows; plain
+    /// floating, maximized and fullscreen windows do not.
+    fn gapped(&self, window: WindowId) -> bool {
+        let Some(state) = self.windows.get(&window) else {
+            return false;
+        };
+        if self.fullscreen == Some(window) {
+            return false;
+        }
+        match state.mode() {
+            Mode::Tiled => !state.maximized_tiled,
+            Mode::Floating => self.snapped_zone(window).is_some(),
         }
     }
 
@@ -302,7 +352,7 @@ impl MonitorLayout {
             Mode::Tiled => self.shown_rect(window),
             Mode::Floating => self
                 .snapped_zone(window)
-                .and_then(|_| self.floating.rect_of(window)),
+                .and_then(|_| self.shown_rect(window)),
         }
     }
 
@@ -558,7 +608,12 @@ impl MonitorLayout {
         if state.maximized_tiled && state.mode() == Mode::Tiled {
             return Some(self.area);
         }
-        self.rect_of(window)
+        let rect = self.rect_of(window)?;
+        Some(if self.gapped(window) {
+            self.inset(rect)
+        } else {
+            rect
+        })
     }
 
     /// Behind a fixed-size fullscreen window, an opaque backdrop covers the output.
@@ -581,7 +636,7 @@ impl MonitorLayout {
             .rects()
             .into_iter()
             .filter(|(w, _)| Some(*w) != fullscreen && !maximized(w))
-            .map(|(w, r)| (w, r, Layer::Tiled))
+            .map(|(w, r)| (w, self.inset(r), Layer::Tiled))
             .collect();
         let mut maxed: Vec<(WindowId, Rect)> = self
             .tree
@@ -600,7 +655,10 @@ impl MonitorLayout {
                 .rects()
                 .into_iter()
                 .filter(|(w, _)| Some(*w) != fullscreen)
-                .map(|(w, r)| (w, r, Layer::Floating)),
+                .map(|(w, r)| {
+                    let r = if self.gapped(w) { self.inset(r) } else { r };
+                    (w, r, Layer::Floating)
+                }),
         );
         if let Some(f) = fullscreen
             && let Some(rect) = self.shown_rect(f)
@@ -658,7 +716,8 @@ impl MonitorLayout {
                 ..plain
             });
         }
-        let rect = self.rect_of(window);
+        // The visible rectangle (inset by the gap for tiles and snapped windows).
+        let rect = self.shown_rect(window);
         Some(match state.mode() {
             Mode::Tiled => Presentation {
                 size: rect.and_then(size),
@@ -1284,6 +1343,75 @@ impl MonitorLayout {
                 }
             } else if !state.limits.is_fixed() {
                 assert_eq!(rect, self.output, "fullscreen covers the whole output");
+            }
+        }
+        // Gaps (M15b): a gapped window's visible rectangle lies in its layout rectangle,
+        // inset by the rule only on edges inside the usable area; others are untouched.
+        let (head, tail) = (self.gap / 2, self.gap - self.gap / 2);
+        for (window, shown, layer) in self.stacking() {
+            let layout_rect = match layer {
+                Layer::Tiled | Layer::Floating => self.rect_of(window).expect("placed"),
+                _ => continue,
+            };
+            if !self.gapped(window) {
+                assert_eq!(
+                    shown, layout_rect,
+                    "{window:?}: an ungapped window is not inset"
+                );
+                continue;
+            }
+            let inside = self.edges_inside(layout_rect, self.area);
+            let l = shown.x - layout_rect.x;
+            let t = shown.y - layout_rect.y;
+            let r = layout_rect.right() - shown.right();
+            let b = layout_rect.bottom() - shown.bottom();
+            assert!(
+                l >= 0 && t >= 0 && r >= 0 && b >= 0,
+                "{window:?}: {shown:?} outside {layout_rect:?}"
+            );
+            assert!(shown.w >= layout_rect.w.min(1) && shown.h >= layout_rect.h.min(1));
+            // Exact unless the window is too small for the whole gap.
+            if layout_rect.w > self.gap + 1 {
+                assert_eq!(
+                    (l, r),
+                    (
+                        if inside.left { head } else { 0 },
+                        if inside.right { tail } else { 0 }
+                    ),
+                    "{window:?}: horizontal inset of {shown:?} in {layout_rect:?}"
+                );
+            }
+            if layout_rect.h > self.gap + 1 {
+                assert_eq!(
+                    (t, b),
+                    (
+                        if inside.top { head } else { 0 },
+                        if inside.bottom { tail } else { 0 }
+                    ),
+                    "{window:?}: vertical inset of {shown:?} in {layout_rect:?}"
+                );
+            }
+        }
+        // Two tiles side by side (or one above the other) are exactly `gap` apart.
+        let tiles: Vec<(WindowId, Rect, Rect)> = self
+            .tree
+            .rects()
+            .into_iter()
+            .filter(|(w, _)| self.gapped(*w) && self.mode(*w) == Some(Mode::Tiled))
+            .filter_map(|(w, r)| Some((w, r, self.shown_rect(w)?)))
+            .collect();
+        for (a, ra, va) in &tiles {
+            for (b, rb, vb) in &tiles {
+                let big = |r: &Rect| r.w > self.gap + 1 && r.h > self.gap + 1;
+                if a == b || !big(ra) || !big(rb) {
+                    continue;
+                }
+                if ra.right() == rb.x && ra.y < rb.bottom() && rb.y < ra.bottom() {
+                    assert_eq!(vb.x - va.right(), self.gap, "{a:?} | {b:?}");
+                }
+                if ra.bottom() == rb.y && ra.x < rb.right() && rb.x < ra.right() {
+                    assert_eq!(vb.y - va.bottom(), self.gap, "{a:?} / {b:?}");
+                }
             }
         }
         let drawn: Vec<WindowId> = self.stacking().iter().map(|(w, _, _)| *w).collect();
@@ -2431,5 +2559,97 @@ mod tests {
         layout.set_floating_rect(id(1), Rect::new(100, 590, 300, 200));
         assert_eq!(rect(&layout, 1), Rect::new(100, 436, 300, 200));
         layout.check_invariants();
+    }
+
+    #[test]
+    fn gaps_inset_interior_edges_by_floor_and_remainder() {
+        let mut layout = layout_with(2);
+        layout.set_gap(8);
+        assert_eq!(layout.shown_rect(id(1)), Some(Rect::new(0, 0, 396, 600)));
+        assert_eq!(layout.shown_rect(id(2)), Some(Rect::new(404, 0, 396, 600)));
+        // The layout rectangles stay exact.
+        assert_eq!(rect(&layout, 1), Rect::new(0, 0, 400, 600));
+        layout.set_gap(7);
+        assert_eq!(
+            layout.shown_rect(id(1)),
+            Some(Rect::new(0, 0, 396, 600)),
+            "4 on the right"
+        );
+        assert_eq!(
+            layout.shown_rect(id(2)),
+            Some(Rect::new(403, 0, 397, 600)),
+            "3 on the left"
+        );
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn gaps_stop_at_the_usable_area_and_skip_floating_maximized_fullscreen() {
+        let mut layout = layout_with(3);
+        layout.set_gap(8);
+        layout.set_geometry(AREA, UNDER_TOP_PANEL);
+        // A panel edge is the usable area's boundary: no gap there.
+        for n in 1..=3 {
+            let shown = layout.shown_rect(id(n)).expect("shown");
+            let tile = rect(&layout, n);
+            if tile.y == UNDER_TOP_PANEL.y {
+                assert_eq!(shown.y, tile.y, "window {n}: no gap against the panel");
+            }
+        }
+        // Snapped: inset like a tile; maximized: the usable area.
+        assert!(layout.snap(id(1), ZoneId::LEFT));
+        assert_eq!(layout.shown_rect(id(1)), Some(Rect::new(0, 30, 396, 570)));
+        assert!(layout.snap(id(1), ZoneId::FULL));
+        assert_eq!(layout.shown_rect(id(1)), Some(UNDER_TOP_PANEL));
+        // Plain floating: its own rectangle.
+        layout.unsnap_restore(id(1));
+        layout.set_floating_rect(id(1), Rect::new(100, 100, 300, 200));
+        assert_eq!(
+            layout.shown_rect(id(1)),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+        // Fullscreen: the whole output.
+        layout.set_fullscreen(id(2), true);
+        assert_eq!(layout.shown_rect(id(2)), Some(AREA));
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn a_gap_never_shrinks_a_window_below_one_pixel() {
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 9, 9));
+        for n in 1..=6 {
+            layout.open(id(n), NewWindow::default());
+        }
+        layout.set_gap(64);
+        for (w, r, _) in layout.stacking() {
+            assert!(
+                r.w >= 1.min(rect(&layout, w.0).w) && r.h >= 1.min(rect(&layout, w.0).h),
+                "{w:?} {r:?}"
+            );
+        }
+        layout.check_invariants();
+    }
+
+    #[test]
+    fn resize_zones_and_hits_follow_the_visible_rectangle() {
+        let mut layout = layout_with(2);
+        layout.set_gap(8);
+        // The gap belongs to nothing; the tiles are hit inside their visible rectangles.
+        assert_eq!(layout.window_at(398, 300), None);
+        assert_eq!(layout.window_at(395, 300), Some(id(1)));
+        assert_eq!(layout.window_at(404, 300), Some(id(2)));
+        // Rule A still uses the layout rectangles.
+        assert_eq!(layout.tile_at(398, 300), Some(id(1)));
+        // Tile 1's right zone is inside its visible rectangle.
+        let shown = layout.shown_rect(id(1)).expect("shown");
+        let zones = layout.resize_zones(id(1));
+        assert!(zones.right && !zones.left);
+        let hit = layout
+            .decoration(id(1))
+            .hit(shown, zones, AREA, shown.right() - 2, 300);
+        assert!(
+            matches!(hit, Some(super::super::decor::Part::Resize(e)) if e.right),
+            "{hit:?}"
+        );
     }
 }

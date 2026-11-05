@@ -240,4 +240,41 @@ mod tests {
         assert_eq!(at(&c, 400, 111), DECORATION, "the client rectangle's top");
         assert_eq!(at(&c, 400, 120), FLOATING_FILL);
     }
+
+    /// Gaps (M15b) show in the outline screenshot: between two tiles 8 px apart the
+    /// background shows, drawn from the layout's visible rectangles.
+    #[test]
+    fn outline_screenshots_show_the_gaps() {
+        use crate::layout::{MonitorLayout, NewWindow};
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 800, 600));
+        layout.open(WindowId(1), NewWindow::default());
+        layout.open(WindowId(2), NewWindow::default());
+        layout.set_gap(8);
+        let windows: Vec<Outline> = layout
+            .stacking()
+            .into_iter()
+            .map(|(id, rect, layer)| Outline {
+                id,
+                rect,
+                layer,
+                focused: false,
+                decoration: layout.decoration(id),
+            })
+            .collect();
+        let c = draw((800, 600), &windows, None, 1920);
+        let at = |x: usize, y: usize| {
+            let i = (y * c.width + x) * 4;
+            [
+                c.pixels[i],
+                c.pixels[i + 1],
+                c.pixels[i + 2],
+                c.pixels[i + 3],
+            ]
+        };
+        for x in 396..404 {
+            assert_eq!(at(x, 300), BACKGROUND, "x {x}: the gap");
+        }
+        assert_ne!(at(395, 300), BACKGROUND, "tile 1's edge");
+        assert_ne!(at(404, 300), BACKGROUND, "tile 2's edge");
+    }
 }

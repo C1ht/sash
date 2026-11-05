@@ -53,7 +53,9 @@ Compositor-level data only, kept in a 60-second ring buffer in memory:
   (outline screenshots draw no layer surfaces);
 - decorations (M11b): `decoration_mode` (window, what the client asked for; the answer
   is always server_side) and `decoration_button` (window, close or maximize);
-- every layout operation, with the layout before and after;
+- every layout operation, with the layout before and after (with the inner gap in
+  effect, M15b; a replay applies it and does not compare it; bundles from before gaps
+  replay with no gap);
 - clipboard and drag and drop (M10): `selection_set` and `selection_cleared` (with the
   window and a reason), `dnd_start`, `dnd_drop` (window, action) and `dnd_cancel` (a
   reason); never MIME type names, sizes or the data itself;

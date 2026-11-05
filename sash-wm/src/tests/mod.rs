@@ -9,6 +9,7 @@ mod decorations;
 mod dmabuf;
 mod dnd;
 mod floating;
+mod gaps;
 mod gpu;
 mod harness;
 mod layer_shell;
