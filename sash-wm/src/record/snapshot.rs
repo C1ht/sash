@@ -2,19 +2,13 @@
 
 //! What the recorder writes about the layout: a compact snapshot for every layout
 //! operation (before and after), and the full state.json of a bundle. Compositor-level
-//! data only: window titles are left out (they can carry what was typed).
+//! data only: window titles and app ids are left out (client text: they can carry what
+//! was typed; owner, M14).
 
-use smithay::{
-    utils::Logical,
-    wayland::{compositor, shell::xdg::XdgToplevelSurfaceData},
-};
+use smithay::utils::Logical;
 
 use super::Json;
-use crate::{
-    layout::{OutlineNode, WindowId},
-    state::Sash,
-    windows::DragKind,
-};
+use crate::{layout::OutlineNode, state::Sash, windows::DragKind};
 
 /// The BSP tree in preorder, with split directions and exact ratios.
 fn tree(state: &Sash) -> Json {
@@ -100,23 +94,6 @@ pub fn layout_json(state: &Sash) -> Json {
     ])
 }
 
-fn app_id(state: &Sash, id: WindowId) -> Json {
-    let Some(toplevel) = state
-        .windows
-        .by_id(id)
-        .and_then(|m| m.window.toplevel().cloned())
-    else {
-        return Json::Null;
-    };
-    compositor::with_states(toplevel.wl_surface(), |states| {
-        states
-            .data_map
-            .get::<XdgToplevelSurfaceData>()
-            .and_then(|data| data.lock().ok().and_then(|d| d.app_id.clone()))
-    })
-    .into()
-}
-
 /// A bundle's state.json: the layout tree, every window, z-order, focus, the window
 /// under the pointer, the active grab, the output mode.
 pub fn state_json(state: &Sash) -> Json {
@@ -166,11 +143,6 @@ pub fn state_json(state: &Sash) -> Json {
                 ("refresh_mhz", m.refresh.into()),
             ])
         });
-    let app_ids: Vec<Json> = state
-        .windows
-        .all()
-        .map(|m| Json::obj([("id", m.id.into()), ("app_id", app_id(state, m.id))]))
-        .collect();
     Json::obj([
         ("modifier", format!("{:?}", state.keybinds.modifier).into()),
         ("output_mode", output.into()),
@@ -195,7 +167,6 @@ pub fn state_json(state: &Sash) -> Json {
         ("popup_grab_window", popup_grab.into()),
         ("z_order_bottom_to_top", z.into()),
         ("windows", windows(state)),
-        ("app_ids", app_ids.into()),
         ("tree", tree(state)),
     ])
 }

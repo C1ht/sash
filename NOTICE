@@ -3,3 +3,9 @@ Copyright 2026 The Sash Authors
 
 This product is licensed under the Apache License, Version 2.0.
 See the LICENSE file for the full license text.
+
+This product bundles the Manrope typeface (sash-text/fonts/Manrope[wght].ttf):
+Copyright 2018 The Manrope Project Authors (https://github.com/googlefonts/manrope).
+It is licensed under the SIL Open Font License, Version 1.1; the license text is in
+sash-text/fonts/OFL.txt, next to the font, and is installed with it. The font is not
+sold on its own.

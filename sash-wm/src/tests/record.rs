@@ -355,3 +355,81 @@ fn clipboard_and_drag_data_never_reach_a_bundle() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Window titles and app ids are untrusted client text (owner, M14): none of it reaches
+/// a bundle, its screenshots or the log, whatever the client sets and changes.
+#[test]
+fn titles_and_app_ids_never_reach_a_bundle() {
+    const TITLE: &str = "TITLE-MARKER-7f3a";
+    const APP_ID: &str = "APPID-MARKER-7f3a";
+    static LOG: std::sync::Once = std::sync::Once::new();
+    LOG.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("sash_wm=trace,smithay=debug")
+            .with_writer(record::LogWriter::default)
+            .try_init();
+    });
+    let dir = record::tests::scratch_dir("title-marker");
+    let mut harness = Harness::new();
+    let config = Config {
+        dir: dir.clone(),
+        session: false,
+        keys_full: false,
+        screenshots_full: false,
+    };
+    harness.server.state.recorder = Some(Recorder::new(config, Instant::now()).unwrap());
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c = TestClient::connect(&socket);
+        let w = c.create_window_without_commit();
+        w.toplevel.set_title(TITLE.into());
+        w.toplevel.set_app_id(APP_ID.into());
+        w.surface.commit();
+        let seen = c.events.configures;
+        c.dispatch_until("configure", |e| e.configures > seen);
+        c.ack_and_commit(&w);
+        for i in 0..5 {
+            w.toplevel.set_title(format!("{TITLE} {i}"));
+            w.toplevel.set_app_id(format!("{APP_ID}.{i}"));
+            w.surface.commit();
+            c.roundtrip();
+        }
+        // A second window floats and snaps (layout changes take screenshots).
+        let mut d = TestClient::connect(&socket);
+        let w2 = d.create_window_without_commit();
+        w2.toplevel.set_title(TITLE.into());
+        w2.surface.commit();
+        let seen = d.events.configures;
+        d.dispatch_until("configure", |e| e.configures > seen);
+        d.ack_and_commit(&w2);
+        server.on_server(|h| {
+            h.chord(&[KEY_ALT, KEY_F]);
+            h.chord(&[KEY_ALT, KEY_F11]);
+            record::flush_bundle(&mut h.server.state);
+        });
+    });
+    let mut files = Vec::new();
+    files_under(&dir, &mut files);
+    assert!(
+        files.iter().any(|f| f.ends_with("log.txt")),
+        "the log was written"
+    );
+    assert!(
+        files
+            .iter()
+            .any(|f| f.extension().is_some_and(|e| e == "png")),
+        "screenshots were written"
+    );
+    for file in &files {
+        let bytes = fs::read(file).unwrap();
+        for marker in [&b"MARKER-7f3a"[..], b"TITLE-", b"APPID-"] {
+            assert!(
+                !bytes.windows(marker.len()).any(|w| w == marker),
+                "{} contains {:?}",
+                file.display(),
+                String::from_utf8_lossy(marker)
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}

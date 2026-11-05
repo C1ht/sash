@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sash-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Shaping, glyph cache and CPU rasterisation of one line of text (no Wayland, no UI)"
+# The bundled typeface (fonts/) is under the SIL Open Font License 1.1, see fonts/OFL.txt.
+
+[dependencies]
+# Shaping, scaling and rasterisation (owner, after M14 step 1: swash alone).
+swash = "=0.2.10"
+
+[dev-dependencies]
+png = "0.18"
+proptest = "1"

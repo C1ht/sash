@@ -11,7 +11,7 @@ OUT=$(realpath "$1")
 SRC=$(mktemp -d)
 ISO_DIR=$(mktemp -d)
 cp -r "$ROOT"/Cargo.toml "$ROOT"/Cargo.lock "$ROOT"/rust-toolchain.toml "$ROOT"/sash-wm \
-    "$ROOT"/sash-ui "$SRC"/
+    "$ROOT"/sash-ui "$ROOT"/sash-text "$SRC"/
 podman run --rm -v "$SRC":/src:ro,Z -v "$ISO_DIR":/out:Z docker.io/library/debian:trixie bash -c '
 set -e
 apt-get update -qq

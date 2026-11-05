@@ -2,10 +2,17 @@
 
 [workspace]
 resolver = "3"
-members = ["sash-wm", "sash-ui"]
+members = ["sash-wm", "sash-ui", "sash-text"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
+
+# swash 0.2.10 computes `seqlen - 1` for a multiple substitution that deletes a glyph
+# (OpenType allows it; Noto Color Emoji uses it): in release builds the wrap gives the
+# intended result, in debug builds the overflow check panics. Debug builds use release
+# arithmetic for swash only (found by sash-text's property tests, M14).
+[profile.dev.package.swash]
+overflow-checks = false

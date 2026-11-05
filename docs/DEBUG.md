@@ -83,9 +83,10 @@ A bundle is a directory `bundle-<UTC time>/` inside `SASH_DEBUG_RECORD`:
 
 - `events.jsonl`: one JSON object per line, `"t"` in microseconds of the monotonic clock
   since sash-wm started, `"kind"` and its fields;
-- `state.json`: the layout tree (split directions and ratios), every window's rectangle,
-  mode and app_id (no titles: they can carry what was typed), the z-order, focus and
-  focus history, the window under the pointer, the active grab, the output mode;
+- `state.json`: the layout tree (split directions and ratios), every window's rectangle
+  and mode (no titles and no app ids: client text can carry what was typed; owner,
+  M14), the z-order, focus and focus history, the window under the pointer, the
+  active grab, the output mode;
 - `screenshots/*.png`;
 - `log.txt`: the last 60 seconds of sash-wm's log.
 
