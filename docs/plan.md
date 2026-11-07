@@ -428,7 +428,7 @@ Before daily use (owner, after M9 stage B): **Xcursor theme loading.** On DRM, s
 
 ### Window manager requirements, after the design phase (owner, 2026-11-07; recorded only, not implemented)
 
-Recorded as given by the owner. Nothing here is built yet; CLAUDE.md is unchanged until the owner approves the rule text (the conflicts with today's rules are listed at the end).
+Recorded as given by the owner. Nothing here is built yet. The rules are in CLAUDE.md ("Window manager requirements (owner, after the design phase)", owner-approved), and each older rule listed at the end is marked superseded there.
 
 **Decisions**
 
@@ -464,7 +464,7 @@ Recorded as given by the owner. Nothing here is built yet; CLAUDE.md is unchange
 - b. Minimize in tiling. Proposal: the tile is released to its neighbour; restoring reinserts the window by the placement rule (the pointer), with the last slot remembered as a fallback; the same for snapped groups.
 - c. Raise on focus in floating mode. Proposal: no (raise on click).
 
-**Rules in CLAUDE.md these change, for the owner's rule text later** (listed, not edited):
+**Rules in CLAUDE.md these change** (each marked superseded there):
 - "Gaps (M15b, owner)": inner gaps only, no outer gap; a maximized window fills the usable area; the corner rule ("a window corner is rounded unless both of its edges lie on the usable area's boundary"). Decision 1 replaces these.
 - "Decorations (M11b, owner)", "Output edges": no border and no resize zone on edges on the output boundary. Decision 1 removes the border part; whether the resize zones on those edges come back is not stated.
 - "Settings and configuration": the closed list gains dock position and focus follows cursor (decision 2).

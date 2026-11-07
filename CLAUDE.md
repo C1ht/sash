@@ -60,6 +60,73 @@ change this file without the owner's approval.
 - Closing a floating window removes its placeholder; its sibling takes
   the parent's place.
 
+## Window manager requirements (owner, after the design phase)
+
+- Decided, not built yet (docs/plan.md, "Window manager requirements,
+  after the design phase"). Where an older rule below says otherwise, it
+  is marked "Superseded" and this section wins once built; until then
+  the code follows the old rule.
+- Gaps and edges:
+  - Outer gap 13 px, inner gap 8 px, everywhere: tiling, snap zones and
+    maximize. Fullscreen has no gaps.
+  - No corner rule and no screen-edge border rule: every corner is
+    rounded and every edge has the hairline border.
+  - The dock's zone is 13 + 97 = 110 px for a dock at the bottom, left or
+    right; windows start 123 px from that screen edge (zone plus outer
+    gap).
+  - Unfocused windows are dimmed: 14% in the dark theme, 4% in the light
+    theme.
+- Two new settings on the closed list (see "Settings and
+  configuration"): dock position (bottom, left, right; per monitor) and
+  focus follows cursor (default on).
+- Focus follows the cursor, sloppy (when the setting is on):
+  - The pointer over a gap, the wallpaper or the dock keeps the current
+    focus.
+  - Focus changes only on real pointer motion: window geometry changing
+    under a still pointer never changes focus; no pointer warp; a
+    keyboard focus move stays until the pointer enters a different
+    window.
+  - Popups, the launcher, the lock screen and move/resize grabs keep
+    focus.
+  - The same rule across monitors.
+- New tiled windows open at the pointer, on the monitor under the
+  pointer:
+  - The diagonals of the tile under the pointer choose the side (top,
+    bottom, left, right); a centre zone (23.6% each way) splits the
+    longer side. The split is 50:50.
+  - Minimum tile 233 x 144 px: if a split would go below it, the other
+    axis is tried, else the window floats.
+  - Floating windows are not targets (the tile beneath is used). The
+    pointer in a gap uses the nearest tile; over the dock or outside the
+    usable area, the focused tile; a pointer that never moved, the
+    focused tile.
+  - The same rule for drag and drop.
+  - Dialogs, windows with a parent and fixed-size windows keep the float
+    rules (centred on the parent) and are never placed by this rule.
+- Only windows the user started take the pointer placement and focus:
+  started from the dock, the launcher or a keybind, through an
+  xdg-activation token from sash-shell. Tokens are single use and expire
+  after 34 s (a proposal, to confirm when built). Other windows open
+  unfocused in the default spot and show needs-attention in the dock.
+- Snapped windows in floating mode form a group: a tree of zones using
+  the same rectangle code as tiling, so the gaps are identical by
+  construction.
+  - Dragging a shared edge moves the neighbours with the same gaps;
+    adjacency comes from the zone tree, never from windows that happen
+    to touch. Keyboard resize follows the same rule.
+  - Resizing an outer edge, or moving the window, unsnaps it; an
+    unsnapped window is no longer affected; the space it left stays
+    empty and the neighbours stay as they are.
+  - Minimum sizes and client minimum sizes stop the edge.
+  - Floating windows that overlap the group are not part of it.
+  - Groups are per workspace and monitor.
+  - Snap zones are tree-compatible (halves, thirds, quarters), never
+    freeform.
+- Open questions (not decided; docs/plan.md has the proposals): GUI apps
+  started from a terminal (no token); minimize in tiling and in snapped
+  groups; raise on focus in floating mode; whether resize zones return
+  on screen edges now that those edges keep their border.
+
 ## BSP tiling (M3)
 
 - The BSP tree is plain data in its own module, with no Smithay types,
@@ -67,6 +134,9 @@ change this file without the owner's approval.
   tiled/floating flag; only "tiled" is used until M4.
 - The `Layout` trait is the interface M4's floating layout also
   implements.
+- Superseded (owner, after the design phase): where a new tiled window
+  goes, see "Window manager requirements" (diagonals and a centre zone,
+  a minimum tile, gap and dock cases). The no-moved-pointer rule stays.
 - New window: splits the tiled window under the pointer, otherwise the
   focused leaf (owner, after stage C run 1: rule A), along the longer
   side of its rectangle, ratio 0.5; the new window becomes the second
@@ -80,6 +150,8 @@ change this file without the owner's approval.
   spawned by a keybind. No preselect keys. A new window while the
   default mode is floating still gets its placeholder next to the
   focused leaf.
+- Superseded in part (owner, after the design phase): only windows the
+  user started take focus when they map ("Window manager requirements").
 - Focus on open (owner, M9e): focus (keyboard and keybind target) stays
   on the previous window until the new window maps (its first buffer
   commit), then moves to it. Keys typed before the map go to the old
@@ -159,6 +231,9 @@ change this file without the owner's approval.
   shorter; it is not pushed down).
 - Z-order: one list per monitor of floating windows. Focusing or
   clicking a window raises it. Pointer hit-testing uses the topmost.
+- Superseded in part (owner, after the design phase): focus follows the
+  cursor, sloppy, when that setting is on ("Window manager
+  requirements"); clicks still raise.
 - Click-to-focus for all windows: a plain click focuses, raises and is
   delivered to the client; mod+click starts a move/resize and is never
   delivered.
@@ -191,6 +266,9 @@ change this file without the owner's approval.
 
 ## Snapping and fullscreen (M5)
 
+- Superseded in part (owner, after the design phase): snapped windows
+  form groups, snap zones are tree-compatible (halves, thirds,
+  quarters), and maximize has the gaps ("Window manager requirements").
 - Snapped and fullscreen are states of a floating window, not layout
   modes: there are still exactly two modes.
 - Snap zones are data: a table the settings protocol will edit later
@@ -868,6 +946,9 @@ change this file without the owner's approval.
   its decoration mode and its new size in one configure batch.
 - Debug outline screenshots show the bar band and the border as
   outlines; still no window contents.
+- Superseded in part (owner, after the design phase): every edge has the
+  hairline border, screen edges too; whether their resize zones return
+  is an open question ("Window manager requirements").
 - Output edges (owner, after M11b): windows the layout places on the
   output boundary (tiles, snapped and maximized windows) have no border
   and no resize zone on their edges that lie on the boundary; interior
@@ -1076,6 +1157,9 @@ change this file without the owner's approval.
 
 ## Gaps (M15b, owner)
 
+- Superseded (owner, after the design phase): outer 13 px and inner 8 px
+  everywhere, maximize included, no corner rule ("Window manager
+  requirements").
 - Inner gaps only, no outer gap: the layout's rectangles stay exact (the
   coverage and every earlier invariant are unchanged); each window's
   visible rectangle is inset on every edge that is not on the usable
@@ -1127,7 +1211,8 @@ change this file without the owner's approval.
   draw their own decorations and fullscreen windows stay square.
 - Radius: a constant, 10 px. Debug builds only: SASH_DEBUG_RADIUS_PX
   (tools/check-release.sh proves it absent from release builds). No
-  setting. The corner rule above decides which corners are rounded.
+  setting. The corner rule above decides which corners are rounded
+  (superseded, owner after the design phase: every corner is rounded).
 - Hit-testing: a point outside the shape (a cut-off corner) falls
   through to what is below; resize zones at the corners still work
   inside the shape.
@@ -1574,6 +1659,9 @@ change this file without the owner's approval.
   - wallpaper
   - keybinds
   - monitors
+  - dock position (bottom, left, right; per monitor; owner, after the
+    design phase)
+  - focus follows cursor (default on; owner, after the design phase)
 - Input (owner decision after M8, the "middle ground"): fixed defaults
   for now. The keyboard keymap honours XKB_DEFAULT_LAYOUT,
   XKB_DEFAULT_VARIANT, XKB_DEFAULT_OPTIONS and the other XKB_DEFAULT_*
