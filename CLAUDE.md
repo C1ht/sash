@@ -1292,6 +1292,37 @@ change this file without the owner's approval.
     contrast tests, keyboard navigation; the ~180 ms animation never
     delays logical state. The text field and the scrolling list wait
     for the launcher.
+- After E1 (owner; E1 accepted, tag m17a):
+  - The launcher (E7) is a partial-damage client: a full-screen
+    5120x1440 upload (3.7 ms p50, 5.3 ms p95, measured in E1) is
+    accepted once, when it opens, and never per frame. How
+    click-outside-to-close works without a full-screen buffer is a
+    proposal in docs/plan.md; the owner is asked before E7.
+  - The terminal while the shell is dead (approved as proposed): a
+    release keybind starts a terminal from a compiled-in list of
+    absolute, root-owned paths, unprivileged, with the dock's clean
+    environment, always available (not only while sash-shell is dead);
+    a notice says that sash-shell is not running; every use is logged.
+    The chord is proposed with E6: it clashes with nothing, is listed in
+    a "recovery" table in docs/keybinds.md and has a test.
+  - The restart backoff and cap for sash-shell come with E6.
+- E2 rules (owner, after E1):
+  - Widgets: layout, label, icon, button; the focus model, accessible
+    names, keyboard navigation, contrast tests. No text field and no
+    scrolling list yet.
+  - A test fails if any interactive widget has no accessible name.
+  - Focus rings are never colour-only.
+  - Layout in logical pixels; goldens at scales 1, 1.5 and 2.
+  - All text goes through sash-text. Strings from apps are the
+    untrusted type (sash-text's client text) and never reach the
+    recorder or logs.
+  - The ~180 ms animation never delays logical state: fake-time tests,
+    including an animation interrupted by a new change.
+  - The report gives the derived contrast tokens with labelled hex
+    values and their ratios.
+  - Standard checks (tools/check-all.sh, trixie, the VM scenario, the
+    fresh clone with the same runner output, pinned similarity); tag
+    m17b after E2; STOP. E3 is not started.
 
 ## Text stack (owner, after M12; built in M14)
 
@@ -1617,5 +1648,9 @@ change this file without the owner's approval.
   after M15b step 1): the whole script, never a hand-picked set of
   checks. A git pre-push
   hook script lives in tools/ (installed by hand, never automatically).
+- The fresh-clone step (owner, after M17 E1) uses the same runner
+  output as tools/check-all.sh, so its counts match: tools/fresh-clone.sh
+  clones the pushed main into a new directory and runs
+  tools/check-all.sh there.
 - A tag is moved only by the owner: if a re-run on the tagged commit
   differs from the report, the owner is told and the tag stays.
