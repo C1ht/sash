@@ -88,7 +88,8 @@ pub fn layout_json(state: &Sash) -> Json {
     let area = layout.area();
     Json::obj([
         ("output", vec![area.w.into(), area.h.into()].into()),
-        ("gap", layout.gap().into()),
+        ("gap", layout.gaps().inner.into()),
+        ("outer_gap", layout.gaps().outer.into()),
         ("focus", layout.focused().into()),
         ("windows", windows(state)),
         ("tree", tree(state)),

@@ -8,6 +8,7 @@ use proptest::prelude::*;
 
 use super::{
     Direction, Edges, MIN_TILE, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId,
+    gaps::Gaps,
     layers::{self, LayerId, LayerSurface, Level, Margins},
     monitor::Layer,
     resize_zone,
@@ -128,8 +129,8 @@ enum Op {
     /// An output resize (or mode change) and panel changes in the same frame: one
     /// update.
     ResizeWithPanels(Rect, Vec<PanelOp>),
-    /// The inner gap (M15b; the debug override in a real session).
-    SetGap(i32),
+    /// The gaps (M18a; the debug overrides in a real session): outer, inner.
+    SetGaps(i32, i32),
 }
 
 /// A tiled resize never makes a tile smaller than min(MIN_TILE, its size before) on
@@ -226,6 +227,11 @@ fn size() -> impl Strategy<Value = (i32, i32)> {
     (1..3000i32, 1..3000i32)
 }
 
+/// A gap for the property tests: none, the defaults (13 and 8), or anything up to 64.
+fn gap() -> impl Strategy<Value = i32> {
+    prop_oneof![Just(0i32), Just(8), Just(13), 1i32..65]
+}
+
 fn op() -> impl Strategy<Value = Op> {
     let index = any::<usize>();
     prop_oneof![
@@ -265,7 +271,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (area(), prop::collection::vec(panel_op(), 1..4))
             .prop_map(|(a, p)| Op::ResizeWithPanels(a, p)),
         1 => prop_oneof![Just(Mode::Tiled), Just(Mode::Floating)].prop_map(Op::SetDefault),
-        1 => prop_oneof![Just(0i32), Just(8), 1i32..65].prop_map(Op::SetGap),
+        1 => (gap(), gap()).prop_map(|(o, i)| Op::SetGaps(o, i)),
         3 => (index, 0..8u16).prop_map(|(i, z)| Op::Snap(i, z)),
         3 => (index, direction()).prop_map(|(i, d)| Op::SnapKey(i, d)),
         3 => (index, 0..4u8).prop_map(|(i, q)| Op::SnapQuarter(i, q)),
@@ -448,7 +454,7 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
             let output = layout.output();
             world.apply_geometry(layout, output);
         }
-        Op::SetGap(gap) => layout.set_gap(gap),
+        Op::SetGaps(outer, inner) => layout.set_gaps(Gaps::new(outer, inner)),
         Op::ResizeWithPanels(area, changes) => {
             for change in &changes {
                 change.apply(world);
@@ -545,11 +551,12 @@ proptest! {
     #[test]
     fn random_operations_keep_invariants(
         area in area(),
-        gap in prop_oneof![Just(0i32), Just(8), 1i32..65],
+        outer in gap(),
+        inner in gap(),
         ops in prop::collection::vec(op(), 1..80),
     ) {
         let mut layout = MonitorLayout::new(area);
-        layout.set_gap(gap);
+        layout.set_gaps(Gaps::new(outer, inner));
         let mut world = World::default();
         for op in &ops {
             apply(&mut layout, &mut world, op);
@@ -678,4 +685,138 @@ proptest! {
         world.apply_geometry(&mut reversed, output);
         prop_assert_eq!(format!("{together:?}"), format!("{reversed:?}"));
     }
+}
+
+/// The gaps in physical pixels (owner, M18a) at scales 1, 1.5 and 2, after every
+/// operation: tiles never overlap; neighbours are exactly 8 x scale apart (each edge is
+/// rounded on its own, so the 4 px halves land on whole pixels); the outer gap to the
+/// usable area's edge is 13 x scale, which at 1.5 is 19.5 and so 19 or 20 whole pixels
+/// depending on where the edge falls (never anything else).
+fn check_physical(layout: &MonitorLayout) {
+    use super::gaps::to_physical;
+    let Gaps { outer, inner } = layout.gaps();
+    let area = layout.area();
+    let room = 2 * outer.max(inner) + 1;
+    let tiles: Vec<(Rect, Rect)> = layout
+        .stacking()
+        .into_iter()
+        .filter(|(_, _, l)| *l == Layer::Tiled)
+        .filter_map(|(w, shown, _)| Some((layout.cell(w)?, shown)))
+        .collect();
+    for scale in [1.0f64, 1.5, 2.0] {
+        let p = |r: Rect| to_physical(r, scale);
+        let edge = |v: i32| super::gaps::physical_edge(v, scale);
+        let (lo, hi) = (
+            (f64::from(outer) * scale).floor() as i32,
+            (f64::from(outer) * scale).ceil() as i32,
+        );
+        for (i, &(ca, va)) in tiles.iter().enumerate() {
+            let a = p(va);
+            if ca.w > room && ca.h > room {
+                for (cell_edge, area_edge, shown_edge) in
+                    [(ca.x, area.x, a.loc.x), (ca.y, area.y, a.loc.y)]
+                {
+                    if cell_edge <= area_edge {
+                        let m = shown_edge - edge(area_edge);
+                        assert!((lo..=hi).contains(&m), "x{scale}: outer {m} not {lo}..{hi}");
+                    }
+                }
+                if ca.right() >= area.right() {
+                    let m = edge(area.right()) - (a.loc.x + a.size.w);
+                    assert!((lo..=hi).contains(&m), "x{scale}: outer {m}");
+                }
+                if ca.bottom() >= area.bottom() {
+                    let m = edge(area.bottom()) - (a.loc.y + a.size.h);
+                    assert!((lo..=hi).contains(&m), "x{scale}: outer {m}");
+                }
+            }
+            for &(cb, vb) in &tiles[i + 1..] {
+                let b = p(vb);
+                let apart = a.loc.x + a.size.w <= b.loc.x
+                    || b.loc.x + b.size.w <= a.loc.x
+                    || a.loc.y + a.size.h <= b.loc.y
+                    || b.loc.y + b.size.h <= a.loc.y;
+                assert!(apart, "x{scale}: {va:?} and {vb:?} overlap");
+                let big = |r: Rect| r.w > room && r.h > room;
+                if !big(ca) || !big(cb) {
+                    continue;
+                }
+                let want = f64::from(inner) * scale;
+                for (first, second, gap) in [
+                    (ca, cb, b.loc.x - (a.loc.x + a.size.w)),
+                    (cb, ca, a.loc.x - (b.loc.x + b.size.w)),
+                ] {
+                    if first.right() == second.x
+                        && first.y < second.bottom()
+                        && second.y < first.bottom()
+                    {
+                        assert_eq!(f64::from(gap), want, "x{scale}: {first:?} | {second:?}");
+                    }
+                }
+                for (first, second, gap) in [
+                    (ca, cb, b.loc.y - (a.loc.y + a.size.h)),
+                    (cb, ca, a.loc.y - (b.loc.y + b.size.h)),
+                ] {
+                    if first.bottom() == second.y
+                        && first.x < second.right()
+                        && second.x < first.right()
+                    {
+                        assert_eq!(f64::from(gap), want, "x{scale}: {first:?} / {second:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn physical_run(area: Rect, ops: &[Op]) {
+    let mut layout = MonitorLayout::new(area);
+    layout.set_gaps(Gaps::DEFAULT);
+    let mut world = World::default();
+    for op in ops {
+        if matches!(op, Op::SetGaps(..)) {
+            continue;
+        }
+        apply(&mut layout, &mut world, op);
+        layout.check_invariants();
+        check_physical(&layout);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    #[test]
+    fn physical_gaps_at_scales_1_1_5_and_2(
+        area in area(),
+        ops in prop::collection::vec(op(), 1..60),
+    ) {
+        physical_run(area, &ops);
+    }
+}
+
+/// The long run of the physical gap property (owner, M18a). Ignored by default:
+/// `cargo test --release -p sash-wm -- --ignored --nocapture long_physical_gaps`.
+#[test]
+#[ignore]
+fn long_physical_gaps() {
+    let cases = 200_000;
+    let started = std::time::Instant::now();
+    let mut runner = proptest::test_runner::TestRunner::new(ProptestConfig {
+        cases,
+        ..ProptestConfig::default()
+    });
+    runner
+        .run(
+            &(area(), prop::collection::vec(op(), 1..80)),
+            |(area, ops)| {
+                physical_run(area, &ops);
+                Ok(())
+            },
+        )
+        .expect("the physical gap property");
+    println!(
+        "long physical gaps: {cases} cases in {:?}",
+        started.elapsed()
+    );
 }

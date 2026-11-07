@@ -143,7 +143,7 @@ fn a_drag_over_a_popup_enters_the_popup() {
         match t.c2.events.data.drag.first() {
             Some(DragEvent::Enter { surface, x, y, .. }) => {
                 assert_eq!(*surface, popup.surface.id(), "the popup, not its window");
-                assert_eq!((*x, *y), (20.0, 20.0), "surface-local coordinates");
+                assert_eq!((*x, *y), (20.0, 19.0), "surface-local coordinates");
             }
             other => panic!("no enter: {other:?}"),
         }
@@ -600,7 +600,7 @@ fn a_drop_in_a_gap_lands_on_the_tile_it_belongs_to() {
         .state
         .windows
         .layout
-        .set_gap(crate::layout::GAP);
+        .set_gaps(crate::layout::gaps::Gaps::new(0, 8));
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
         let mut t = two_windows(&socket);
@@ -619,7 +619,7 @@ fn a_drop_in_a_gap_lands_on_the_tile_it_belongs_to() {
         {
             Some(DragEvent::Enter { surface, x, y, .. }) => {
                 assert_eq!(surface, &t.w2.surface.id());
-                assert_eq!((*x, *y), (0.0, 300.0), "clamped to the surface's left edge");
+                assert_eq!((*x, *y), (0.0, 299.0), "clamped to the surface's left edge");
             }
             other => panic!("no enter on tile 2: {other:?}"),
         }

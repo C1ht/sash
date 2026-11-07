@@ -486,6 +486,36 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 - Found while planning: Smithay 0.7's `Rectangle::to_physical_precise_round` rounds the position and the size separately, not each edge, so at scale 1.5 a rectangle's right edge can land a pixel off the per-edge result; sash-wm gets its own per-edge conversion for visible rectangles, clips and decoration areas.
 - Values in code today that docs/design.md does not have (CLAUDE.md, "Design values"; listed for the owner, not changed in M18a): the M16 palette (#1C1C1E, #2C2C2E, #3A3A3C, ..., text 55%, accent #0A84FF) against the spec's palette (M18c); the bar 32 px against the spec's 34 (buttons close, maximize, minimize; title centred, M15 has it left-aligned); the border colours #0A84FF / #3A3A3C (the spec: never a coloured outline); sash-ui's focus ring 2 px with a 1 px gap (the spec: 3 px off), button height 32, padding 12, icon gap 8 (in the scale), radius 0.25 x the shorter side (the spec: 0.236, at most 21); the Tabler chrome icons (approved in E3, tag m17c) against the spec's "Chrome glyphs: Lucide (ISC) 1.75 px"; the snap preview fill #0A84FF at 30% and 80%; the cursor size 24 (the spec leaves 21 or 34 open).
 
+- **M18a done, waiting for the owner (no tag).** `layout/gaps.rs` holds the one visible-rectangle function (`visible(cell, usable, gaps)`: the outer gap on edges on the usable area's boundary, floor and rest of the inner gap inside, never below 1 px) and the per-edge physical conversion (`to_physical`, `physical_edge`). `MonitorLayout::inset` calls it for tiles, maximized tiles (the usable area as the cell), snapped windows, the top zone, the snap preview (`zone_visible_rect`), configure sizes and drop targets (`gap_owner` by cell); nothing else computes a gap. Shapes round every corner; decorations have the border on every edge; resize zones go by the cell, so they are unchanged. `Shape::new`, the tile clip, the snap preview, the backdrop and decoration fills use per-edge physical rectangles (`render::Solid` replaces Smithay's `SolidColorBuffer`, which rounds the size apart from the position). A drop on a window's own border (now also on screen edges) goes to that window, like a drop in a gap.
+    - Found by the long property run: `f64::round` rounds halves away from zero, so at scale 1.5 two neighbours on an output left of the origin were 13 px apart instead of 12; every per-edge conversion now rounds halves up (`floor(v * scale + 0.5)`), the same on both sides of zero.
+    - At scale 1.5 the outer gap is 13 x 1.5 = 19.5 px, so it is 19 or 20 whole pixels depending on where the usable area's edge falls; the inner gap is exactly 12 (the 4 px halves are 6 px). At 2 both are exact (26 and 16).
+    - Tests: `layout/gap_cases.rs` (1 to 4 columns; a column split top and bottom; a panel on each edge, 13 px from the window, the 110 px dock zone giving 123; maximize = usable area minus 13; fullscreen without gaps; every zone and its preview; quarters by drag and by chord; every gapped rectangle equals `gaps::visible` of its cell); the invariant check verifies the outer and inner insets of every window and the 8 px between neighbours; `physical_gaps_at_scales_1_1_5_and_2` (500 cases in the suite) and `long_physical_gaps` (200 000 cases, 25 s, release, 0 failures): no overlaps, exactly 8 x scale between neighbours, the outer gap within floor..ceil of 13 x scale; end to end: tiles 381 x 572 at 800 x 600, maximize 772 x 572, the gap and the cut-off corner fall through, the corner zone works inside the 13 px arc; CPU goldens `tiles-x1/1.5/2` and `window-x*` (radius 13) in src/tests/fixtures/rounded; GPU captures docs/screenshots/m18a-gaps-x1.png, -x1.5, -x2. Mutation: rounding the position and size apart (Smithay's way) fails `physical_edges_round_on_their_own` and the physical property test.
+    - Existing tests changed by the removed screen-edge border rule (every client is now 2 px smaller per axis at gap 0, and the client's first pixel is 1 px in): the harness's `tile()` helper and about 30 expected sizes; the output-edge decoration tests now check that every edge has its border, that no zone appears there and that the pixel inside the border is the client's.
+
+| Constant | Old | New | File |
+|---|---|---|---|
+| Outer gap | none (0) | 13 px (`OUTER_GAP`) | sash-wm/src/layout/gaps.rs |
+| Inner gap | `GAP` 8 px in layout/monitor.rs | `INNER_GAP` 8 px | sash-wm/src/layout/gaps.rs |
+| Window radius | 10 px | 13 px (`RADIUS`) | sash-wm/src/layout/shape.rs |
+| Maximize inset | 0 (the whole usable area) | 13 px on every side | (through `gaps::visible`) |
+| Border on screen edges | none | 1 px (as every edge) | sash-wm/src/layout/monitor.rs |
+| Debug override, gap | SASH_DEBUG_GAP_PX | removed | sash-wm/src/windows.rs |
+| Debug overrides, gaps | none | SASH_DEBUG_OUTER_GAP_PX, SASH_DEBUG_INNER_GAP_PX (0 to 64) | sash-wm/src/windows.rs |
+| Debug override, radius | SASH_DEBUG_RADIUS_PX, default 10 | the same, default 13 | sash-wm/src/windows.rs |
+
+    - Render time (`gpu_rounded_cost_by_resolution`, release, headless NVIDIA, 300 frames per run, each frame whole and waited for; the old code measured in a worktree of 0df3b29 with the same two resolutions, runs alternated before, after, before, after; budget 4.17 ms):
+
+| Output | Scene | Before p50 / p95 / p99 | After p50 / p95 / p99 |
+|---|---|---|---|
+| 5120x1440 | 10 floating windows with bars, square | 764-813 / 2183-2214 / 2248-2369 us | 766-802 / 2186-2224 / 2260-2326 us |
+| 5120x1440 | the same, rounded (10 before, 13 after) | 700-719 / 1941-1977 / 2078-2203 us | 698-720 / 1917-1971 / 2091-2197 us |
+| 3440x1440 | 10 floating windows with bars, square | 737-743 / 2153-2174 / 2268-2327 us | 735-742 / 2168-2180 / 2254-2349 us |
+| 3440x1440 | the same, rounded | 633-634 / 1898-1913 / 2037-2111 us | 624-633 / 1886-1936 / 2041-2072 us |
+| 5120x1440 | 10 tiles with the gaps, rounded | (new scene) | 319-327 / 378-451 / 1632-1675 us |
+| 3440x1440 | 10 tiles with the gaps, rounded | (new scene) | 266-282 / 342-370 / 1635-1724 us |
+
+    - No regression: before and after are within the spread between runs. Floating windows have no gaps, so the floating scene measures the radius and the border change; the tiled scene is the gapped case (cheaper: tiles do not overlap).
+
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
 On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.

@@ -249,7 +249,7 @@ mod tests {
         let mut layout = MonitorLayout::new(Rect::new(0, 0, 800, 600));
         layout.open(WindowId(1), NewWindow::default());
         layout.open(WindowId(2), NewWindow::default());
-        layout.set_gap(8);
+        layout.set_gaps(crate::layout::gaps::Gaps::new(0, 8));
         let windows: Vec<Outline> = layout
             .stacking()
             .into_iter()

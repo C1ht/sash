@@ -13,8 +13,9 @@
 use super::Edges;
 use super::Rect;
 
-/// The corner radius (owner, M15b): a constant; debug builds may override it.
-pub const RADIUS: i32 = 10;
+/// The window corner radius (owner, M18a: 13, was 10): a constant; debug builds may
+/// override it.
+pub const RADIUS: i32 = 13;
 
 /// A rectangle with a radius per corner, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,31 +28,20 @@ pub struct Shape {
     pub radii: [f32; 4],
 }
 
-/// Which corners of `rect` are rounded (owner, after M15b step 1): every corner
-/// unless both of its edges lie on the boundary of `area` (the usable area).
-/// Top-left, top-right, bottom-right, bottom-left.
-pub fn rounded_corners(rect: Rect, area: Rect) -> [bool; 4] {
-    let left = rect.x <= area.x;
-    let top = rect.y <= area.y;
-    let right = rect.right() >= area.right();
-    let bottom = rect.bottom() >= area.bottom();
-    [
-        !(left && top),
-        !(right && top),
-        !(right && bottom),
-        !(left && bottom),
-    ]
-}
-
 impl Shape {
-    /// The shape of a logical rectangle at `scale`, `radius` logical pixels on the
-    /// corners that are rounded (never more than half the shorter side).
+    /// The shape of a logical rectangle at `scale` (each edge rounded to a whole
+    /// physical pixel), `radius` logical pixels on the corners that are rounded (never
+    /// more than half the shorter side).
     pub fn new(rect: Rect, corners: [bool; 4], radius: i32, scale: f32) -> Self {
-        let (w, h) = (rect.w as f32 * scale, rect.h as f32 * scale);
+        // Each edge on a whole physical pixel, rounded on its own (owner, M18a), so
+        // neighbours keep the exact gap and the outline is crisp at 1.5.
+        let edge = |v: i32| super::gaps::physical_edge(v, f64::from(scale)) as f32;
+        let (x, y) = (edge(rect.x), edge(rect.y));
+        let (w, h) = (edge(rect.right()) - x, edge(rect.bottom()) - y);
         let r = (radius as f32 * scale).min(w / 2.0).min(h / 2.0).max(0.0);
         Self {
-            x: rect.x as f32 * scale,
-            y: rect.y as f32 * scale,
+            x,
+            y,
             w,
             h,
             radii: corners.map(|on| if on { r } else { 0.0 }),
@@ -131,52 +121,6 @@ impl Shape {
 mod tests {
     use super::*;
 
-    const AREA: Rect = Rect::new(0, 0, 800, 600);
-
-    #[test]
-    fn the_corner_rule_at_every_output_corner_and_edge() {
-        // Tiles in the four corners: the corner on both output edges is square.
-        assert_eq!(
-            rounded_corners(Rect::new(0, 0, 400, 300), AREA),
-            [false, true, true, true]
-        );
-        assert_eq!(
-            rounded_corners(Rect::new(400, 0, 400, 300), AREA),
-            [true, false, true, true]
-        );
-        assert_eq!(
-            rounded_corners(Rect::new(400, 300, 400, 300), AREA),
-            [true, true, false, true]
-        );
-        assert_eq!(
-            rounded_corners(Rect::new(0, 300, 400, 300), AREA),
-            [true, true, true, false]
-        );
-        // A half: two corners on the boundary.
-        assert_eq!(
-            rounded_corners(Rect::new(0, 0, 400, 600), AREA),
-            [false, true, true, false]
-        );
-        // A window touching one edge only: all rounded.
-        assert_eq!(
-            rounded_corners(Rect::new(100, 0, 400, 300), AREA),
-            [true; 4]
-        );
-        // Maximized (the whole area): square.
-        assert_eq!(rounded_corners(AREA, AREA), [false; 4]);
-        // Floating in the middle: all rounded.
-        assert_eq!(
-            rounded_corners(Rect::new(100, 100, 300, 200), AREA),
-            [true; 4]
-        );
-        // Against a top panel (the usable area starts at 30): square there.
-        let usable = Rect::new(0, 30, 800, 570);
-        assert_eq!(
-            rounded_corners(Rect::new(0, 30, 400, 570), usable),
-            [false, true, true, false]
-        );
-    }
-
     #[test]
     fn distance_and_coverage() {
         let s = Shape::new(Rect::new(0, 0, 100, 60), [true; 4], 10, 1.0);
@@ -251,6 +195,48 @@ mod tests {
         (pw, ph, out)
     }
 
+    /// Three tiles (1 | 2 / 3) of a 400 x 240 output laid out with the M18a gaps and
+    /// radius, drawn with the CPU reference: every corner rounded, the ring on every
+    /// edge, the background in the gaps (owner, M18a).
+    pub fn tiles_picture(scale: f32) -> (u32, u32, Vec<u8>) {
+        use super::super::{MonitorLayout, NewWindow, WindowId, gaps::Gaps};
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 400, 240));
+        for n in 1..=3 {
+            layout.open(WindowId(n), NewWindow::default());
+            layout.set_server_side(WindowId(n), true);
+        }
+        layout.set_gaps(Gaps::DEFAULT);
+        layout.set_radius(RADIUS);
+        let shapes: Vec<Shape> = (1..=3)
+            .filter_map(|n| layout.shape(WindowId(n), scale))
+            .collect();
+        assert_eq!(shapes.len(), 3);
+        let (pw, ph) = (
+            (400.0 * scale).round() as u32,
+            (240.0 * scale).round() as u32,
+        );
+        let background = [26.0, 26.0, 26.0];
+        let content = [0x40 as f32, 0x60 as f32, 0x20 as f32];
+        let ring = [0x0A as f32, 0x84 as f32, 0xFF as f32];
+        let mut out = Vec::with_capacity((pw * ph * 3) as usize);
+        for y in 0..ph {
+            for x in 0..pw {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let mut c = background;
+                for shape in &shapes {
+                    let inside = shape.coverage(px, py);
+                    let ring_cov = shape.ring_coverage(px, py, scale, Edges::ALL);
+                    for i in 0..3 {
+                        let under = c[i] * (1.0 - inside) + content[i] * inside;
+                        c[i] = under * (1.0 - ring_cov) + ring[i] * ring_cov;
+                    }
+                }
+                out.extend(c.map(|v| v.round().clamp(0.0, 255.0) as u8));
+            }
+        }
+        (pw, ph, out)
+    }
+
     fn golden(name: &str, (w, h, rgb): (u32, u32, Vec<u8>)) {
         let dir =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tests/fixtures/rounded");
@@ -290,6 +276,7 @@ mod tests {
     fn goldens_at_three_scales() {
         for (scale, tag) in [(1.0, "1"), (1.5, "1.5"), (2.0, "2")] {
             golden(&format!("window-x{tag}"), picture(120, 80, scale, true));
+            golden(&format!("tiles-x{tag}"), tiles_picture(scale));
         }
     }
 

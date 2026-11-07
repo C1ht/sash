@@ -75,14 +75,15 @@ fn snap_zones_use_the_usable_area_and_trigger_at_the_true_output_edge() {
             assert_eq!(h.rect_of(1), left);
             let layout = &h.server.state.windows.layout;
             let border = layout.decoration(WindowId(1)).border;
-            assert!(border.top && border.right && !border.left && !border.bottom);
+            // Every edge keeps its border (owner, M18a); zones are unchanged.
+            assert_eq!(border, crate::layout::Edges::ALL);
             let zones = layout.resize_zones(WindowId(1));
             assert!(zones.top && zones.right && !zones.left && !zones.bottom);
         });
         c.roundtrip();
         c.ack_and_commit(&w);
-        // 400 x 560 minus the bar (32), the right and the top border.
-        assert_eq!(size(&c, &w), (399, 527));
+        // 400 x 560 minus the bar (32) and the border on every edge.
+        assert_eq!(size(&c, &w), (398, 526));
     });
 }
 
@@ -96,14 +97,14 @@ fn maximize_fills_the_usable_area_and_fullscreen_the_output() {
         server.on_server(|h| h.server.state.set_layer_surfaces(vec![top_panel(1, 50)]));
         c.roundtrip();
         // The tile keeps its 1 px border on the panel edge.
-        assert_eq!(c.config(&w).expect("configured").size, (800, 549));
+        assert_eq!(c.config(&w).expect("configured").size, (798, 548));
         w.toplevel.set_maximized();
         c.roundtrip();
         let maximized = c.config(&w).expect("configured");
         assert!(maximized.maximized);
         assert_eq!(
             maximized.size,
-            (800, 549),
+            (798, 548),
             "the usable area, border on the panel edge"
         );
         w.toplevel.set_fullscreen(None);
@@ -137,10 +138,9 @@ fn a_resize_and_a_panel_change_together_send_one_configure_each() {
         b.roundtrip();
         assert_eq!(a.events.configures, before.0 + 1);
         assert_eq!(b.events.configures, before.1 + 1);
-        // Side by side under the panel; each keeps the border on its inner edge and
-        // on the panel edge (1 px each).
-        assert_eq!(a.config(&wa).expect("configured").size, (499, 639));
-        assert_eq!(b.config(&wb).expect("configured").size, (499, 639));
+        // Side by side under the panel; the border on every edge.
+        assert_eq!(a.config(&wa).expect("configured").size, (498, 638));
+        assert_eq!(b.config(&wb).expect("configured").size, (498, 638));
     });
 }
 

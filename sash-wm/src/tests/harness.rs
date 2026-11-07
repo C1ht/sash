@@ -33,13 +33,11 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The dmabuf main device the harness advertises: 226:128 (a render node's numbers).
 /// The configure size of a window without a bar in a w x h tile (or a snapped or
-/// maximized rectangle) of the 800x600 test output: the rectangle minus its 1 px
-/// border on the edges inside the output (M11b; none on the output boundary). A tile
-/// narrower than the output touches the boundary on one side in these tests (two
-/// columns or rows at most), so it has one border on that axis.
+/// maximized rectangle): the rectangle minus its 1 px border on all four edges
+/// (owner, M18a; before, the edges on the output boundary had none).
 pub fn tile(w: i32, h: i32) -> Option<(i32, i32)> {
-    let inner = |len: i32, full: i32| if len < full { len - 1 } else { len };
-    Some((inner(w, 800).max(1), inner(h, 600).max(1)))
+    // The 1 px border on every edge (owner, M18a: screen edges too).
+    Some(((w - 2).max(1), (h - 2).max(1)))
 }
 
 pub const FAKE_MAIN_DEVICE: u64 = (226 << 8) | 128;
@@ -104,7 +102,11 @@ impl Harness {
             .enable_dmabuf(FAKE_MAIN_DEVICE, formats, Box::new(|_| true));
         // The tests written before gaps (M15b) expect exact tiles: the harness starts
         // with no gap; the gap tests set it (tests/gaps.rs).
-        server.state.windows.layout.set_gap(0);
+        server
+            .state
+            .windows
+            .layout
+            .set_gaps(crate::layout::gaps::Gaps::NONE);
         // Likewise square corners (M15b step 2); the rounded-corner tests set a radius.
         server.state.windows.layout.set_radius(0);
         let output = output::create(&mut server.state, "headless", (800, 600).into());

@@ -47,31 +47,36 @@ use crate::{
     state::Sash,
 };
 
-/// The inner gap (layout::GAP, 8 px). Debug builds only: SASH_DEBUG_GAP_PX (0 to 64)
-/// overrides it, to compare by eye; no setting.
-fn gap_px() -> i32 {
-    #[cfg(debug_assertions)]
-    if let Some(px) = std::env::var("SASH_DEBUG_GAP_PX")
+/// A debug-only override of a geometry constant (0 to 64 px), to compare by eye; no
+/// setting. Absent from release builds (tools/check-release.sh).
+#[cfg(debug_assertions)]
+fn debug_px(var: &str) -> Option<i32> {
+    let px = std::env::var(var)
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
-        .filter(|px| (0..=64).contains(px))
-    {
-        tracing::info!(px, "SASH_DEBUG_GAP_PX: inner gap");
-        return px;
-    }
-    crate::layout::GAP
+        .filter(|px| (0..=64).contains(px))?;
+    tracing::info!(px, var, "debug override");
+    Some(px)
 }
 
-/// The corner radius (layout::shape::RADIUS, 10 px). Debug builds only:
-/// SASH_DEBUG_RADIUS_PX (0 to 64) overrides it, to judge by eye; no setting.
+/// The gaps (layout::gaps, outer 13 and inner 8 px; owner, M18a). Debug builds only:
+/// SASH_DEBUG_OUTER_GAP_PX and SASH_DEBUG_INNER_GAP_PX override them.
+fn gaps() -> crate::layout::gaps::Gaps {
+    use crate::layout::gaps::Gaps;
+    #[cfg(debug_assertions)]
+    return Gaps::new(
+        debug_px("SASH_DEBUG_OUTER_GAP_PX").unwrap_or(Gaps::DEFAULT.outer),
+        debug_px("SASH_DEBUG_INNER_GAP_PX").unwrap_or(Gaps::DEFAULT.inner),
+    );
+    #[cfg(not(debug_assertions))]
+    Gaps::DEFAULT
+}
+
+/// The corner radius (layout::shape::RADIUS, 13 px; owner, M18a). Debug builds only:
+/// SASH_DEBUG_RADIUS_PX overrides it.
 fn radius_px() -> i32 {
     #[cfg(debug_assertions)]
-    if let Some(px) = std::env::var("SASH_DEBUG_RADIUS_PX")
-        .ok()
-        .and_then(|v| v.parse::<i32>().ok())
-        .filter(|px| (0..=64).contains(px))
-    {
-        tracing::info!(px, "SASH_DEBUG_RADIUS_PX: corner radius");
+    if let Some(px) = debug_px("SASH_DEBUG_RADIUS_PX") {
         return px;
     }
     crate::layout::shape::RADIUS
@@ -160,7 +165,7 @@ pub struct Windows {
 impl Windows {
     pub fn new() -> Self {
         let mut layout = MonitorLayout::new(Rect::default());
-        layout.set_gap(gap_px());
+        layout.set_gaps(gaps());
         layout.set_radius(radius_px());
         Self {
             layout,
@@ -713,15 +718,19 @@ impl Sash {
     }
 
     /// The surface a drag and drop targets at a global position: the surface there,
-    /// or, in a gap, the window the gap belongs to, at the nearest point of its
-    /// surface (owner, after M15b step 1: a drop never lands on nothing because of a
-    /// gap).
+    /// or, in a gap or on a window's own decorations (its border on a screen edge,
+    /// owner M18a), that window, at the nearest point of its surface (owner, after
+    /// M15b step 1: a drop never lands on nothing because of a gap).
     pub fn drop_target_at(&self, location: Point<f64, Logical>) -> Option<SurfaceHit> {
         if let Some(hit) = self.surface_at(location) {
             return Some(hit);
         }
         let (x, y) = (location.x.floor() as i32, location.y.floor() as i32);
-        let id = self.windows.layout.gap_owner(x, y)?;
+        let decorated = || match self.hit(location) {
+            Some((id, None)) if self.layer_above(location).is_none() => Some(id),
+            _ => None,
+        };
+        let id = self.windows.layout.gap_owner(x, y).or_else(decorated)?;
         let visible = self.visible_windows().into_iter().find(|v| v.id == id)?;
         let surface = visible.window.toplevel()?.wl_surface().clone();
         let r = visible.rect;

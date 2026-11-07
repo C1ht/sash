@@ -45,9 +45,11 @@ markers=(
     "privileged stand-in global (tests only)"
     # M15: the title size override exists in debug builds only.
     SASH_DEBUG_FONT_PX
-    # M15b: the gap override exists in debug builds only.
+    # M18a: the gap and corner radius overrides exist in debug builds only (M15b's
+    # SASH_DEBUG_GAP_PX is removed; it must not come back in any build).
     SASH_DEBUG_GAP_PX
-    # M15b step 2: the corner radius override exists in debug builds only.
+    SASH_DEBUG_OUTER_GAP_PX
+    SASH_DEBUG_INNER_GAP_PX
     SASH_DEBUG_RADIUS_PX
     # M13b: the layer-shell test client exists in test builds only.
     "layer-shell test client (tests only)"
@@ -85,8 +87,8 @@ fi
 cargo build --locked -p sash-wm
 for marker in SASH_CAPTURE_DIR sash-wm-input- "--mode takes WxH@R" \
     "--mode: only the requested mode is tried" SASH_DEBUG_REJECT_MODES \
-    SASH_DEBUG_REJECT_ALL_MODES "fault injection" SASH_DEBUG_FONT_PX SASH_DEBUG_GAP_PX \
-    SASH_DEBUG_RADIUS_PX; do
+    SASH_DEBUG_REJECT_ALL_MODES "fault injection" SASH_DEBUG_FONT_PX \
+    SASH_DEBUG_OUTER_GAP_PX SASH_DEBUG_INNER_GAP_PX SASH_DEBUG_RADIUS_PX; do
     if ! grep -aqF -- "$marker" target/debug/sash-wm; then
         echo "FAIL: control: debug binary lacks $marker, the check is stale"
         exit 1

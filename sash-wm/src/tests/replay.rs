@@ -171,7 +171,7 @@ fn snapshots(events: &[Json]) -> Vec<(String, Json)> {
             .to_string();
         let empty = matches!(after.get("windows"), Some(Json::Arr(w)) if w.is_empty());
         // The gap is applied before the replay (see `replay`), not compared.
-        let mut snapshot = without_key(&normalized(after, &ids), "gap");
+        let mut snapshot = without_key(&without_key(&normalized(after, &ids), "gap"), "outer_gap");
         if op == "open window" {
             snapshot = without_focus(&snapshot);
         }
@@ -230,16 +230,20 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
     // decorations, so a client's committed size was the whole window. The stand-ins
     // (which get the 1 px border) commit that size minus the border, so the windows
     // come out as recorded.
-    // The gap the session had (M15b): bundles from before gaps had none.
-    let gap = events
-        .iter()
-        .filter(|e| kind(e) == "layout")
-        .find_map(|e| {
-            e.get("after")
-                .and_then(|a| a.get("gap"))
-                .and_then(Json::as_i64)
-        })
-        .unwrap_or(0) as i32;
+    // The gaps the session had: the inner gap from M15b (bundles from before had
+    // none), the outer gap from M18a (bundles from before had none).
+    let recorded_gap = |key: &str| {
+        events
+            .iter()
+            .filter(|e| kind(e) == "layout")
+            .find_map(|e| {
+                e.get("after")
+                    .and_then(|a| a.get(key))
+                    .and_then(Json::as_i64)
+            })
+            .unwrap_or(0) as i32
+    };
+    let gaps = crate::layout::gaps::Gaps::new(recorded_gap("outer_gap"), recorded_gap("gap"));
     let before_decorations = !events
         .iter()
         .any(|e| kind(e) == "commit" && e.get("server_side").is_some());
@@ -256,7 +260,7 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
         let mut report = Report::default();
         let dir = replay_dir.clone();
         server.on_server(move |h| {
-            h.server.state.windows.layout.set_gap(gap);
+            h.server.state.windows.layout.set_gaps(gaps);
             h.server.state.set_layout_area((width, height).into());
             let config = Config {
                 dir,
@@ -610,7 +614,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "pointer_position",
         "key",
     ];
-    const FIELDS: [&str; 34] = [
+    const FIELDS: [&str; 35] = [
         "t_us",
         "kind",
         "op",
@@ -618,6 +622,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "after",
         "output",
         "gap",
+        "outer_gap",
         "focus",
         "windows",
         "tree",

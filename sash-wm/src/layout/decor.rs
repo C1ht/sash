@@ -82,14 +82,6 @@ impl Decoration {
         border: Edges::ALL,
     };
 
-    /// The same decorations with a border only on `edges`.
-    pub fn with_border(self, edges: Edges) -> Self {
-        Self {
-            border: edges,
-            ..self
-        }
-    }
-
     /// Space taken on the left, top, right and bottom.
     pub fn insets(self) -> (i32, i32, i32, i32) {
         let b = |on: bool| if on { BORDER } else { 0 };

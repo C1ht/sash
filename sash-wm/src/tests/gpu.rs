@@ -427,6 +427,41 @@ fn ten_floating(harness: &mut Harness, server_side: bool) {
 
 /// `ten_floating` on an output of `size`: the same cascade scaled to it (at 800x600,
 /// windows of 360x260 every 40 px right and 30 px down).
+/// Ten tiled windows with server-side decorations on a `(ow, oh)` output (M18a).
+fn ten_tiled_on(harness: &mut Harness, (ow, oh): (i32, i32)) {
+    harness.server.state.set_layout_area((ow, oh).into());
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut clients = Vec::new();
+        for i in 0..10u32 {
+            if i > 0 {
+                server.pointer_over_focused();
+            }
+            let mut c = TestClient::connect(&socket);
+            let mut w = c.create_window_without_commit();
+            w.color = 0xff00_0000 | (0x1f * (i + 1)) << 16 | 0x4080;
+            std::mem::forget(c.decorate(&w, None));
+            w.surface.commit();
+            c.dispatch_until("configure", |e| e.configures >= 1);
+            c.ack_and_commit(&w);
+            let acked = c.events.configures;
+            clients.push((c, w, acked));
+        }
+        // Later tiles reconfigure earlier ones: ack only what is new (acking a serial
+        // twice is a protocol error).
+        for (c, w, acked) in &mut clients {
+            c.roundtrip();
+            if c.events.configures > *acked {
+                c.ack_and_commit(w);
+            }
+        }
+        std::mem::forget(clients);
+    });
+    for _ in 0..20 {
+        harness.step();
+    }
+}
+
 fn ten_floating_on(harness: &mut Harness, server_side: bool, (ow, oh): (i32, i32)) {
     harness.server.state.set_layout_area((ow, oh).into());
     let socket = harness.socket_path();
@@ -934,13 +969,35 @@ fn gpu_rounded_cost() {
 #[ignore = "needs a GPU"]
 fn gpu_rounded_cost_by_resolution() {
     let mut renderer = renderer();
-    for (w, h) in [(5120, 1440), (3840, 1080), (1920, 1080)] {
+    // M18a: the owner's two outputs; the floating scene as before (no gaps on
+    // floating windows) and ten tiles with the gaps.
+    for ((w, h), tiled) in [
+        ((5120, 1440), false),
+        ((3440, 1440), false),
+        ((5120, 1440), true),
+        ((3440, 1440), true),
+    ] {
         let size: Size<i32, smithay::utils::Physical> = (w, h).into();
         let mut target: GlesTexture = renderer
             .create_buffer(Fourcc::Abgr8888, (w, h).into())
             .expect("offscreen buffer");
         let mut harness = Harness::new();
-        ten_floating_on(&mut harness, true, (w, h));
+        if tiled {
+            harness
+                .server
+                .state
+                .windows
+                .layout
+                .set_gaps(crate::layout::gaps::Gaps::DEFAULT);
+            ten_tiled_on(&mut harness, (w, h));
+        } else {
+            ten_floating_on(&mut harness, true, (w, h));
+        }
+        let scene = if tiled {
+            "10 tiles with gaps"
+        } else {
+            "10 windows with bars"
+        };
         // Alternating, twice each; the first rounded run also compiles the shaders.
         let rounded = crate::layout::shape::RADIUS;
         for radius in [0, rounded, 0, rounded] {
@@ -964,7 +1021,7 @@ fn gpu_rounded_cost_by_resolution() {
                 times.push(start.elapsed());
             }
             percentiles(
-                &format!("{w}x{h}, full frame, 10 windows with bars, radius {radius}"),
+                &format!("{w}x{h}, full frame, {scene}, radius {radius}"),
                 times,
             );
         }
@@ -1283,4 +1340,68 @@ fn gpu_capture_icon_contact_sheet() {
     )
     .expect("capture");
     println!("wrote {}", path.display());
+}
+
+/// The M18a gaps through the real renderer: three decorated tiles (1 | 2 / 3) on the
+/// 800 x 600 output with the outer 13 and inner 8 px gaps and radius 13, captured at
+/// scales 1, 1.5 and 2 into SASH_CAPTURE_DIR (m18a-gaps-x*.png) for the owner to look at:
+/// every corner rounded, the hairline on every edge, the background in the gaps.
+/// Run: `SASH_CAPTURE_DIR=<dir> cargo test -p sash-wm -- --ignored --nocapture gpu_capture_gaps`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_capture_gaps() {
+    let dir = std::env::var_os(crate::capture::CAPTURE_DIR_VAR).expect("set SASH_CAPTURE_DIR");
+    let mut harness = Harness::new();
+    harness
+        .server
+        .state
+        .windows
+        .layout
+        .set_gaps(crate::layout::gaps::Gaps::DEFAULT);
+    harness
+        .server
+        .state
+        .windows
+        .layout
+        .set_radius(crate::layout::shape::RADIUS);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut clients = Vec::new();
+        for i in 0..3u32 {
+            if i > 0 {
+                server.pointer_over_focused();
+            }
+            let mut c = TestClient::connect(&socket);
+            let mut w = c.create_window_without_commit();
+            w.color = 0xff00_0000 | (0x30 + 0x30 * i) << 16 | 0x6040;
+            std::mem::forget(c.decorate(&w, None));
+            w.surface.commit();
+            c.dispatch_until("configure", |e| e.configures >= 1);
+            c.ack_and_commit(&w);
+            let acked = c.events.configures;
+            clients.push((c, w, acked));
+        }
+        // Later tiles reconfigure earlier ones: ack only what is new (acking a serial
+        // twice is a protocol error).
+        for (c, w, acked) in &mut clients {
+            c.roundtrip();
+            if c.events.configures > *acked {
+                c.ack_and_commit(w);
+            }
+        }
+        std::mem::forget(clients);
+    });
+    for _ in 0..20 {
+        harness.step();
+    }
+    let mut gpu = renderer();
+    for scale in [1.0, 1.5, 2.0] {
+        let (w, _, pixels) = frame_at_scale(&mut gpu, &harness.server.state, scale);
+        let png = crate::capture::encode_png(&pixels, w as u32, (pixels.len() / 4 / w) as u32)
+            .expect("png");
+        let path = std::path::Path::new(&dir).join(format!("m18a-gaps-x{scale}.png"));
+        std::fs::write(&path, png).expect("write");
+        println!("wrote {}", path.display());
+    }
 }

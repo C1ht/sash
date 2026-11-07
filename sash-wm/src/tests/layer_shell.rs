@@ -119,7 +119,7 @@ fn a_first_party_panel_reserves_its_visible_size_plus_margin() {
         });
         window.roundtrip();
         // 1 px border on the panel edge.
-        assert_eq!(window.config(&w).expect("configured").size, (800, 559));
+        assert_eq!(window.config(&w).expect("configured").size, (798, 558));
     });
 }
 
@@ -482,7 +482,7 @@ fn what_the_protocol_allows_keeps_the_client_and_frees_the_reservation() {
         panel.layer.destroy();
         assert!(p.try_roundtrip().is_ok());
         window.roundtrip();
-        assert_eq!(window.config(&w).expect("configured").size, (800, 600));
+        assert_eq!(window.config(&w).expect("configured").size, (798, 598));
 
         // Unmap with a null buffer, then map again after a new configure.
         let panel = p.map_layer(&LayerSpec::top_panel(40, 0));

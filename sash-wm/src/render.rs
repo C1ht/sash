@@ -10,17 +10,18 @@ use smithay::{
     backend::allocator::Fourcc,
     backend::renderer::{
         element::{
-            Kind,
+            Id, Kind,
             memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
             render_elements,
-            solid::{SolidColorBuffer, SolidColorRenderElement},
+            solid::SolidColorRenderElement,
             surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             utils::CropRenderElement,
         },
         gles::{GlesRenderer, element::PixelShaderElement},
+        utils::CommitCounter,
     },
     input::pointer::CursorImageStatus,
-    utils::{Point, Rectangle, Scale, Transform},
+    utils::{Scale, Transform},
 };
 
 use crate::{
@@ -138,18 +139,58 @@ pub fn arrow_element(
     .map(OutputElement::Memory)
 }
 
-/// Compositor-drawn rectangles. The buffers persist so damage tracking sees them as the
-/// same elements from frame to frame.
+/// A compositor-drawn rectangle of one colour. It keeps its id and commit counter from
+/// frame to frame, so damage tracking sees an unchanged one as unchanged, and it is
+/// drawn at its physical rectangle with each edge rounded on its own
+/// (`layout::gaps::to_physical`; Smithay's `SolidColorBuffer` rounds the size apart
+/// from the position, owner M18a).
+pub struct Solid {
+    id: Id,
+    commit: CommitCounter,
+    rect: Rect,
+    color: [f32; 4],
+}
+
+impl Solid {
+    pub fn new(rect: Rect, color: [f32; 4]) -> Self {
+        Self {
+            id: Id::new(),
+            commit: CommitCounter::default(),
+            rect,
+            color,
+        }
+    }
+
+    pub fn update(&mut self, rect: Rect, color: [f32; 4]) {
+        if (rect, color) != (self.rect, self.color) {
+            (self.rect, self.color) = (rect, color);
+            self.commit.increment();
+        }
+    }
+
+    pub fn element(&self, scale: Scale<f64>, alpha: f32) -> SolidColorRenderElement {
+        let c = self.color;
+        SolidColorRenderElement::new(
+            self.id.clone(),
+            crate::layout::gaps::to_physical(self.rect, scale.x),
+            self.commit,
+            [c[0] * alpha, c[1] * alpha, c[2] * alpha, c[3] * alpha],
+            Kind::Unspecified,
+        )
+    }
+}
+
+/// Compositor-drawn rectangles, kept from frame to frame.
 pub struct Overlay {
     preview: Option<Rect>,
     /// Fill (inside the border), then the top, bottom, left and right border strips.
-    pieces: [(SolidColorBuffer, Rect); 5],
-    backdrop: Option<(SolidColorBuffer, Rect)>,
+    pieces: [Solid; 5],
+    backdrop: Option<Solid>,
 }
 
 impl Overlay {
     pub fn new() -> Self {
-        let piece = || (SolidColorBuffer::new((0, 0), ACCENT), Rect::default());
+        let piece = || Solid::new(Rect::default(), ACCENT);
         Self {
             preview: None,
             pieces: [piece(), piece(), piece(), piece(), piece()],
@@ -175,9 +216,8 @@ impl Overlay {
             Rect::new(r.x, r.y + b, b, inner_h),
             Rect::new(r.right() - b, r.y + b, b, inner_h),
         ];
-        for ((buffer, at), rect) in self.pieces.iter_mut().zip(rects) {
-            buffer.resize((rect.w, rect.h));
-            *at = rect;
+        for (piece, rect) in self.pieces.iter_mut().zip(rects) {
+            piece.update(rect, ACCENT);
         }
     }
 
@@ -190,24 +230,9 @@ impl Overlay {
     pub fn set_backdrop(&mut self, rect: Option<Rect>) {
         match (rect, &mut self.backdrop) {
             (None, backdrop) => *backdrop = None,
-            (Some(r), Some((buffer, at))) => {
-                buffer.resize((r.w, r.h));
-                *at = r;
-            }
-            (Some(r), backdrop @ None) => {
-                *backdrop = Some((SolidColorBuffer::new((r.w, r.h), BACKDROP), r))
-            }
+            (Some(r), Some(solid)) => solid.update(r, BACKDROP),
+            (Some(r), backdrop @ None) => *backdrop = Some(Solid::new(r, BACKDROP)),
         }
-    }
-
-    fn element(
-        buffer: &SolidColorBuffer,
-        at: Rect,
-        scale: Scale<f64>,
-        alpha: f32,
-    ) -> SolidColorRenderElement {
-        let location = Point::from((at.x, at.y)).to_physical_precise_round(scale);
-        SolidColorRenderElement::from_buffer(buffer, location, scale, alpha, Kind::Unspecified)
     }
 
     fn preview_elements(
@@ -215,24 +240,21 @@ impl Overlay {
         scale: Scale<f64>,
     ) -> impl Iterator<Item = SolidColorRenderElement> + '_ {
         self.preview.into_iter().flat_map(move |_| {
-            self.pieces
-                .iter()
-                .enumerate()
-                .map(move |(i, (buffer, at))| {
-                    let alpha = if i == 0 {
-                        PREVIEW_FILL_ALPHA
-                    } else {
-                        PREVIEW_BORDER_ALPHA
-                    };
-                    Self::element(buffer, *at, scale, alpha)
-                })
+            self.pieces.iter().enumerate().map(move |(i, piece)| {
+                let alpha = if i == 0 {
+                    PREVIEW_FILL_ALPHA
+                } else {
+                    PREVIEW_BORDER_ALPHA
+                };
+                piece.element(scale, alpha)
+            })
         })
     }
 
     fn backdrop_element(&self, scale: Scale<f64>) -> Option<SolidColorRenderElement> {
         self.backdrop
             .as_ref()
-            .map(|(buffer, at)| Self::element(buffer, *at, scale, 1.0))
+            .map(|solid| solid.element(scale, 1.0))
     }
 }
 
@@ -383,8 +405,7 @@ pub fn output_elements(
         match visible.layer {
             Layer::Tiled => {
                 let r = visible.rect;
-                let clip = Rectangle::new((r.x, r.y).into(), (r.w, r.h).into())
-                    .to_physical_precise_round(scale);
+                let clip = crate::layout::gaps::to_physical(r, scale.x);
                 elements.extend(
                     surfaces
                         .into_iter()

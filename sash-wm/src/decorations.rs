@@ -13,7 +13,6 @@ use smithay::{
             element::{
                 Kind,
                 memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-                solid::{SolidColorBuffer, SolidColorRenderElement},
             },
             gles::{GlesRenderer, element::PixelShaderElement},
         },
@@ -246,7 +245,7 @@ pub fn resize_icon(edges: Edges) -> CursorIcon {
 }
 
 /// A filled rectangle's buffer, with where and in which colour it was last drawn.
-type Fill = (SolidColorBuffer, Rect, [f32; 4]);
+type Fill = crate::render::Solid;
 
 /// What a cached shader element was made for (it is rebuilt only when this changes, so
 /// an unchanged ring or bar is no damage).
@@ -388,22 +387,11 @@ pub fn decoration_elements(
         match piece {
             Piece::ShapeFill(..) | Piece::Ring(..) => {}
             Piece::Fill(rect, color) => {
-                let (buffer, at, was) = fills.entry((id, index)).or_insert_with(|| {
-                    (SolidColorBuffer::new((rect.w, rect.h), color), rect, color)
-                });
-                if (*at, *was) != (rect, color) {
-                    buffer.update((rect.w, rect.h), color);
-                    (*at, *was) = (rect, color);
-                }
-                let location =
-                    Point::<i32, Logical>::from((rect.x, rect.y)).to_physical_precise_round(scale);
-                out.push(OutputElement::Solid(SolidColorRenderElement::from_buffer(
-                    buffer,
-                    location,
-                    scale,
-                    1.0,
-                    Kind::Unspecified,
-                )));
+                let solid = fills
+                    .entry((id, index))
+                    .or_insert_with(|| crate::render::Solid::new(rect, color));
+                solid.update(rect, color);
+                out.push(OutputElement::Solid(solid.element(scale, 1.0)));
             }
             Piece::Glyph(glyph, rect, alpha) => {
                 let location = Point::<i32, Logical>::from((rect.x, rect.y))

@@ -85,7 +85,7 @@ fn a_negotiating_client_is_answered_server_side_also_when_it_asks_for_client_sid
             [DecorationMode::ServerSide]
         );
         // Tiled, alone: no border (every edge is on the output boundary), no bar.
-        assert_eq!(size(&c, &w), (800, 600));
+        assert_eq!(size(&c, &w), (798, 598));
         // Floating: bar and border, in one configure.
         let before = c.events.configures;
         server.on_server(|h| h.chord(&[ALT, F]));
@@ -151,7 +151,7 @@ fn mode_changes_send_one_configure_each() {
             (
                 "snap left",
                 Box::new(|_, s| s.on_server(|h| h.chord(&[ALT, LEFT]))),
-                (399, 568),
+                (398, 566),
             ),
             (
                 "fullscreen",
@@ -161,12 +161,12 @@ fn mode_changes_send_one_configure_each() {
             (
                 "unfullscreen",
                 Box::new(|w, _| w.toplevel.unset_fullscreen()),
-                (399, 568),
+                (398, 566),
             ),
             (
                 "tile",
                 Box::new(|_, s| s.on_server(|h| h.chord(&[ALT, F]))),
-                (800, 600),
+                (798, 598),
             ),
         ];
         for (what, step, expected) in steps {
@@ -273,7 +273,7 @@ fn the_maximize_button_toggles_the_top_zone_and_restores() {
         c.roundtrip();
         let config = c.config(&w).expect("configured");
         // The whole output: the bar, no border (all edges on the output boundary).
-        assert_eq!((config.size, config.maximized), ((800, 568), true));
+        assert_eq!((config.size, config.maximized), ((798, 566), true));
         server.on_server(|h| {
             assert_eq!(h.rect_of(1), Some(AREA));
             assert_eq!(
@@ -427,12 +427,14 @@ fn tiled_zones_move_the_split() {
             h.pointer_to(402.0, 300.0);
             h.button(BTN_LEFT, ButtonState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
-            // The output boundary: no border, no zone, no drag; the client's.
+            // The output boundary: the border (owner, M18a: every edge has one) but no
+            // zone (zones unchanged); the pixel inside the border is the client's.
             h.pointer_to(0.0, 300.0);
             assert_eq!(
                 h.server.state.cursor.image(),
                 CursorImageStatus::Named(CursorIcon::Default)
             );
+            h.pointer_to(1.0, 300.0);
             h.button(BTN_LEFT, ButtonState::Pressed);
             // The client's implicit grab, not a move or resize.
             assert_eq!(h.server.state.dragged_window(), None);
@@ -445,7 +447,7 @@ fn tiled_zones_move_the_split() {
         assert_eq!(
             c1.events.buttons_pressed.len(),
             1,
-            "only the press at the output edge reached the client"
+            "only the press inside the output-edge border reached the client"
         );
     });
 }
@@ -551,24 +553,22 @@ fn snap_bands_trigger_at_the_true_output_edge() {
             assert_eq!(h.rect_of(1), left);
             let layout = &h.server.state.windows.layout;
             let decoration = layout.decoration(WindowId(1));
-            assert!(
-                !decoration.border.left
-                    && !decoration.border.top
-                    && !decoration.border.bottom
-                    && decoration.border.right,
-                "{decoration:?}: a border on the interior edge only"
+            assert_eq!(
+                decoration.border,
+                crate::layout::Edges::ALL,
+                "{decoration:?}: a border on every edge (owner, M18a)"
             );
         });
         c.roundtrip();
         c.ack_and_commit(&w);
-        // The client area reaches the output edge below the bar.
-        assert_eq!(size(&c, &w), (399, 568));
-        server.on_server(|h| h.pointer_to(0.0, 300.0));
+        // The client area starts inside the border on the output edge (owner, M18a).
+        assert_eq!(size(&c, &w), (398, 566));
+        server.on_server(|h| h.pointer_to(1.0, 300.0));
         c.roundtrip();
         assert_eq!(
             c.events.pointer_focus,
             Some(w.surface.id()),
-            "x = 0 is the client's"
+            "x = 1 (inside the border) is the client's"
         );
     });
 }
