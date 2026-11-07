@@ -183,6 +183,9 @@ pub struct TestClient {
     pub events: Events,
     /// Window and popup buffers are dmabufs instead of wl_shm.
     pub dmabuf_buffers: bool,
+    /// wl_shm buffers are ABGR8888 (bytes R, G, B, A: sash-ui's order) instead of
+    /// ARGB8888; the window colour is the same.
+    pub abgr_buffers: bool,
 }
 
 impl TestClient {
@@ -201,6 +204,7 @@ impl TestClient {
             queue,
             events: Events::default(),
             dmabuf_buffers: false,
+            abgr_buffers: false,
         };
         client.events.registry = Some(registry);
         client.roundtrip(); // globals
@@ -660,9 +664,20 @@ impl TestClient {
         let stride = width * 4;
         let size = stride * height;
         let file = buffer_file(size as u64);
+        let format = if self.abgr_buffers {
+            wl_shm::Format::Abgr8888
+        } else {
+            wl_shm::Format::Argb8888
+        };
         if color != 0 {
             use std::io::Write;
-            let row: Vec<u8> = color.to_le_bytes().repeat(width as usize);
+            let [b, g, r, a] = color.to_le_bytes();
+            let pixel = if self.abgr_buffers {
+                [r, g, b, a]
+            } else {
+                [b, g, r, a]
+            };
+            let row: Vec<u8> = pixel.repeat(width as usize);
             let mut writer = std::io::BufWriter::new(&file);
             for _ in 0..height {
                 writer.write_all(&row).expect("fill shm file");
@@ -676,8 +691,7 @@ impl TestClient {
                 .as_ref()
                 .expect("wl_shm")
                 .create_pool(file.as_fd(), size, &qh, ());
-        let buffer =
-            pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, &qh, ());
+        let buffer = pool.create_buffer(0, width, height, stride, format, &qh, ());
         pool.destroy();
         buffer
     }

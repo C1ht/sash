@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Every local check before a tag (owner, after M15): fmt; clippy and tests in the three
-# configurations (debug, release, the debug-record feature); cargo deny; the release
+# configurations (debug, release, the debug-record feature); cargo deny; the crate
+# boundaries (tools/check-deps.sh, owner M17); the release
 # check (with the glibc floor of the trixie build); check-clients; similarity against the
 # pinned references. Ends with a summary: passed, skipped and failed per step. Exit 1 if
 # any step failed. Not included (they need the VM or the trixie container):
@@ -54,6 +55,7 @@ for config in "" "--release" "--features sash-wm/debug-record"; do
     step "test $label" cargo test --locked --workspace $config
 done
 step "cargo deny" cargo deny check
+step "crate boundaries" tools/check-deps.sh
 step "release check" tools/check-release.sh
 step "check-clients" tools/check-clients.sh
 if [ -x "$SIM/venv/bin/python" ] && [ -d "$SIM/ref/smallvil" ]; then

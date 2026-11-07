@@ -62,7 +62,13 @@ impl Protocols {
     fn advertise(display: &DisplayHandle) -> Self {
         Self {
             compositor: CompositorState::new::<Sash>(display),
-            shm: ShmState::new::<Sash>(display, Vec::new()),
+            // ARGB8888 and XRGB8888 are always advertised; ABGR8888 is tiny-skia's byte
+            // order, so sash-ui's CPU drawing needs no swap (owner, after M16). Smithay's
+            // GLES renderer imports it (GLES 2 and 3).
+            shm: ShmState::new::<Sash>(
+                display,
+                vec![smithay::reexports::wayland_server::protocol::wl_shm::Format::Abgr8888],
+            ),
             xdg_shell: XdgShellState::new::<Sash>(display),
             seat: SeatState::new(),
             cursor_shape: CursorShapeManagerState::new::<Sash>(display),

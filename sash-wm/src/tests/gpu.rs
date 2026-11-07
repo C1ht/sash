@@ -591,11 +591,12 @@ fn gpu_decorations_cost() {
 /// Two floating windows with server-side decorations and rounded corners (M15b step
 /// 2): window 1 a green wl_shm buffer (focused), window 2 a red dmabuf. Their outer
 /// rectangles are `ROUNDED_RECTS`; titles are empty and the pointer is away from both.
+/// With `abgr`, window 1's buffer is wl_shm ABGR8888 (the same green).
 #[cfg(debug_assertions)]
 const ROUNDED_RECTS: [(i32, i32, i32, i32); 2] = [(40, 40, 302, 235), (400, 300, 302, 235)];
 
 #[cfg(debug_assertions)]
-fn rounded_scene(renderer: &mut GlesRenderer) -> Harness {
+fn rounded_scene(renderer: &mut GlesRenderer, abgr: bool) -> Harness {
     use smithay::backend::renderer::ImportDma;
     // Client size: outer minus 1 px borders and the 32 px bar.
     let red = colour_dmabuf(renderer, (300, 201), [1.0, 0.0, 0.0, 1.0]);
@@ -604,6 +605,7 @@ fn rounded_scene(renderer: &mut GlesRenderer) -> Harness {
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
         let mut c1 = TestClient::connect(&socket);
+        c1.abgr_buffers = abgr;
         let mut w1 = c1.create_window_without_commit();
         w1.color = 0xff_00_ff_00;
         w1.toplevel.set_title(String::new());
@@ -782,7 +784,7 @@ fn gpu_rounded_corners_match_the_cpu_reference() {
         unsafe { GlesRenderer::new(context) }.expect("GLES renderer")
     };
     let mut client_gpu = new_renderer();
-    let harness = rounded_scene(&mut client_gpu);
+    let harness = rounded_scene(&mut client_gpu, false);
     let state = &harness.server.state;
     let mut renderer = new_renderer();
     const TOLERANCE: f32 = 3.0;
@@ -967,4 +969,235 @@ fn gpu_rounded_cost_by_resolution() {
             );
         }
     }
+}
+
+/// wl_shm ABGR8888 (sash-ui's byte order, M17 E1) through the real renderer: the
+/// rounded scene with window 1's buffer in ABGR8888 renders exactly like the same scene
+/// in ARGB8888, at scales 1, 1.5 and 2: imported, masked by the rounded-corner shader,
+/// next to a dmabuf window in the same frame. A colour swap would turn the green
+/// window's pixels into another colour.
+/// Run: `cargo test -p sash-wm -- --ignored --nocapture gpu_abgr`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_abgr8888_renders_like_argb8888() {
+    let mut client_gpu = renderer();
+    let argb = rounded_scene(&mut client_gpu, false);
+    let abgr = rounded_scene(&mut client_gpu, true);
+    let mut gpu = renderer();
+    for scale in [1.0, 1.5, 2.0] {
+        let (w, h, a) = frame_at_scale(&mut gpu, &argb.server.state, scale);
+        let (_, _, b) = frame_at_scale(&mut gpu, &abgr.server.state, scale);
+        let differing = a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+        println!("ABGR8888 vs ARGB8888 at scale {scale}: {w}x{h}, {differing} pixels differ");
+        assert_eq!(differing, 0, "scale {scale}");
+        // The shm window's centre is green in both (not swapped to blue or red).
+        let (cx, cy) = (
+            ((ROUNDED_RECTS[0].0 + ROUNDED_RECTS[0].2 / 2) as f64 * scale) as usize,
+            ((ROUNDED_RECTS[0].1 + ROUNDED_RECTS[0].3 / 2) as f64 * scale) as usize,
+        );
+        let i = (cy * w + cx) * 4;
+        assert_eq!(
+            &b[i..i + 4],
+            &[0, 255, 0, 255],
+            "scale {scale}: centre of window 1"
+        );
+        let _ = h;
+    }
+}
+
+/// A sash-ui surface for the upload measurement: an opaque fill and a 64x64 square.
+struct UploadView {
+    square: sash_ui::Rect,
+}
+
+impl sash_ui::View for UploadView {
+    fn draw(&mut self, canvas: &mut sash_ui::Canvas) {
+        let (w, h) = canvas.size();
+        canvas.fill(
+            sash_ui::Rect::sized(w as i32, h as i32),
+            sash_ui::Color::rgb(0x2C2C2E),
+        );
+        canvas.fill(self.square, sash_ui::Color::rgb(0x0A84FF));
+    }
+}
+
+thread_local! {
+    /// The renderer and damage tracker of the upload measurement, on the server thread.
+    static UPLOAD_GPU: std::cell::RefCell<Option<(GlesRenderer, GlesTexture, OutputDamageTracker)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// M17 E1: what a sash-ui surface's wl_shm ABGR8888 upload costs sash-wm on a
+/// 5120x1440 output, for a 5120x64 bottom panel and a full-screen 5120x1440 surface,
+/// each with full damage on every frame and with a 64x64 change. Per frame: the client
+/// draws (CPU, timed by sash-ui) and commits; sash-wm builds the render elements (which
+/// imports the buffer: a full texture upload, or only the damaged rectangles) and
+/// waits for the GPU (glFinish), then renders the frame with a damage tracker kept
+/// from frame to frame (as the backends do) and waits again.
+/// Run: `cargo test --release -p sash-wm -- --ignored --nocapture gpu_shm_upload_cost`.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_shm_upload_cost() {
+    use sash_ui::{Edges, Layer, Panel, PanelSpec, Rect as UiRect};
+    const OUT: (i32, i32) = (5120, 1440);
+    let all = Edges {
+        top: true,
+        bottom: true,
+        left: true,
+        right: true,
+    };
+    let cases = [
+        ("panel 5120x64", Layer::Top, Edges::BOTTOM_BAR, (0, 64), 64),
+        ("full screen 5120x1440", Layer::Background, all, (0, 0), 0),
+    ];
+    for (name, layer, anchor, size, zone) in cases {
+        for full in [true, false] {
+            let mut harness = Harness::new();
+            harness.server.state.set_layout_area(OUT.into());
+            UPLOAD_GPU.with(|gpu| {
+                let mut renderer = renderer();
+                let target: GlesTexture = renderer
+                    .create_buffer(Fourcc::Abgr8888, OUT.into())
+                    .expect("offscreen buffer");
+                let tracker = OutputDamageTracker::new(OUT, 1.0, Transform::Normal);
+                *gpu.borrow_mut() = Some((renderer, target, tracker));
+            });
+            let stream = harness.server.state.privileged_connection_for_tests();
+            let spec = PanelSpec {
+                layer,
+                anchor,
+                size,
+                exclusive_zone: zone,
+                margin: 0,
+                namespace: "sash-upload".into(),
+            };
+            let label = format!(
+                "{name}, {}",
+                if full { "full damage" } else { "64x64 damage" }
+            );
+            harness.run_with_remote(move |server| {
+                let view = UploadView {
+                    square: UiRect::new(0, 0, 64, 64),
+                };
+                let mut panel = Panel::connect(stream, spec, view).expect("panel");
+                let (tx, rx) = std::sync::mpsc::channel::<(Duration, Duration)>();
+                let mut draws = Vec::new();
+                let mut uploads = Vec::new();
+                let mut frames = Vec::new();
+                for i in 0..120u64 {
+                    // The first commit may already have happened while connecting.
+                    let target = if i == 0 { 1 } else { panel.stats().commits + 1 };
+                    if i > 0 {
+                        let old = panel.view().square;
+                        let x = (old.x + 64) % (OUT.0 - 64);
+                        panel.view_mut().square = UiRect::new(x, 0, 64, 64);
+                        if full {
+                            panel.damage_all();
+                        } else {
+                            panel.damage(old);
+                            panel.damage(panel.view().square);
+                        }
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while panel.stats().commits < target || panel.stats().frame_callbacks < target {
+                        assert!(
+                            Instant::now() < deadline,
+                            "{label}: frame {i}: no commit: {:?}",
+                            panel.stats()
+                        );
+                        panel
+                            .dispatch(Some(Duration::from_millis(1)))
+                            .expect("panel");
+                    }
+                    let sent = tx.clone();
+                    server.on_server(move |h| {
+                        UPLOAD_GPU.with(|gpu| {
+                            let mut gpu = gpu.borrow_mut();
+                            let (renderer, target, tracker) = gpu.as_mut().expect("gpu");
+                            let start = Instant::now();
+                            let elements = render::output_elements(&h.server.state, renderer, 1.0);
+                            renderer
+                                .with_context(|gl| unsafe { gl.Finish() })
+                                .expect("finish");
+                            let upload = start.elapsed();
+                            let mut framebuffer = renderer.bind(target).expect("bind");
+                            let result = tracker
+                                .render_output(
+                                    renderer,
+                                    &mut framebuffer,
+                                    0,
+                                    &elements,
+                                    render::CLEAR_COLOR,
+                                )
+                                .expect("render");
+                            result.sync.wait().expect("GPU done");
+                            sent.send((upload, start.elapsed())).expect("times");
+                        });
+                    });
+                    let (upload, frame) = rx.recv().expect("times");
+                    // The first frame creates the textures; it is reported apart.
+                    if i == 0 {
+                        println!(
+                            "{label}: first frame: draw {}us, import {}us, frame {}us",
+                            panel.stats().last_draw.as_micros(),
+                            upload.as_micros(),
+                            frame.as_micros()
+                        );
+                        continue;
+                    }
+                    draws.push(panel.stats().last_draw);
+                    uploads.push(upload);
+                    frames.push(frame);
+                }
+                percentiles(&format!("{label}: client draw (CPU)"), draws);
+                percentiles(&format!("{label}: sash-wm import + finish"), uploads);
+                percentiles(
+                    &format!("{label}: sash-wm import + render + finish"),
+                    frames,
+                );
+            });
+            UPLOAD_GPU.with(|gpu| *gpu.borrow_mut() = None);
+        }
+    }
+}
+
+/// sash-ui's test panel (M17 E1) through the real renderer: the bottom 48 rows of the
+/// frame are exactly the panel's own buffer (opaque, scale 1: the GPU copies what the
+/// CPU drew, ABGR8888 to the screen without a swap or a blend).
+/// Run: `cargo test -p sash-wm -- --ignored --nocapture gpu_panel`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_panel_shows_its_own_pixels() {
+    use super::panel::{HEIGHT, TestPanel, pump, spec};
+    let mut harness = Harness::new();
+    let stream = harness.server.state.privileged_connection_for_tests();
+    let expected = harness.run_with_remote(move |_| {
+        let mut panel = sash_ui::Panel::connect(stream, spec(), TestPanel::new()).expect("panel");
+        pump(&mut panel, "the first frame callback", |p| {
+            p.stats().frame_callbacks == 1
+        });
+        let expected = panel.view_mut().expected();
+        // The connection stays open while the frame is rendered.
+        std::mem::forget(panel);
+        expected
+    });
+    for _ in 0..5 {
+        harness.step();
+    }
+    let mut gpu = renderer();
+    let (w, h, frame) = frame_at_scale(&mut gpu, &harness.server.state, 1.0);
+    let rows = &frame[(h - HEIGHT as usize) * w * 4..];
+    let differing = rows
+        .chunks(4)
+        .zip(expected.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    println!(
+        "panel on the GPU: {} pixels, {differing} differ from its buffer",
+        rows.len() / 4
+    );
+    assert_eq!(rows.len(), expected.len());
+    assert_eq!(differing, 0);
 }

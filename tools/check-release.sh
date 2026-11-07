@@ -9,6 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Crate boundaries (owner, M17): no sash-ui in sash-wm's normal or build tree.
+tools/check-deps.sh
+
 cargo build --release --locked -p sash-wm
 bin=target/release/sash-wm
 
@@ -48,6 +51,10 @@ markers=(
     SASH_DEBUG_RADIUS_PX
     # M13b: the layer-shell test client exists in test builds only.
     "layer-shell test client (tests only)"
+    # M17: sash-ui is a test-only dev-dependency: neither its code nor the test panel.
+    "sash-ui test panel (tests only)"
+    "sash_ui::"
+    "the compositor offers no wl_shm ABGR8888"
 )
 found=0
 for marker in "${markers[@]}"; do
@@ -101,15 +108,16 @@ if grep -aqF -- "privileged stand-in global (tests only)" target/debug/sash-wm; 
     echo "FAIL: the debug sash-wm binary contains the test-only stand-in global"
     exit 1
 fi
-# Control for the layer-shell test client: its marker is in the test binary, and in no
-# sash-wm binary.
-for marker in "layer-shell test client (tests only)"; do
+# Control for the layer-shell test client and sash-ui's test panel (M17): their markers
+# are in the test binary, and in no sash-wm binary.
+for marker in "layer-shell test client (tests only)" "sash-ui test panel (tests only)" \
+    "sash_ui::" "the compositor offers no wl_shm ABGR8888"; do
     if ! grep -aqF -- "$marker" "$test_bin"; then
         echo "FAIL: control: the test binary lacks $marker, the check is stale"
         exit 1
     fi
     if grep -aqF -- "$marker" target/debug/sash-wm; then
-        echo "FAIL: the debug sash-wm binary contains the layer-shell test client ($marker)"
+        echo "FAIL: the debug sash-wm binary contains test-only code ($marker)"
         exit 1
     fi
 done
@@ -153,4 +161,4 @@ else
     fi
 fi
 
-echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection, title size and gap overrides or debug recording code; the test-only privileged stand-in and layer-shell test client are in tests only"
+echo "ok: release binary has no debug-only capture, synthetic input, --mode, fault injection, title size and gap overrides or debug recording code; the test-only privileged stand-in, layer-shell test client and sash-ui test panel are in tests only"

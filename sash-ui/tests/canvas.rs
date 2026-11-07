@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! The canvas (M17 E1): a rectangle and text drawn on the CPU, compared with golden
+//! images; drawing stays inside the clip; a region drawn twice or in pieces gives the
+//! same pixels as one full draw.
+
+use std::path::PathBuf;
+
+use proptest::prelude::*;
+use sash_text::{ClientText, Image, Style, TextStack};
+use sash_ui::{Canvas, Color, Damage, Rect};
+
+const W: u32 = 320;
+const H: u32 = 48;
+
+/// The E1 scene: the dark bar fill, an accent square and one line of Manrope.
+struct Scene {
+    text: Image,
+    square: Rect,
+}
+
+impl Scene {
+    fn new() -> Self {
+        let mut stack = TextStack::new();
+        let line = stack.line(
+            &ClientText::new("Sash panel 13 px: æøå".as_bytes()),
+            Style {
+                size: sash_text::UI_SIZE,
+                weight: 400,
+            },
+            None,
+        );
+        let text = stack.draw(&line, 1.0, Color::rgb(0xFFFFFF).with_alpha(0.92).rgba());
+        Self {
+            text,
+            square: Rect::new(W as i32 - 40, 8, 32, 32),
+        }
+    }
+
+    fn draw(&self, canvas: &mut Canvas) {
+        canvas.fill(Rect::sized(W as i32, H as i32), Color::rgb(0x2C2C2E));
+        canvas.fill(self.square, Color::rgb(0x0A84FF));
+        canvas.text(&self.text, 12, 16);
+    }
+}
+
+fn render(scene: &Scene, damage: &Damage, pixels: &mut [u8]) {
+    for rect in damage.rects() {
+        let mut canvas = Canvas::new(pixels, W, H, *rect).expect("canvas");
+        canvas.clear();
+        scene.draw(&mut canvas);
+    }
+}
+
+fn full() -> Vec<u8> {
+    let mut pixels = vec![0; (W * H * 4) as usize];
+    render(
+        &Scene::new(),
+        &Damage::full(Rect::sized(W as i32, H as i32)),
+        &mut pixels,
+    );
+    pixels
+}
+
+fn golden_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(format!("{name}.png"))
+}
+
+/// Compares premultiplied RGBA `pixels` with tests/golden/NAME.png; SASH_UI_BLESS=1
+/// writes it instead. Tolerance as sash-text's goldens: every channel within 2 on all
+/// but 0.5% of the pixels, none more than 32 apart (the text rasteriser's
+/// floating point may differ between CPUs; the rectangles are exact).
+fn golden(name: &str, pixels: &[u8]) {
+    let path = golden_path(name);
+    if std::env::var_os("SASH_UI_BLESS").is_some() {
+        let file = std::fs::File::create(&path).expect("golden file");
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), W, H);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("png header");
+        writer.write_image_data(pixels).expect("png data");
+        eprintln!("wrote {}", path.display());
+        return;
+    }
+    let decoder = png::Decoder::new(std::io::BufReader::new(
+        std::fs::File::open(&path).expect("golden missing (SASH_UI_BLESS=1 writes it)"),
+    ));
+    let mut reader = decoder.read_info().expect("png");
+    let mut data = vec![0; reader.output_buffer_size().expect("png size")];
+    let info = reader.next_frame(&mut data).expect("png frame");
+    assert_eq!((info.width, info.height), (W, H), "{name}: size");
+    let (mut off, mut worst) = (0usize, 0u8);
+    for (a, b) in pixels.chunks(4).zip(data.chunks(4)) {
+        let d = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap_or(0);
+        if d > 2 {
+            off += 1;
+        }
+        worst = worst.max(d);
+    }
+    let limit = (W * H) as usize / 200;
+    assert!(
+        off <= limit && worst <= 32,
+        "{name}: {off} pixels off (limit {limit}), worst {worst}"
+    );
+}
+
+#[test]
+fn a_rectangle_and_text_match_the_golden() {
+    golden("panel-e1", &full());
+}
+
+#[test]
+fn the_rectangles_are_exact() {
+    let pixels = full();
+    let at = |x: u32, y: u32| {
+        let i = ((y * W + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    // RGBA in memory (wl_shm ABGR8888), opaque, so premultiplied equals straight.
+    assert_eq!(at(2, 2), [0x2C, 0x2C, 0x2E, 0xFF]);
+    assert_eq!(at(W - 40, 8), [0x0A, 0x84, 0xFF, 0xFF]);
+    assert_eq!(at(W - 9, 39), [0x0A, 0x84, 0xFF, 0xFF]);
+    assert_eq!(at(W - 8, 39), [0x2C, 0x2C, 0x2E, 0xFF]);
+    assert_eq!(at(W - 41, 8), [0x2C, 0x2C, 0x2E, 0xFF]);
+}
+
+#[test]
+fn text_is_drawn_where_asked() {
+    let pixels = full();
+    let lit = (0..H).any(|y| {
+        (12..100).any(|x| {
+            let i = ((y * W + x) * 4) as usize;
+            pixels[i] > 0x80
+        })
+    });
+    assert!(lit, "no text pixels near x 12");
+}
+
+#[test]
+fn nothing_is_drawn_outside_the_clip() {
+    let scene = Scene::new();
+    let mut pixels = vec![7; (W * H * 4) as usize];
+    let clip = Rect::new(30, 10, 50, 20);
+    let mut canvas = Canvas::new(&mut pixels, W, H, clip).expect("canvas");
+    canvas.clear();
+    scene.draw(&mut canvas);
+    for y in 0..H as i32 {
+        for x in 0..W as i32 {
+            let i = ((y as u32 * W + x as u32) * 4) as usize;
+            if !clip.contains(x, y) {
+                assert_eq!(&pixels[i..i + 4], &[7, 7, 7, 7], "({x}, {y}) touched");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_clip_past_the_buffer_is_cut() {
+    let mut pixels = vec![0; (W * H * 4) as usize];
+    let canvas =
+        Canvas::new(&mut pixels, W, H, Rect::new(-10, -10, 10_000, 10_000)).expect("canvas");
+    assert_eq!(canvas.clip(), Rect::sized(W as i32, H as i32));
+    assert!(Canvas::new(&mut pixels, W + 1, H, Rect::sized(1, 1)).is_none());
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Any damage, drawn over a buffer that held a full draw, leaves it equal to a
+    /// full draw: drawing is idempotent per pixel (overlaps and pieces included).
+    #[test]
+    fn redrawing_any_damage_keeps_the_pixels(
+        rects in proptest::collection::vec((-20i32..340, -20i32..60, 0i32..200, 0i32..60), 1..12)
+    ) {
+        let scene = Scene::new();
+        let mut pixels = full();
+        let mut damage = Damage::default();
+        for (x, y, w, h) in rects {
+            damage.add(Rect::new(x, y, w, h));
+        }
+        damage.clip(Rect::sized(W as i32, H as i32));
+        render(&scene, &damage, &mut pixels);
+        prop_assert!(pixels == full());
+    }
+
+    /// The region never loses a pixel: every pixel of every added rectangle stays in
+    /// it, also after it collapses to its bounds.
+    #[test]
+    fn damage_keeps_every_added_pixel(
+        rects in proptest::collection::vec((0i32..100, 0i32..100, 0i32..30, 0i32..30), 0..30)
+    ) {
+        let mut damage = Damage::default();
+        for &(x, y, w, h) in &rects {
+            damage.add(Rect::new(x, y, w, h));
+        }
+        prop_assert!(damage.rects().len() <= sash_ui::damage::MAX_RECTS);
+        for (x, y, w, h) in rects {
+            for py in y..y + h {
+                for px in x..x + w {
+                    prop_assert!(damage.contains(px, py));
+                }
+            }
+        }
+    }
+}

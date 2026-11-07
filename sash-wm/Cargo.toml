@@ -29,6 +29,9 @@ xcursor = "=0.3.11"
 
 [dev-dependencies]
 proptest = "1"
+# sash-ui's test clients in the harness (owner, M17): a test-only dev-dependency,
+# never a normal or build one; tools/check-release.sh proves it.
+sash-ui = { path = "../sash-ui" }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 # The layer-shell test client (tests only; already in the tree through Smithay).

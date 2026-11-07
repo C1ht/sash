@@ -14,6 +14,7 @@ mod gpu;
 mod harness;
 mod layer_shell;
 mod limits;
+mod panel;
 mod popups;
 #[cfg(feature = "debug-record")]
 mod record;
