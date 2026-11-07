@@ -127,6 +127,35 @@ change this file without the owner's approval.
   groups; raise on focus in floating mode; whether resize zones return
   on screen edges now that those edges keep their border.
 
+## Gaps and geometry (M18a, owner)
+
+- Outer gap 13 and inner gap 8, in logical pixels, everywhere: tiling,
+  snap zones and maximize. Fullscreen: none. Each interior edge insets by
+  4. The outer gap is applied on top of the usable area (after
+  layer-shell exclusive zones), so a window sits 13 px from a panel.
+- The corner rule and the no-border-on-screen-edge rule are removed:
+  every tile and snapped window is a fully rounded rectangle with a
+  hairline on all four edges.
+- Window radius 13 (was 10).
+- One function computes every visible rectangle from a cell, the usable
+  area and the gap constants. Tiling, snap zones, the snap preview,
+  maximize and drop targets all use it. Nothing else computes a gap.
+- Gaps and radius are constants. Debug builds only:
+  SASH_DEBUG_OUTER_GAP_PX, SASH_DEBUG_INNER_GAP_PX and
+  SASH_DEBUG_RADIUS_PX override them; tools/check-release.sh proves them
+  absent from release builds. SASH_DEBUG_GAP_PX is removed.
+- Logical rectangles become physical pixels by rounding each edge on its
+  own, so neighbours keep the exact gap at scales 1, 1.5 and 2.
+- Kept: the snap preview shows the visible rectangle; a drop or snap
+  trigger over a gap belongs to the tile it borders; a tile floated from
+  tiling starts from its visible rectangle; tile-all restores the exact
+  tree. Colours do not change in M18a (the palette is M18c).
+- Resize zones: unchanged in M18a (where they are is the open question in
+  "Window manager requirements").
+- Tests, standard checks, render time for 10 windows at 5120x1440 and
+  3440x1440 (p50/p95/p99, no regression), a table of every constant
+  changed; no tag; STOP and ask. M18b is not started.
+
 ## BSP tiling (M3)
 
 - The BSP tree is plain data in its own module, with no Smithay types,
@@ -1167,6 +1196,8 @@ change this file without the owner's approval.
   edges by floor(gap / 2), its right and bottom interior edges by
   gap - floor(gap / 2), so two neighbours are exactly `gap` apart. A
   visible rectangle is never less than 1 px wide or high.
+- Superseded (owner, M18a): SASH_DEBUG_GAP_PX is removed; outer and inner
+  gaps have their own debug overrides ("Gaps and geometry (M18a, owner)").
 - The gap is a constant, 8 px. Debug builds only: SASH_DEBUG_GAP_PX sets
   it (tools/check-release.sh proves it absent from release builds). No
   setting.
@@ -1209,6 +1240,8 @@ change this file without the owner's approval.
 - Masked: every window that negotiated server-side decorations, floating
   or tiled, with its whole surface tree (subsurfaces too). Windows that
   draw their own decorations and fullscreen windows stay square.
+- Superseded (owner, M18a): the radius is 13 px ("Gaps and geometry
+  (M18a, owner)").
 - Radius: a constant, 10 px. Debug builds only: SASH_DEBUG_RADIUS_PX
   (tools/check-release.sh proves it absent from release builds). No
   setting. The corner rule above decides which corners are rounded

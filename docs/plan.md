@@ -480,6 +480,12 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 - "Layer-shell": the first-party panel rule (exclusive zone = visible size plus margin) gives the dock's 110 px zone; decision 1's 123 px adds the outer gap.
 - Not existing yet, assumed by these decisions: workspaces, more than one monitor (hotplug of other monitors is out of scope today), minimize, needs-attention in the dock, xdg-activation (E5), the dock itself (E6).
 
+### M18a: gaps and geometry (owner; rules in CLAUDE.md, "Gaps and geometry (M18a, owner)")
+
+- Outer 13 / inner 8 logical px everywhere (tiling, snap zones, maximize), none for fullscreen; the outer gap on top of the usable area; every tile and snapped window fully rounded with a hairline on all edges; radius 13; one function for every visible rectangle; per-edge rounding to physical pixels; debug overrides SASH_DEBUG_OUTER_GAP_PX, SASH_DEBUG_INNER_GAP_PX, SASH_DEBUG_RADIUS_PX (SASH_DEBUG_GAP_PX removed). Colours unchanged (M18c). Resize zones unchanged.
+- Found while planning: Smithay 0.7's `Rectangle::to_physical_precise_round` rounds the position and the size separately, not each edge, so at scale 1.5 a rectangle's right edge can land a pixel off the per-edge result; sash-wm gets its own per-edge conversion for visible rectangles, clips and decoration areas.
+- Values in code today that docs/design.md does not have (CLAUDE.md, "Design values"; listed for the owner, not changed in M18a): the M16 palette (#1C1C1E, #2C2C2E, #3A3A3C, ..., text 55%, accent #0A84FF) against the spec's palette (M18c); the bar 32 px against the spec's 34 (buttons close, maximize, minimize; title centred, M15 has it left-aligned); the border colours #0A84FF / #3A3A3C (the spec: never a coloured outline); sash-ui's focus ring 2 px with a 1 px gap (the spec: 3 px off), button height 32, padding 12, icon gap 8 (in the scale), radius 0.25 x the shorter side (the spec: 0.236, at most 21); the Tabler chrome icons (approved in E3, tag m17c) against the spec's "Chrome glyphs: Lucide (ISC) 1.75 px"; the snap preview fill #0A84FF at 30% and 80%; the cursor size 24 (the spec leaves 21 or 34 open).
+
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
 On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.
