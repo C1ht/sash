@@ -55,6 +55,12 @@ if ! tree sash-wm normal,build,dev | grep -q '^sash-ui@'; then
     echo "FAIL: control: sash-wm has no sash-ui dev-dependency, the check is stale"
     failed=1
 fi
+# The shipped binary (the trixie build) is built with -p sash-wm, the configuration this
+# check covers: a workspace build would unify features with sash-ui's.
+if grep -E '^cargo build' tools/vm/build-iso.sh | grep -vq -- '-p sash-wm'; then
+    echo "FAIL: tools/vm/build-iso.sh has a cargo build without -p sash-wm"
+    failed=1
+fi
 if [ "$failed" -ne 0 ]; then
     exit 1
 fi

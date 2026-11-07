@@ -11,7 +11,9 @@ use std::{
 };
 
 use sash_text::{ClientText, Image, Style, TextStack};
-use sash_ui::{Canvas, Color, Damage, Edges, Layer, Panel, PanelSpec, Rect as UiRect, View};
+use sash_ui::{
+    Canvas, Color, Damage, Edges, Keyboard, Layer, Panel, PanelSpec, Rect as UiRect, View,
+};
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
     reexports::wayland_server::protocol::{wl_shm, wl_surface::WlSurface},
@@ -23,9 +25,9 @@ use crate::layout::Rect;
 
 /// Also the marker tools/check-release.sh looks for: in the test binary, in no sash-wm
 /// binary.
-const NAMESPACE: &str = "sash-ui test panel (tests only)";
+pub(super) const NAMESPACE: &str = "sash-ui test panel (tests only)";
 pub(super) const HEIGHT: i32 = 48;
-const WIDTH: i32 = 800;
+pub(super) const WIDTH: i32 = 800;
 
 /// The test panel: the bar fill, an accent square and one line of Manrope.
 pub(super) struct TestPanel {
@@ -83,6 +85,7 @@ pub(super) fn spec() -> PanelSpec {
         exclusive_zone: HEIGHT,
         margin: 0,
         namespace: NAMESPACE.into(),
+        keyboard: Keyboard::None,
     }
 }
 
@@ -114,7 +117,7 @@ fn idle(panel: &mut Panel<TestPanel>, time: Duration) {
     }
 }
 
-fn panel_surface(h: &Harness) -> WlSurface {
+pub(super) fn panel_surface(h: &Harness) -> WlSurface {
     h.server
         .state
         .layers
@@ -129,7 +132,7 @@ fn panel_surface(h: &Harness) -> WlSurface {
 
 /// What sash-wm holds for the panel: the buffer's format, size and bytes, and the
 /// surface's commit counter.
-fn server_buffer(h: &Harness) -> Option<(wl_shm::Format, i32, i32, Vec<u8>)> {
+pub(super) fn server_buffer(h: &Harness) -> Option<(wl_shm::Format, i32, i32, Vec<u8>)> {
     let surface = panel_surface(h);
     let buffer = with_renderer_surface_state(&surface, |s| s.buffer().cloned())??;
     with_buffer_contents(&buffer, |ptr, len, data| {

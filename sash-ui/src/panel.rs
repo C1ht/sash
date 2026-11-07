@@ -17,6 +17,10 @@
 //! - Pixels are tiny-skia's premultiplied RGBA, which is wl_shm ABGR8888: no swap.
 //!   A compositor without ABGR8888 is refused (sash-wm advertises it, M17).
 //!
+//! - Input (pointer, keys) goes to the view, which returns what it changed. While
+//!   the view animates, each frame callback advances it and draws what moved; when
+//!   the animation ends, frames stop and idle is 0 frames again.
+//!
 //! The buffer scale is 1: sash-wm's output scale is 1 until fractional scale exists.
 
 use std::{
@@ -35,11 +39,16 @@ use smithay_client_toolkit::{
         client::{
             Connection, QueueHandle,
             globals::registry_queue_init,
-            protocol::{wl_output, wl_shm, wl_surface},
+            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
         },
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+    },
     shell::{
         WaylandSurface,
         wlr_layer::{self, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
@@ -50,17 +59,40 @@ use smithay_client_toolkit::{
     },
 };
 
-use crate::{canvas::Canvas, damage::Damage, geometry::Rect};
+use crate::{
+    canvas::Canvas,
+    damage::Damage,
+    geometry::Rect,
+    input::{Input, Key, Pointer},
+};
 
 /// Buffers a panel keeps at most. Two alternate while the compositor holds one; a
 /// third covers a compositor that has not released the older one yet.
 pub const MAX_BUFFERS: usize = 3;
 
-/// What draws the panel's content.
+/// What draws the panel's content and takes its input.
 pub trait View {
     /// Draws the whole scene; the canvas keeps only what lies inside its clip (one
     /// rectangle of the damage, already cleared to transparent).
     fn draw(&mut self, canvas: &mut Canvas);
+
+    /// The compositor gave the panel a size (buffer pixels); everything is drawn next.
+    fn configure(&mut self, _size: (u32, u32)) {}
+
+    /// Input arrived at `now` (time since the panel was created); returns the damage.
+    fn input(&mut self, _input: Input, _now: Duration) -> Damage {
+        Damage::default()
+    }
+
+    /// Whether an animation is running (the panel then draws every frame).
+    fn animating(&self) -> bool {
+        false
+    }
+
+    /// A frame at `now`: advances animations and returns what they changed.
+    fn frame(&mut self, _now: Duration) -> Damage {
+        Damage::default()
+    }
 }
 
 /// The layer a panel is on.
@@ -70,6 +102,17 @@ pub enum Layer {
     Bottom,
     Top,
     Overlay,
+}
+
+/// Whether and when the panel takes keyboard focus (wlr-layer-shell).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Keyboard {
+    #[default]
+    None,
+    /// On a click into it.
+    OnDemand,
+    /// While mapped (top and overlay layers).
+    Exclusive,
 }
 
 /// The edges a panel is anchored to.
@@ -104,6 +147,7 @@ pub struct PanelSpec {
     /// The margin on every anchored edge.
     pub margin: i32,
     pub namespace: String,
+    pub keyboard: Keyboard,
 }
 
 #[derive(Debug)]
@@ -148,6 +192,8 @@ pub struct Stats {
     pub buffers_created: u64,
     /// CPU time of the last frame's drawing (clear and view, every damaged rectangle).
     pub last_draw: Duration,
+    /// Inputs given to the view.
+    pub inputs: u64,
 }
 
 struct Slot {
@@ -174,6 +220,11 @@ struct Inner<V> {
     frame_pending: bool,
     closed: bool,
     stats: Stats,
+    seats: SeatState,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
+    shift: bool,
+    epoch: Instant,
 }
 
 /// A layer surface and its connection, driven by `dispatch`.
@@ -242,7 +293,11 @@ impl<V: View + 'static> Panel<V> {
             m(spec.anchor.bottom),
             m(spec.anchor.left),
         );
-        layer.set_keyboard_interactivity(wlr_layer::KeyboardInteractivity::None);
+        layer.set_keyboard_interactivity(match spec.keyboard {
+            Keyboard::None => wlr_layer::KeyboardInteractivity::None,
+            Keyboard::OnDemand => wlr_layer::KeyboardInteractivity::OnDemand,
+            Keyboard::Exclusive => wlr_layer::KeyboardInteractivity::Exclusive,
+        });
         // The first commit, without a buffer, asks for the first configure.
         layer.commit();
 
@@ -262,6 +317,11 @@ impl<V: View + 'static> Panel<V> {
             frame_pending: false,
             closed: false,
             stats: Stats::default(),
+            seats: SeatState::new(&globals, &qh),
+            keyboard: None,
+            pointer: None,
+            shift: false,
+            epoch: Instant::now(),
         };
         // The shm formats arrive with the first roundtrip.
         queue
@@ -270,6 +330,13 @@ impl<V: View + 'static> Panel<V> {
         if !inner.shm.formats().contains(&wl_shm::Format::Abgr8888) {
             return Err(Error::NoAbgr8888);
         }
+        // The seat's capabilities arrived with that roundtrip and the handler asked for a
+        // pointer and a keyboard; a second roundtrip makes sure sash-wm has them before
+        // this returns (else a pointer already moving could enter before the pointer
+        // object exists, and the panel would miss the enter).
+        queue
+            .roundtrip(&mut inner)
+            .map_err(|err| Error::Connect(err.to_string()))?;
 
         let event_loop = EventLoop::try_new().map_err(|err| Error::Io(io::Error::other(err)))?;
         WaylandSource::new(conn, queue)
@@ -332,8 +399,27 @@ impl<V: View + 'static> Panel<V> {
 }
 
 impl<V: View + 'static> Inner<V> {
+    fn now(&self) -> Duration {
+        self.epoch.elapsed()
+    }
+
+    fn input(&mut self, input: Input) {
+        let now = self.now();
+        let damage = self.view.input(input, now);
+        self.pending.add_all(&damage);
+        self.stats.inputs += 1;
+    }
+
     fn draw_if_due(&mut self) {
-        if self.frame_pending || self.pending.is_empty() || self.closed {
+        if self.frame_pending || self.closed {
+            return;
+        }
+        if self.view.animating() {
+            let now = self.now();
+            let damage = self.view.frame(now);
+            self.pending.add_all(&damage);
+        }
+        if self.pending.is_empty() {
             return;
         }
         let Some((width, height)) = self.size else {
@@ -494,11 +580,180 @@ impl<V: View + 'static> LayerShellHandler for Inner<V> {
         if self.size != Some(size) {
             // A new size: new buffers, everything drawn.
             self.size = Some(size);
+            self.view.configure(size);
             self.slots.clear();
             self.last = None;
             self.pending = Damage::full(Rect::sized(size.0 as i32, size.1 as i32));
         }
         self.draw_if_due();
+    }
+}
+
+impl<V: View + 'static> SeatHandler for Inner<V> {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seats
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            self.keyboard = self.seats.get_keyboard(qh, &seat, None).ok();
+        }
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            self.pointer = self.seats.get_pointer(qh, &seat).ok();
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard
+            && let Some(k) = self.keyboard.take()
+        {
+            k.release();
+        }
+        if capability == Capability::Pointer
+            && let Some(p) = self.pointer.take()
+        {
+            p.release();
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl<V: View + 'static> PointerHandler for Inner<V> {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        /// BTN_LEFT (linux/input-event-codes.h).
+        const PRIMARY: u32 = 0x110;
+        for event in events {
+            let (x, y) = event.position;
+            let input = match event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    Pointer::Motion { x, y }
+                }
+                PointerEventKind::Leave { .. } => Pointer::Leave,
+                PointerEventKind::Press { button, .. } if button == PRIMARY => {
+                    Pointer::Press { x, y }
+                }
+                PointerEventKind::Release { button, .. } if button == PRIMARY => {
+                    Pointer::Release { x, y }
+                }
+                _ => continue,
+            };
+            self.input(Input::Pointer(input));
+        }
+        self.draw_if_due();
+    }
+}
+
+impl<V: View + 'static> Inner<V> {
+    /// The navigation keys; everything else (typed text included) is dropped here.
+    fn key(&mut self, event: &KeyEvent) {
+        let key = match event.keysym {
+            Keysym::Tab if self.shift => Key::BackTab,
+            Keysym::Tab => Key::Tab,
+            Keysym::ISO_Left_Tab => Key::BackTab,
+            Keysym::Left => Key::Left,
+            Keysym::Right => Key::Right,
+            Keysym::Up => Key::Up,
+            Keysym::Down => Key::Down,
+            Keysym::Home => Key::Home,
+            Keysym::End => Key::End,
+            Keysym::Return | Keysym::KP_Enter => Key::Enter,
+            Keysym::space => Key::Space,
+            Keysym::Escape => Key::Escape,
+            _ => return,
+        };
+        self.input(Input::Key(key));
+        self.draw_if_due();
+    }
+}
+
+impl<V: View + 'static> KeyboardHandler for Inner<V> {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        self.shift = false;
+    }
+
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.key(&event);
+    }
+
+    fn repeat_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.key(&event);
+    }
+
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+        self.shift = modifiers.shift;
     }
 }
 
@@ -512,7 +767,7 @@ impl<V: View + 'static> ProvidesRegistryState for Inner<V> {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_registry!(@<V: View + 'static> Inner<V>);

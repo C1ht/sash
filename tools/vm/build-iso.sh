@@ -22,11 +22,12 @@ curl -sSf https://sh.rustup.rs | sh -s -- -y -q --default-toolchain none --profi
     > /dev/null 2>&1
 . "$HOME/.cargo/env"
 cp -r /src /work && cd /work
-cargo build --locked --release 2>&1 | tail -1
-cargo build --locked 2>&1 | tail -1
+# -p sash-wm: a workspace build would unify features with those of sash-ui (M17 E2).
+cargo build --locked --release -p sash-wm 2>&1 | tail -1
+cargo build --locked -p sash-wm 2>&1 | tail -1
 cp target/release/sash-wm /out/sash-wm-release
 cp target/debug/sash-wm /out/sash-wm-debug
-cargo build --locked --features debug-record 2>&1 | tail -1
+cargo build --locked -p sash-wm --features debug-record 2>&1 | tail -1
 cp target/debug/sash-wm /out/sash-wm-debug-record
 ' 2>&1 | grep -v '^info:\|^warn:'
 cp "$ROOT"/tools/vm/*.sh "$ROOT"/tools/stage-c.sh "$ROOT"/tools/drm-probe.py "$ISO_DIR"/

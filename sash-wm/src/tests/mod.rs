@@ -26,6 +26,7 @@ mod tiling;
 mod titles;
 mod trust;
 mod usable_area;
+mod widgets;
 
 use std::{sync::mpsc, thread};
 

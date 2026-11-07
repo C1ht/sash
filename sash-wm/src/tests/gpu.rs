@@ -1071,6 +1071,7 @@ fn gpu_shm_upload_cost() {
                 exclusive_zone: zone,
                 margin: 0,
                 namespace: "sash-upload".into(),
+                keyboard: sash_ui::Keyboard::None,
             };
             let label = format!(
                 "{name}, {}",

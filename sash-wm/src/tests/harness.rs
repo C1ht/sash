@@ -310,6 +310,7 @@ pub mod keys {
     pub const F: u32 = 33;
     pub const T: u32 = 20;
     pub const TAB: u32 = 15;
+    pub const ENTER: u32 = 28;
     pub const CTRL: u32 = 29;
     pub const UP: u32 = 103;
     pub const LEFT: u32 = 105;
