@@ -12,8 +12,11 @@ sash-text = { path = "../sash-text" }
 # Wayland client plumbing (owner, after M16), behind sash-ui's own wrapper.
 smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop", "xkbcommon"] }
 # CPU drawing into wl_shm (owner, after M16).
-tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
+# SVG icons (owner, M17 E3): no text, system fonts, svgz or raster images inside SVG.
+resvg = { version = "=0.49.0", default-features = false }
+# PNG icons (owner, M17 E3).
+png = "0.18"
 
 [dev-dependencies]
-png = "0.18"
 proptest = "1"

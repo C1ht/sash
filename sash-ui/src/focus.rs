@@ -3,7 +3,9 @@
 //! Keyboard focus (M16 B3, owner after M16: full keyboard navigation with a defined
 //! focus order).
 //!
-//! - The focus order is the tree's reading order.
+//! - The focus order is the document order of the widget tree (parents before
+//!   children, children in the order they were added), not screen position (owner,
+//!   after E2): a screen is built in the order it should be read.
 //! - Tab and Shift+Tab move between tab stops and wrap around the surface. A
 //!   focusable widget outside any group is a stop; a group (a row or column marked
 //!   as one) is one stop, entered at the item focused in it last, else its first.

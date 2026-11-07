@@ -289,6 +289,17 @@ pub fn pairs() -> Vec<Pair> {
                 threshold: Some(TEXT_CONTRAST),
             });
         }
+        for surface in SURFACES {
+            out.push(Pair {
+                what: format!(
+                    "{mode}: accent button outline {} on {}",
+                    hex_of(theme.accent),
+                    hex_of(theme.surface_color(surface))
+                ),
+                ratio: contrast(theme.accent, theme.surface_color(surface)),
+                threshold: Some(NON_TEXT_CONTRAST),
+            });
+        }
         out.push(Pair {
             what: format!(
                 "{mode}: text on the accent fill {}",
@@ -340,6 +351,21 @@ mod tests {
             let lighter = from_hsl(h0, s0, l1 + 0.002);
             assert!(contrast(theme.on_accent(), lighter) < TEXT_CONTRAST);
         }
+    }
+
+    #[test]
+    fn the_derived_accent_fills_are_a_floor() {
+        // Owner, after E2: never lighter than these (by luminance and by lightness).
+        for (theme, floor) in [
+            (Theme::dark(), DARK_ACCENT_FILL),
+            (Theme::light(), LIGHT_ACCENT_FILL),
+        ] {
+            let floor = Color::rgb(floor);
+            assert!(luminance(theme.accent_fill) <= luminance(floor));
+            assert!(hsl(theme.accent_fill).2 <= hsl(floor).2);
+        }
+        assert_eq!(DARK_ACCENT_FILL, 0x006CDA);
+        assert_eq!(LIGHT_ACCENT_FILL, 0x006ADE);
     }
 
     #[test]

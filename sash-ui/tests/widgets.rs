@@ -21,7 +21,7 @@ use sash_ui::{
 struct Dot;
 
 impl IconSource for Dot {
-    fn raster(&self, px: u32) -> Option<IconRaster> {
+    fn raster(&self, px: u32, _scale: f32) -> Option<Rc<IconRaster>> {
         let c = px as f32 / 2.0;
         let r = px as f32 * 0.4;
         let mask = (0..px * px)
@@ -31,7 +31,7 @@ impl IconSource for Dot {
                 ((r + 0.5 - d).clamp(0.0, 1.0) * 255.0).round() as u8
             })
             .collect();
-        Some(IconRaster::Mask(mask))
+        Some(Rc::new(IconRaster::Mask(mask)))
     }
 }
 
@@ -699,5 +699,28 @@ proptest! {
         prop_assert_eq!(a.right(), b.x);
         prop_assert_eq!(a.y, b.y);
         prop_assert_eq!(a.h, b.h);
+    }
+}
+
+#[test]
+fn a_filled_button_has_an_outline_of_at_least_3_to_1() {
+    // Owner, after E2: never only a fill (the accent fill is under 3:1 on dark).
+    for theme in [Theme::dark(), Theme::light()] {
+        let mut d = dock(theme);
+        let (pixels, w, _) = render(&mut d.ui, 1.0);
+        let r = rect(&d.ui, d.power);
+        // The middle of the top edge: the outline's pixel.
+        let (x, y) = (r.x + r.w / 2, r.y);
+        let i = ((y as u32 * w + x as u32) * 4) as usize;
+        let edge = sash_ui::Color {
+            r: pixels[i],
+            g: pixels[i + 1],
+            b: pixels[i + 2],
+            a: 255,
+        };
+        let surface = theme.surface_color(Surface::Surface);
+        let ratio = sash_ui::theme::contrast(edge, surface);
+        assert_eq!(edge, theme.accent, "the outline is the accent");
+        assert!(ratio >= 3.0, "{ratio}");
     }
 }

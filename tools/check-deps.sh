@@ -19,8 +19,21 @@ CLIENT_ONLY=(
     smithay-client-toolkit@v0.21.1
     calloop-wayland-source@v0.4.1
     wayland-protocols-experimental@v20251230.0.3
-    tiny-skia@v0.11.4
-    tiny-skia-path@v0.11.4
+    tiny-skia@v0.12.0
+    tiny-skia-path@v0.12.0
+    resvg@v0.49.0
+    usvg@v0.49.0
+    roxmltree@v0.21.2
+    svgtypes@v0.16.2
+    simplecss@v0.2.2
+    kurbo@v0.13.1
+    polycool@v0.4.0
+    float-cmp@v0.9.0
+    data-url@v0.3.2
+    imagesize@v0.15.0
+    rgb@v0.8.53
+    siphasher@v1.0.4
+    pico-args@v0.5.0
     strict-num@v0.1.1
     arrayref@v0.3.9
     arrayvec@v0.7.8

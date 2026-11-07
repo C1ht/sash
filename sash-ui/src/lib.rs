@@ -28,7 +28,7 @@ pub mod ui;
 pub use canvas::{Canvas, Color};
 pub use damage::Damage;
 pub use geometry::Rect;
-pub use icon::{IconRaster, IconSource};
+pub use icon::{IconLoader, IconName, IconRaster, IconSource, Symbol};
 pub use input::{Input, Key, Pointer};
 pub use panel::{Edges, Keyboard, Layer, Panel, PanelSpec, Stats, View};
 pub use theme::{Surface, TextLevel, Theme};

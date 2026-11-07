@@ -34,7 +34,7 @@ const TOP: i32 = 600 - HEIGHT;
 struct Square;
 
 impl IconSource for Square {
-    fn raster(&self, px: u32) -> Option<IconRaster> {
+    fn raster(&self, px: u32, _scale: f32) -> Option<Rc<IconRaster>> {
         let inset = px / 4;
         let mask = (0..px * px)
             .map(|i| {
@@ -43,7 +43,7 @@ impl IconSource for Square {
                 if inside { 255 } else { 0 }
             })
             .collect();
-        Some(IconRaster::Mask(mask))
+        Some(Rc::new(IconRaster::Mask(mask)))
     }
 }
 

@@ -8,7 +8,7 @@
 //! ring position and hover fills follow over [`crate::anim::ANIMATION`], on the time the
 //! caller passes in. Every change marks just the widgets it touches.
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, rc::Rc, time::Duration};
 
 use sash_text::{Image, Style, TextStack};
 
@@ -72,7 +72,7 @@ pub struct Ui {
     damage: Damage,
     events: Vec<UiEvent>,
     texts: HashMap<NodeId, CachedText>,
-    icons: HashMap<(NodeId, u32), Option<IconRaster>>,
+    icons: HashMap<(NodeId, u32), Option<Rc<IconRaster>>>,
 }
 
 impl Ui {
@@ -633,15 +633,15 @@ impl Ui {
             ButtonStyle::Accent => {
                 let body = if pressed { inset(r, px(1)) } else { r };
                 canvas.fill_rounded(body, radius, theme.accent_fill);
-                if hover > 0.0 && !pressed {
-                    let border = theme.border();
-                    canvas.ring(
-                        r,
-                        radius,
-                        px(1),
-                        border.with_alpha(hover * theme.border_alpha),
-                    );
-                }
+                // The fill alone is under 3:1 on the dark surfaces: the accent outline
+                // (3:1 on every surface) marks the shape (owner, after E2). Hover
+                // widens it to 2 px: a change of shape.
+                let width = if hover > 0.5 && !pressed {
+                    px(2)
+                } else {
+                    px(1)
+                };
+                canvas.ring(r, radius, width, theme.accent);
                 let text = theme.on_accent();
                 if off {
                     text.with_alpha(theme.disabled_alpha)
@@ -714,11 +714,11 @@ impl Ui {
         let raster = self
             .icons
             .entry((id, px))
-            .or_insert_with(|| icon.source.raster(px));
+            .or_insert_with(|| icon.source.raster(px, s));
         let d = to_device(slot, s);
         let x = d.x + (d.w - px as i32) / 2;
         let y = d.y + (d.h - px as i32) / 2;
-        match raster {
+        match raster.as_deref() {
             Some(IconRaster::Mask(alpha)) => canvas.mask(alpha, px, x, y, color),
             Some(IconRaster::Color(rgba)) => canvas.image(rgba, px, x, y),
             None => {}

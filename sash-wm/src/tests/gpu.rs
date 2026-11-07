@@ -1202,3 +1202,85 @@ fn gpu_panel_shows_its_own_pixels() {
     assert_eq!(rows.len(), expected.len());
     assert_eq!(differing, 0);
 }
+
+/// The E3 contact sheet: every Tabler glyph sash-ui embeds, as icon buttons in a
+/// test panel, captured through sash-wm's offscreen path (owner, M17 E3).
+/// Run: `SASH_CAPTURE_DIR=<dir> cargo test -p sash-wm -- --ignored --nocapture gpu_capture_icon`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_capture_icon_contact_sheet() {
+    use std::{cell::RefCell, rc::Rc};
+
+    use sash_ui::{
+        Edges, IconLoader, Keyboard, Layer, Node, Panel, PanelSpec, Size, Surface, Symbol, Theme,
+        Ui,
+        icon::SymbolIcon,
+        tree::{Align, Insets},
+    };
+
+    let dir = std::env::var_os(crate::capture::CAPTURE_DIR_VAR).expect("set SASH_CAPTURE_DIR");
+    let mut harness = Harness::new();
+    let stream = harness.server.state.privileged_connection_for_tests();
+    harness.run_with_remote(move |_| {
+        let loader = Rc::new(RefCell::new(IconLoader::new(vec![], vec![], "none", false)));
+        let mut ui = Ui::new(
+            Node::column()
+                .padding(Insets::all(4))
+                .width(Size::Flex(1))
+                .height(Size::Flex(1)),
+            Theme::dark(),
+            Surface::Surface,
+        );
+        let root = ui.root();
+        for row in Symbol::ALL.chunks(10) {
+            let r = ui.add(
+                root,
+                Node::row()
+                    .spacing(8)
+                    .padding(Insets::all(4))
+                    .align(Align::Center)
+                    .group(),
+            );
+            for &symbol in row {
+                ui.add(
+                    r,
+                    Node::icon_button(SymbolIcon::new(loader.clone(), symbol), symbol.label())
+                        .icon_size(24),
+                );
+            }
+        }
+        let spec = PanelSpec {
+            layer: Layer::Top,
+            anchor: Edges::BOTTOM_BAR,
+            size: (0, 88),
+            exclusive_zone: 88,
+            margin: 0,
+            namespace: "sash-ui icon contact sheet (tests only)".into(),
+            keyboard: Keyboard::None,
+        };
+        let mut panel = Panel::connect(stream, spec, ui).expect("panel");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while panel.stats().frame_callbacks == 0 {
+            assert!(std::time::Instant::now() < deadline, "no frame");
+            panel
+                .dispatch(Some(std::time::Duration::from_millis(5)))
+                .expect("panel");
+        }
+        // The connection stays open while the frame is captured.
+        std::mem::forget(panel);
+    });
+    for _ in 0..5 {
+        harness.step();
+    }
+    let mut renderer = renderer();
+    let path = std::path::Path::new(&dir).join("m17-e3-icon-contact-sheet.png");
+    crate::capture::write_png(
+        &mut renderer,
+        &harness.server.state,
+        (800, 600).into(),
+        &path,
+    )
+    .expect("capture");
+    println!("wrote {}", path.display());
+}
