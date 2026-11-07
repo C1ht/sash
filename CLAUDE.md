@@ -1368,6 +1368,16 @@ change this file without the owner's approval.
   - Standard checks (tools/check-all.sh, trixie built with -p sash-wm
     only, the VM scenario, the fresh clone, pinned similarity); tag
     m17c after E3; STOP. E4 is not started.
+  - Owner answers (E3): resvg 0.49.0 (default features off) and its
+    crates are approved, and sash-ui moves to tiny-skia 0.12.0. Icons
+    (hicolor, Adwaita, any theme) are looked up in /usr/share/icons and
+    /usr/share/pixmaps only (root-owned; per-user and Flatpak icons show
+    the fallback: known limit). png 0.18 becomes a normal dependency of
+    sash-ui for PNG icons (no new crate); XPM is not supported. The time
+    budget: caps on input size, element count, nesting and canvas size
+    bound the work; parsing and drawing are each timed, and an icon over
+    its budget becomes the fallback and is not tried again in the
+    session.
 
 ## Text stack (owner, after M12; built in M14)
 
