@@ -1323,6 +1323,51 @@ change this file without the owner's approval.
   - Standard checks (tools/check-all.sh, trixie, the VM scenario, the
     fresh clone with the same runner output, pinned similarity); tag
     m17b after E2; STOP. E3 is not started.
+- After E2 (owner; E2 accepted, tag m17b):
+  - Interactive shapes get an outline or a state shape, never only a
+    fill (the dark accent fill against the dark surfaces is only
+    2.25-3.37:1). The derived accent fills #006CDA (dark) and #006ADE
+    (light) are a floor: a test fails if they are made lighter.
+  - Tab order is the document order of the widget tree, not screen
+    position.
+- E3 rules (owner, after E2): icon lookup and SVG.
+  - One first-party icon set for chrome, Lucide (ISC) or Tabler (MIT),
+    chosen by comparing coverage of the glyphs needed (power, restart,
+    suspend, search, folder, grid/apps, close, window states without
+    minimise, settings, clock, network, volume, notification); a
+    consistent stroke width and a 24 px grid. Never mix sets. A contact
+    sheet of the chosen glyphs: an offscreen screenshot of the test
+    panel. NOTICE carries the attribution, quoted from the upstream
+    licence file.
+  - SVG through resvg (licence, crate count, MSRV checked). SVG from apps
+    and themes is untrusted: an input size cap, nesting and element-count
+    caps, no external references, no scripts, no fonts from outside, a
+    time budget per icon. A failure gives a fallback icon, never a crash.
+  - Theme lookup per the freedesktop Icon Theme Specification:
+    index.theme parsing; directory types and sizes (Fixed, Scalable,
+    Threshold); inheritance with a depth cap and loops refused; the
+    hicolor fallback; size matching with the output scale. Icon names
+    come from untrusted app data: a name is a name, never a path (no
+    traversal); the spec's absolute-path case is checked separately.
+  - The system's Adwaita is loaded at runtime from /usr/share/icons
+    only; docs/plan.md records its Debian package and licence for the
+    .deb's Depends.
+  - Symbolic icons are masks tinted with the theme text colour; the tint
+    passes the 3:1 non-text rule on every surface (a test proves it).
+  - A cache with a byte cap and LRU eviction (constants).
+  - Tests: parsing (valid, missing, truncated, huge, binary garbage);
+    loops and deep inheritance; traversal attempts; hostile SVG files
+    (billion-laughs style, a huge canvas, external references,
+    scripts); cache eviction never frees an icon in use; goldens of the
+    contact sheet at scales 1, 1.5 and 2; a property test of size
+    matching; a long fuzz-style proptest on stable. Measured: load and
+    rasterisation time per icon at 24 and 48 px, cache memory, binary
+    size added.
+  - The icon widget loads names. App strings stay untrusted and never
+    reach the recorder or logs.
+  - Standard checks (tools/check-all.sh, trixie built with -p sash-wm
+    only, the VM scenario, the fresh clone, pinned similarity); tag
+    m17c after E3; STOP. E4 is not started.
 
 ## Text stack (owner, after M12; built in M14)
 
