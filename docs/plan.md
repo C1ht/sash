@@ -514,6 +514,7 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 | 5120x1440 | 10 tiles with the gaps, rounded | (new scene) | 319-327 / 378-451 / 1632-1675 us |
 | 3440x1440 | 10 tiles with the gaps, rounded | (new scene) | 266-282 / 342-370 / 1635-1724 us |
 
+    - VM scenario: two checks moved with the gaps (a window floated from its tile now starts 13 px in): 17g (the title in the bar) and 17f (a bar drag, then the close button) are offset by the outer gap. 17f also exposed an old scenario bug: it used step 1's output mode (1920x1200) after the unplug test had left the guest at 1280x800, so every absolute y landed at two thirds of its value (the old press at y 16 reached y 11, still inside the old bar, by luck; at 29 it reached 19, the top resize zone). 17f now reads its session's own mode, as 17g does. 38 of 38.
     - No regression: before and after are within the spread between runs. Floating windows have no gaps, so the floating scene measures the radius and the border change; the tiled scene is the gapped case (cheaper: tiles do not overlap).
 
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)

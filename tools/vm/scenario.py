@@ -38,6 +38,9 @@ DEBUG = "/mnt/sash/sash-wm-debug"
 results = []
 
 
+# The outer gap (owner, M18a): a window floated from its tile starts 13 px in.
+GAP = 13
+
 def check(name, ok, detail=""):
     results.append((name, ok))
     print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
@@ -669,23 +672,27 @@ try:
     sh(vm, "systemctl stop sash-session; chvt 1; sleep 1")
 
     # 17f. Decorations (M11b) on DRM: foot negotiates xdg-decoration and is answered
-    # server_side. Floated (Super+F, at the whole output) it has a bar; a drag on the bar
-    # moves it by (100, 100), and a click on the close button, now at (116, 116), closes
-    # foot. Without the move the click would land in foot's own area.
+    # server_side. Floated (Super+F, at its visible rectangle: 13 px in from each edge,
+    # the outer gap, M18a) it has a bar; a drag on the bar moves it by (100, 100), and a
+    # click on the close button, now at (129, 129), closes foot. Without the move the
+    # click would land in foot's own area.
     start(vm, windows=1)
+    # This session's mode: after the unplug test it is not step 1's (W, H would map
+    # every absolute y wrongly; found in M18a).
+    w17, h17, _ = output_mode(vm)
     negotiated = count(vm, "decorations negotiated")
     vm.keys("meta_l", "f")
     time.sleep(0.5)
-    vm.pointer_abs(W // 2, 16, W, H)
+    vm.pointer_abs(w17 // 2, GAP + 16, w17, h17)
     time.sleep(0.2)
     vm.button("left", True)
     for i in range(1, 11):
-        vm.pointer_abs(W // 2 + 10 * i, 16 + 10 * i, W, H)
+        vm.pointer_abs(w17 // 2 + 10 * i, GAP + 16 + 10 * i, w17, h17)
         time.sleep(0.05)
     vm.button("left", False)
     time.sleep(0.5)
     foot_before = sh(vm, "pgrep -x foot >/dev/null && echo yes || echo no").strip()
-    vm.pointer_abs(116, 116, W, H)
+    vm.pointer_abs(GAP + 116, GAP + 116, w17, h17)
     time.sleep(0.2)
     vm.button("left", True)
     vm.button("left", False)
@@ -712,9 +719,11 @@ try:
     time.sleep(0.5)
     dump = read_png(shot(vm, "17g-title"))
     fill = (0x2C, 0x2C, 0x2E)
-    # Bar inside the 1 px border: y 1..33; buttons x 1..65; title from 77 (12 px padding).
-    title_px = [p for p in region(dump, 77, 6, min(w17 - 13, 400), 28) if sum(p) > 3 * 110]
-    padding = [p for p in region(dump, 66, 6, 76, 28) if p != fill]
+    # Floated at its visible rectangle, GAP in from the edges (M18a). Bar inside the 1 px
+    # border: y 1..33; buttons x 1..65; title from 77 (12 px padding); all + GAP.
+    title_px = [p for p in region(dump, GAP + 77, GAP + 6, min(w17 - 13, GAP + 400), GAP + 28)
+                if sum(p) > 3 * 110]
+    padding = [p for p in region(dump, GAP + 66, GAP + 6, GAP + 76, GAP + 28) if p != fill]
     vm.keys("meta_l", "f11")
     time.sleep(2)
     b17 = sh(vm, "ls -d /home/sash/rec17g/bundle-* | tail -1").strip()
@@ -725,8 +734,8 @@ try:
         f.write(base64.b64decode(encoded))
     outline = read_png(outline_path)
     scale17 = outline[0] / w17
-    colours = set(region(outline, int(77 * scale17), int(6 * scale17),
-                         int(400 * scale17), int(28 * scale17)))
+    colours = set(region(outline, int((GAP + 77) * scale17), int((GAP + 6) * scale17),
+                         int((GAP + 400) * scale17), int((GAP + 28) * scale17)))
     check("titles: foot's title is drawn in its bar after the buttons; the outline "
           "screenshot has no text there",
           len(title_px) > 20 and not padding and len(colours) <= 3,
