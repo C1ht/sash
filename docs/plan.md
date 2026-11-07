@@ -435,7 +435,7 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 1. **Gaps and edges.**
    - Outer gap 13 px and inner gap 8 px, everywhere: tiling, snap zones and maximize. Fullscreen has no gaps.
    - The corner rule and the screen-edge border rule are removed: every corner is rounded and every edge has the hairline border.
-   - Dock zone 13 + 97 = 110 px for a dock at the bottom, left or right; windows start 123 px from the dock's screen edge (the zone plus the outer gap).
+   - Dock zone 13 + 97 = 110 px for a dock at the bottom, left or right; windows start 123 from the screen edge (110 dock zone + 13 outer gap), 13 px from the dock.
    - Unfocused windows are dimmed: 14% in the dark theme, 4% in the light theme.
 2. **New settings for the closed list:** dock position (bottom, left, right; per monitor); focus follows cursor (default on).
 3. **Focus follows the cursor, sloppy.**
@@ -457,6 +457,11 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
    - Floating windows that overlap the group are not part of it.
    - Groups are per workspace and monitor.
    - Snap zones must be tree-compatible (halves, thirds, quarters), not freeform.
+
+**Milestones from the design spec (owner, after the design phase; docs/design.md)**
+
+- **Blur, shadows and grain in the compositor**, a milestone of its own, before the glass dock in E6; otherwise the dock ships opaque first (the opaque chrome colour, as reduce transparency). Blur budget: the dock plus the launcher at 5120x1440 under 0.5 ms p99, and the blur is drawn again only when what is behind it changes. The shell asks the compositor for blur behind its surface: how is investigated first (there is no settled protocol; options and a recommendation before any code).
+- **Into E5** (with the window list, the native protocol and xdg-activation): minimize, needs-attention, and the flags the placement and focus rules need (user-started by token, placement at the pointer, focus on map).
 
 **Open questions (not decided)**
 

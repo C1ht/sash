@@ -1686,6 +1686,9 @@ change this file without the owner's approval.
   - No hidden controls.
   - Confirmations only for destructive actions.
   - Undo instead of dialogs.
+- Design values (owner, after the design phase): docs/design.md is the
+  frozen design spec. No colour, size, radius, gap, shadow or type value
+  in code that is not in docs/design.md; ask before adding one.
 
 ## Working rules
 
