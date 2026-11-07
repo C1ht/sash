@@ -426,6 +426,55 @@ Later (owner, after M9 stage B): **variable refresh rate (VRR)**, off in M9.
 
 Before daily use (owner, after M9 stage B): **Xcursor theme loading.** On DRM, sash-wm draws only its built-in arrow for every named cursor shape; client-chosen shapes (text beam, resize arrows, hand) need an Xcursor theme loaded from the system's icon theme directories.
 
+### Window manager requirements, after the design phase (owner, 2026-11-07; recorded only, not implemented)
+
+Recorded as given by the owner. Nothing here is built yet; CLAUDE.md is unchanged until the owner approves the rule text (the conflicts with today's rules are listed at the end).
+
+**Decisions**
+
+1. **Gaps and edges.**
+   - Outer gap 13 px and inner gap 8 px, everywhere: tiling, snap zones and maximize. Fullscreen has no gaps.
+   - The corner rule and the screen-edge border rule are removed: every corner is rounded and every edge has the hairline border.
+   - Dock zone 13 + 97 = 110 px for a dock at the bottom, left or right; windows start 123 px from the dock's screen edge (the zone plus the outer gap).
+   - Unfocused windows are dimmed: 14% in the dark theme, 4% in the light theme.
+2. **New settings for the closed list:** dock position (bottom, left, right; per monitor); focus follows cursor (default on).
+3. **Focus follows the cursor, sloppy.**
+   - The pointer over a gap, the wallpaper or the dock keeps the current focus.
+   - Focus changes only on real pointer motion: window geometry changing under a stationary pointer never changes focus; there is no pointer warp; a keyboard focus move stays until the pointer enters a different window.
+   - Popups, the launcher, the lock screen and move/resize grabs keep focus.
+   - The same rule applies across monitors.
+4. **Where new tiled windows open: at the pointer, on the monitor under the pointer.**
+   - The diagonals of the tile under the pointer choose the side (top, bottom, left, right); a centre zone (23.6% each way) splits the longer side. The split is 50:50.
+   - Minimum tile 233 x 144 px; if a split would go below it, the other axis is tried, else the window floats.
+   - Floating windows are not targets (the tile beneath is used). The pointer in a gap uses the nearest tile. The pointer over the dock or outside the usable area uses the focused tile. A pointer that never moved uses the focused tile.
+   - The same rule applies to drag and drop.
+   - Dialogs, windows with a parent and fixed-size windows keep the existing float rules (centred on the parent) and are never placed by this rule.
+5. **Only windows the user started are placed at the pointer and take focus:** started from the dock, the launcher or a keybind, through an xdg-activation token from sash-shell. Tokens are single use and expire after 34 s (proposal). Other windows open unfocused in the default spot and show needs-attention in the dock.
+6. **Snapped windows in floating mode form a group:** a tree of zones, using the same rectangle code as tiling, so the gaps are identical by construction.
+   - Dragging a shared edge moves the neighbours with the same gaps. Adjacency comes from the zone tree, not from windows that happen to touch. Keyboard resize follows the same rule.
+   - Resizing an outer edge, or moving the window, unsnaps it; a window that is unsnapped is no longer affected. The space it vacated stays empty and the neighbours stay as they are.
+   - Minimum sizes and client minimum sizes stop the edge.
+   - Floating windows that overlap the group are not part of it.
+   - Groups are per workspace and monitor.
+   - Snap zones must be tree-compatible (halves, thirds, quarters), not freeform.
+
+**Open questions (not decided)**
+
+- a. GUI apps started from a terminal have no token. Proposal: a new window whose process descends from the focused window's process counts as user-started.
+- b. Minimize in tiling. Proposal: the tile is released to its neighbour; restoring reinserts the window by the placement rule (the pointer), with the last slot remembered as a fallback; the same for snapped groups.
+- c. Raise on focus in floating mode. Proposal: no (raise on click).
+
+**Rules in CLAUDE.md these change, for the owner's rule text later** (listed, not edited):
+- "Gaps (M15b, owner)": inner gaps only, no outer gap; a maximized window fills the usable area; the corner rule ("a window corner is rounded unless both of its edges lie on the usable area's boundary"). Decision 1 replaces these.
+- "Decorations (M11b, owner)", "Output edges": no border and no resize zone on edges on the output boundary. Decision 1 removes the border part; whether the resize zones on those edges come back is not stated.
+- "Settings and configuration": the closed list gains dock position and focus follows cursor (decision 2).
+- "Floating (M4)": click-to-focus for all windows. Decision 3 makes focus follow the cursor (with the setting on); open question c is about raising.
+- "BSP tiling (M3)", rule A: a new window splits the tile under the pointer along the longer side as the second child. Decision 4 replaces the side choice (diagonals and a centre zone), adds the 233 x 144 minimum and the gap and dock cases; the "never moved counts as no pointer" rule stays.
+- "Focus on open (owner, M9e)": every new window takes focus when it maps. Decision 5 limits that to user-started windows.
+- "Snapping and fullscreen (M5)": snapped windows are independent; the seven default zones; maximize is a whole usable-area rectangle. Decision 6 adds groups and thirds.
+- "Layer-shell": the first-party panel rule (exclusive zone = visible size plus margin) gives the dock's 110 px zone; decision 1's 123 px adds the outer gap.
+- Not existing yet, assumed by these decisions: workspaces, more than one monitor (hotplug of other monitors is out of scope today), minimize, needs-attention in the dock, xdg-activation (E5), the dock itself (E6).
+
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
 On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.
