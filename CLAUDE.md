@@ -8,10 +8,19 @@ change this file without the owner's approval.
 - Sash is a Wayland desktop environment written in Rust.
 - Repository: `sash`. Crates:
   - `sash-wm` — the compositor, built on Smithay.
-  - `sash-ui` — the first-party UI toolkit (later).
+  - `sash-ui` — the first-party UI toolkit (built from M17).
   - `sash-text` — shaping, glyph cache and CPU rasterisation, no Wayland
     or UI code; sash-ui depends on it (approved by the owner after M12;
     created in M14, not before).
+  - `sash-shell` — the dock and the launcher, one process (approved by
+    the owner after M16; created when the dock is built, E6, not before).
+  - `sash-settings` — the Settings app (approved by name after M16;
+    created later, not before).
+- Dependencies between them (owner, after M16): sash-wm never depends
+  on sash-ui as a normal or build dependency; a dev-dependency used by
+  tests only is allowed. sash-ui never depends on sash-wm (no cycle).
+  sash-text is the only crate shared by sash-wm and sash-ui. Enforced by
+  tools/check-release.sh (run by tools/check-all.sh).
 - Do not create any other crate without asking first.
 - Development platform: Arch Linux. Target distro: Debian 13 (trixie).
   Everything must build and run with what trixie ships (see "Target
@@ -19,7 +28,9 @@ change this file without the owner's approval.
 
 ## Names
 
-- Use only: sash, sash-wm, sash-ui.
+- Use only: sash, sash-wm, sash-ui, sash-text, sash-shell, sash-settings.
+- Binary names are sash-<role> (owner, after M16); what the user sees is
+  the plain name (the dock, the launcher, Settings).
 - First-party apps get plain, unbranded names: Settings, Files,
   Text Editor, etc. No "Sash Files", no invented product names.
 
@@ -1190,6 +1201,98 @@ change this file without the owner's approval.
     icon theme, .desktop parsing, the foreign-toplevel protocol and a
     test panel.
 
+## Shell and sash-ui (M17, owner, after M16)
+
+- M16 accepted. The decisions below are rules; anything they do not
+  cover is asked first. The originality and process rules stay.
+- Names and restart (owner):
+  - sash-shell is the dock and the launcher in one process; sash-settings
+    comes later. Display names stay plain.
+  - sash-wm restarts sash-shell when it exits, with a backoff and a cap
+    (constants, proposed with E6); a recovery keybind starts it again
+    (chord proposed with E6; no action is added without asking). How a
+    release build opens a terminal while the shell is dead is a
+    proposal in docs/plan.md, not built.
+  - The fixed list of programs sash-wm may start (Trust and spawning)
+    gets, in debug builds only, an environment override for development
+    runs; absent from release builds, proven by tools/check-release.sh.
+- Drawing (owner): CPU drawing with tiny-skia into wl_shm, limited to
+  damage; idle is 0 frames. sash-wm advertises wl_shm ABGR8888
+  (tiny-skia's byte order) besides the mandatory formats; tests: shm
+  import of it, the rounded-corner shader path with it, dmabuf windows
+  mixed in, every existing golden unchanged. GPU drawing is a recorded
+  option only.
+- Client plumbing (owner): smithay-client-toolkit 0.21.1 behind
+  sash-ui's own wrapper (no SCTK type in sash-ui's public API);
+  docs/plan.md records its MSRV and maintenance state.
+- Accessibility (owner): roles, labels, states and the focus model are
+  part of sash-ui from day one. Every interactive widget has an
+  accessible name (a test fails otherwise). Full keyboard navigation
+  with a defined focus order. The AccessKit adapter is a known limit,
+  decided before the Settings app. docs/v1.md has a candidate gate
+  (owner's decision pending): a screen reader is usable for the shell
+  and Settings.
+- Input methods (owner): no IME in v1 (known limit, decided with the IME
+  trust question). Dead keys and compose work in text fields; the test
+  comes with the text field.
+- Icons (owner): first-party chrome uses Lucide (ISC) or Tabler (MIT),
+  recoloured; NOTICE carries the attribution and quotes the licence
+  texts. Apps' icons from hicolor; folders and file types from the
+  system's Adwaita, loaded at runtime (never bundled); resvg for SVG.
+  WhiteSur is dropped as the default; revisited as an optional package
+  with the apt repository.
+- Launching (owner): the dock starts apps itself: no shell, a clean
+  environment, setsid, descriptors closed, signals reset, children
+  reaped, Exec field codes per the Desktop Entry spec, xdg-activation
+  tokens. A test proves a started app sees no privileged global.
+- Running windows (owner): the standard read-only list plus a small
+  native Sash protocol for focus, close and state, both privileged. The
+  report names the list protocol Smithay 0.7 offers. The native
+  protocol's XML lives in the repository, versioned, and its server side
+  is fuzzed. Titles are untrusted everywhere.
+- D-Bus (owner): zbus comes in a later milestone, after its own
+  investigation (crates, licences, runtime). The first dock has the
+  clock only. Power actions run /usr/bin/systemctl by absolute path;
+  only power off and reboot ask for confirmation. The tray gets its own
+  trust investigation.
+- Recents (owner): recently launched apps only: app ids and timestamps,
+  the last 20, in a file of mode 0600 under ~/.local/state/sash/; a
+  clear action; never in the debug recorder.
+- Contrast (owner):
+  - Text at 35% alpha only for disabled items and decoration.
+  - Non-text glyphs need 3:1 against their background.
+  - The accent is never body text on dark backgrounds.
+  - Text on a filled accent uses a darker derived accent token.
+  - Light-mode secondary text: the smallest passing alpha is computed;
+    a change of up to 5 points is approved.
+  - A test fails if any token pair is under its threshold.
+  - Derived tokens are reported with labelled hex values. Any other
+    palette change goes back to the owner.
+- Running states (owner): not running, running, running with focus;
+  shown by shape, with accessible state names.
+- Tests reaching sash-wm (owner, M17): sash-ui's test clients run in
+  sash-wm's test harness (a dev-dependency) on in-process privileged
+  connections. Enforced: `cargo tree -p sash-wm -e normal,build` holds no
+  sash-ui and none of its client-only crates that sash-wm does not
+  already use; no test-only code or strings in any release binary; the
+  dev-dependency changes no feature of a shared crate in normal builds
+  (cargo tree -e features compared before and after, reported).
+  Because the in-process connection skips the real spawner, one
+  real-process test is required when sash-shell exists (E6): sash-shell
+  started through spawn_privileged gets the privileged globals, and an
+  app it starts does not.
+- M17 = E1 and E2, a report and a STOP after each; tags m17a and m17b
+  after each step; standard checks (tools/check-all.sh, trixie, the VM
+  scenario, a fresh clone, pinned similarity). E3 is not started.
+  - E1: the sash-ui skeleton; a test-only privileged layer-surface panel
+    drawing a rectangle and text (sash-text); shm buffers; damage-
+    limited upload; idle 0 frames; ABGR8888 in sash-wm. Goldens; the
+    upload cost measured at the panel size and at a full-screen size.
+  - E2: layout, label, icon, button, the focus model, accessible names,
+    contrast tests, keyboard navigation; the ~180 ms animation never
+    delays logical state. The text field and the scrolling list wait
+    for the launcher.
+
 ## Text stack (owner, after M12; built in M14)
 
 - cosmic-text and its crates are approved for a measurement only (binary
@@ -1207,7 +1310,7 @@ change this file without the owner's approval.
   started:
   - sash-text: shaping, glyph cache, CPU rasterisation; no Wayland, no
     UI, no dependency on sash-ui. sash-ui will depend on it later;
-    sash-wm may depend on sash-text only (never on sash-ui).
+    sash-wm may depend on sash-text only (never on sash-ui; tests: see "Project").
   - Typeface: Manrope bundled; its SIL OFL licence and the attribution
     duty are recorded, and the licence file is kept next to the font
     file. DejaVu and Noto only as system fallbacks read from
@@ -1295,7 +1398,7 @@ change this file without the owner's approval.
 
 ## Window titles (M15, owner)
 
-- sash-wm depends on sash-text only, never on sash-ui.
+- sash-wm depends on sash-text only, never on sash-ui (a test-only dev-dependency is allowed, see "Project").
 - Titles come from xdg_toplevel.set_title and are untrusted: held as
   sash-text's client text (1024 bytes, 256 glyphs, ellipsis). Never
   logged or recorded, never in outline screenshots, bundles or replay
