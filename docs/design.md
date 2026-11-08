@@ -41,7 +41,11 @@ Interaction constants (logical px): resize zone 8 inside the outline,
 corner zone 21 x 21; snap edge trigger 8, snap corner trigger 55; edge
 snap distance 13; visibility rule 55 (a moved window keeps at least 55 px
 on the output per axis); keyboard move/resize step 34; cascade 34; minimum
-tile 233 x 144. Cursor size open: 21, 24 or 34 (hardware session).
+tile 233 x 144. Cursor size: a setting (input group, per user): medium 24
+(default), large 36, extra large 48, from the sizes the Adwaita cursor
+theme ships (24, 30, 36, 48, 72, 96; nothing below 24); bitmaps are never
+scaled; at output scales 1.25 to 2 the next shipped size up is used, so the
+apparent size holds.
 
 Glass B (chosen): dark tint #15191C at 88%, blur 80, saturation 100%,
 edge white 10%, top highlight white 16%, fine monochrome grain, soft
@@ -76,5 +80,5 @@ Wallpaper: native 5120 px wide or more, cool graphite/teal family; a
 separate light default. Cover-fit, never stretched.
 
 Open: dock-on-side details beyond the mirror; the browser draws its own
-tab strip under our 34 px bar (keep both for now); cursor size (21, 24 or 34,
-decided in the hardware session); light glass B; real icon set.
+tab strip under our 34 px bar (keep both for now); cursor size default 24,
+now a setting; light glass B; real icon set.

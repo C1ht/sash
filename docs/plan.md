@@ -606,6 +606,21 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 
 - Values still in code that docs/design.md does not have: the tiled-resize floor 64 px per axis (`MIN_TILE`, M6); the cursor size 24 (the spec: 21, 24 or 34, open); the glyph shapes' proportions (Tabler's grid); the fixed-size fullscreen backdrop (opaque black); the page token as the background until a wallpaper exists; the snap preview's 12% / 60% / 1 px and the title reserve 3 x 34 + 8 (from the M18b brief); the sash-ui icon gap 8 is in the spec ("gap 8"); the SVG work caps are limits, not design values.
 
+### Cursor size setting (owner, after M18c; docs only, built with the settings milestone)
+
+- A new setting in the input group of the closed settings list, per user: **Cursor size: medium (default, 24), large, extra large.** Recorded in docs/design.md ("Interaction constants"; the Open line now reads "cursor size default 24, now a setting").
+- The sizes come from what the Adwaita cursor theme ships. Read from the Xcursor files' tables of contents: Arch's adwaita-cursors 51.0 (63 entries, 35 files) and trixie's adwaita-icon-theme 48.1 (62 entries, 35 files, read from the .deb in a debian:trixie container) both ship every cursor at 24, 30, 36, 48, 72 and 96 px, the same in every file. Nothing is below 24, so (owner's rule) there is no "small": the choices are medium 24 (default), large 36 and extra large 48.
+- Bitmaps are never scaled. At an output scale from 1.25 to 2 the next shipped size at or above size x scale is used, so the apparent size holds:
+
+| Setting | x1 | x1.25 | x1.5 | x1.75 | x2 |
+|---|---|---|---|---|---|
+| Medium | 24 | 30 | 36 | 48 | 48 |
+| Large | 36 | 48 | 72 | 72 | 72 |
+| Extra large | 48 | 72 | 72 | 96 | 96 |
+
+- Clients that use the cursor-shape protocol (wp_cursor_shape_v1) follow a change immediately: sash-wm draws their cursor from the theme. Clients that draw their own cursor surface (libwayland-cursor, most toolkits without cursor-shape) read XCURSOR_SIZE (and XCURSOR_THEME) when they start, so they show the old size until they are restarted; this is documented for users in Settings next to the choice. The dock and the launcher start apps with a clean environment (M17), so they pass XCURSOR_SIZE (the setting's size at scale 1) and XCURSOR_THEME=Adwaita in it.
+- Today: the size is the constant 24 (M11a), with XCURSOR_THEME and XCURSOR_SIZE overrides in debug builds only. Nothing changes until the settings milestone. CLAUDE.md's list of the future input group ("Settings and configuration") does not name the cursor size yet; that line changes only with the owner's approval.
+
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
 On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.
