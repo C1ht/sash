@@ -7,7 +7,8 @@
 use proptest::prelude::*;
 
 use super::{
-    Direction, Edges, MIN_TILE, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId, ZoneId,
+    Direction, Edges, MIN_TILE_SIZE, Mode, MonitorLayout, NewWindow, Rect, SizeLimits, WindowId,
+    ZoneId,
     gaps::Gaps,
     layers::{self, LayerId, LayerSurface, Level, Margins},
     monitor::Layer,
@@ -133,19 +134,28 @@ enum Op {
     SetGaps(i32, i32),
 }
 
-/// A tiled resize never makes a tile smaller than min(MIN_TILE, its size before) on
-/// either axis.
+/// Every tile's visible rectangle (owner, M19b: the minimum is measured on it).
+fn visible_tiles(layout: &MonitorLayout) -> Vec<(WindowId, Rect)> {
+    layout
+        .tiled_rects()
+        .into_iter()
+        .map(|(w, cell)| (w, layout.inset(cell)))
+        .collect()
+}
+
+/// A tiled resize never makes a tile's visible rectangle smaller than
+/// min(MIN_TILE_SIZE, its size before) on either axis.
 fn check_tile_minimum(before: &[(WindowId, Rect)], after: &[(WindowId, Rect)]) {
     for (w, old) in before {
         if let Some((_, new)) = after.iter().find(|(a, _)| a == w) {
             assert!(
-                new.w >= old.w.min(MIN_TILE),
+                new.w >= old.w.min(MIN_TILE_SIZE.0),
                 "{w:?} width {} -> {}",
                 old.w,
                 new.w
             );
             assert!(
-                new.h >= old.h.min(MIN_TILE),
+                new.h >= old.h.min(MIN_TILE_SIZE.1),
                 "{w:?} height {} -> {}",
                 old.h,
                 new.h
@@ -315,21 +325,36 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
                 server_side,
                 pointer,
             };
-            // Rule A: the tile under the pointer is split, otherwise the focused one;
-            // its leaf becomes the new window's sibling.
+            // Placement (owner, M19b): a new tiled window splits the tile under the
+            // pointer, else the focused tile; if neither axis fits it floats with its
+            // placeholder there. Floating ones go next to the focused window.
+            let wants_tile = layout.default_mode() == Mode::Tiled && !new.forced;
             let under = pointer.and_then(|(x, y)| layout.tile_at(x, y));
+            let target = under.or_else(|| layout.focused_tile());
             let focused = layout.focused();
+            let window = WindowId(*next);
             if mapped {
-                layout.open(WindowId(*next), new);
+                layout.open(window, new);
             } else {
-                layout.open_unfocused(WindowId(*next), new);
+                layout.open_unfocused(window, new);
             }
-            let tiled = layout.mode(WindowId(*next)) == Some(Mode::Tiled);
-            if let Some(target) = if tiled { under.or(focused) } else { focused } {
+            let tiled = layout.mode(window) == Some(Mode::Tiled);
+            let expected = if wants_tile {
+                target.or(focused)
+            } else {
+                focused
+            };
+            if let Some(target) = expected {
                 assert_eq!(
-                    layout.tree().sibling_leaf(WindowId(*next)),
+                    layout.tree().sibling_leaf(window),
                     Some(target),
                     "the new window splits the right leaf"
+                );
+            }
+            if tiled {
+                assert!(
+                    layout.holds_minimum(window, true),
+                    "the new tile holds the minimum"
                 );
             }
             if mapped {
@@ -356,19 +381,28 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
         Op::Toggle(i) => {
             if let Some(w) = pick(layout, i) {
                 let forced = layout.is_forced(w);
-                assert_eq!(layout.toggle(w), !forced, "toggle works unless forced");
+                let floating = layout.mode(w) == Some(Mode::Floating);
+                let toggled = layout.toggle(w);
+                if forced {
+                    assert!(!toggled, "a forced window does not toggle");
+                } else if !toggled {
+                    // Only tiling can be refused: when the tiles would not fit.
+                    assert!(floating, "floating always works");
+                    assert_eq!(layout.mode(w), Some(Mode::Floating));
+                }
             }
         }
         Op::FloatAll => layout.float_all(),
         Op::TileAll => {
             layout.tile_all();
-            for w in layout.windows() {
-                let expected = if layout.is_forced(w) {
-                    Mode::Floating
-                } else {
-                    Mode::Tiled
-                };
-                assert_eq!(layout.mode(w), Some(expected));
+            for w in layout.windows().collect::<Vec<_>>() {
+                if layout.is_forced(w) {
+                    assert_eq!(layout.mode(w), Some(Mode::Floating));
+                } else if layout.mode(w) == Some(Mode::Floating) {
+                    // Left floating only because tiling it would not fit.
+                    let mut probe = layout.clone();
+                    assert!(!probe.toggle(w), "{w:?} would fit, yet stayed floating");
+                }
             }
         }
         Op::MoveBy(i, dx, dy) => {
@@ -379,10 +413,10 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
         Op::ResizeBy(i, dw, dh) => {
             if let Some(w) = pick(layout, i) {
                 let tiled = layout.mode(w) == Some(Mode::Tiled);
-                let before = layout.tiled_rects();
+                let before = visible_tiles(layout);
                 let result = layout.resize_by(w, dw, dh);
                 if tiled {
-                    check_tile_minimum(&before, &layout.tiled_rects());
+                    check_tile_minimum(&before, &visible_tiles(layout));
                 } else if let Some(r) = result {
                     let limits = layout.limits(w);
                     assert_eq!(limits.clamp((r.w, r.h)), (r.w, r.h), "size within limits");
@@ -398,13 +432,13 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
                 let y = rect.y + rect.h * (2 * cy as i32 + 1) / 6;
                 let edges = resize_zone(rect, x, y);
                 if let Some(resize) = layout.begin_tiled_resize(w, edges) {
-                    let before = layout.tiled_rects();
+                    let before = visible_tiles(layout);
                     // A drag in several motions, measured from the press.
                     for step in 1..=3 {
                         layout.drag_tiled_resize(&resize, dx * step / 3, dy * step / 3);
                         layout.check_invariants();
                     }
-                    check_tile_minimum(&before, &layout.tiled_rects());
+                    check_tile_minimum(&before, &visible_tiles(layout));
                 }
             }
         }
@@ -593,6 +627,24 @@ proptest! {
         layout.tile_all();
         use crate::layout::Layout;
         expected.set_area(layout.area());
+        // Owner, M19b: a window whose tile would not hold the minimum in the area as it
+        // is now stays floating; the tree is otherwise identical, and each such window
+        // would still not fit.
+        let windows: Vec<WindowId> = layout.windows().collect();
+        for w in windows {
+            if expected.mode_of(w) == Some(Mode::Tiled) && layout.mode(w) == Some(Mode::Floating) {
+                expected.set_mode(w, Mode::Floating);
+                let mut probe = layout.clone();
+                prop_assert!(!probe.toggle(w), "{:?} would fit, yet stayed floating", w);
+            }
+            // And the other way: one that did not fit before tiles now that it does.
+            if expected.mode_of(w) == Some(Mode::Floating)
+                && layout.mode(w) == Some(Mode::Tiled)
+                && !layout.is_forced(w)
+            {
+                expected.set_mode(w, Mode::Tiled);
+            }
+        }
         prop_assert_eq!(layout.tree(), &expected);
         prop_assert_eq!(layout.tiled_rects(), expected.rects());
     }
@@ -692,7 +744,7 @@ proptest! {
 /// overlap; neighbours are exactly the inner gap rounded once apart (12 at 1.5); every
 /// tile on the usable area's edge is exactly the outer gap rounded once from it (20 at
 /// 1.5, on all four sides).
-fn check_physical(layout: &MonitorLayout) {
+pub(crate) fn check_physical(layout: &MonitorLayout) {
     use super::gaps::{physical_edge, physical_gap};
     let Gaps { outer, inner } = layout.gaps();
     let area = layout.area();

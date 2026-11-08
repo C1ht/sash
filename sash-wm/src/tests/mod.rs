@@ -17,6 +17,7 @@ mod layer_shell;
 mod limits;
 mod look;
 mod panel;
+mod placement;
 mod popups;
 mod real_clients;
 #[cfg(feature = "debug-record")]

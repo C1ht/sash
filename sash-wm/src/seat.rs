@@ -368,6 +368,7 @@ impl Sash {
                 {
                     if let Some(window) = under {
                         record_context!(self, "click");
+                        self.windows.layout.touch(window);
                         self.focus_window(window);
                     } else if let Some(layer) = self.layer_at(location) {
                         self.layer_clicked(layer);

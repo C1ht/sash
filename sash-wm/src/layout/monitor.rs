@@ -10,11 +10,12 @@
 use std::collections::BTreeMap;
 
 use super::{
-    BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, Mode, Rect, Side, SizeLimits,
-    SplitHandle, WindowId,
+    BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, MIN_TILE_SIZE, Mode, Rect, Side,
+    SizeLimits, SplitHandle, WindowId,
     decor::Decoration,
     gaps::{Frame, Gapped, Gaps},
     geometry::pick_in_direction,
+    placement::{DropSide, drop_side},
     snap::{SnapStep, ZoneId, Zones, snap_step},
 };
 
@@ -39,6 +40,10 @@ struct WindowState {
     snap: Option<Snapped>,
     /// Maximized while tiled: drawn over the whole output, keeping its leaf and tile.
     maximized_tiled: bool,
+    /// Floated because a shrinking usable area left no room for it (owner, M19b), with
+    /// the order it was floated in; it returns to its leaf when there is room again,
+    /// unless it was touched (`touch`) while floating.
+    floated_for_size: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -136,6 +141,13 @@ pub struct MonitorLayout {
     gaps: Gaps,
     /// The corner radius of windows with server-side decorations (M15b step 2).
     radius: i32,
+    /// Counts windows floated for size, to return them newest-floated first.
+    size_floats: u64,
+    /// Tests only: replays of bundles recorded before M19b place new windows by rule A
+    /// (the longer side of the tile under the pointer or the focused tile, the new
+    /// window second) with no minimum tile, as the session did.
+    #[cfg(test)]
+    rule_a: bool,
 }
 
 impl MonitorLayout {
@@ -155,7 +167,17 @@ impl MonitorLayout {
             // has none.
             gaps: Gaps::NONE,
             radius: 0,
+            size_floats: 0,
+            #[cfg(test)]
+            rule_a: false,
         }
+    }
+
+    /// Tests only: place new windows by rule A, with no minimum tile (replays of
+    /// bundles recorded before M19b).
+    #[cfg(all(test, feature = "debug-record"))]
+    pub fn set_rule_a(&mut self, on: bool) {
+        self.rule_a = on;
     }
 
     #[cfg(any(test, feature = "debug-record"))]
@@ -207,9 +229,11 @@ impl MonitorLayout {
         })
     }
 
-    /// Sets the gaps.
+    /// Sets the gaps. Larger gaps shrink every visible rectangle: tiles that no longer
+    /// hold the minimum float as for a shrinking area (owner, M19b).
     pub fn set_gaps(&mut self, gaps: Gaps) {
         self.gaps = gaps;
+        self.fit_tiles_to_area();
     }
 
     /// What a window in `cell` shows: `gaps::visible`, the only gap computation.
@@ -286,6 +310,9 @@ impl MonitorLayout {
                 self.floating.set_rect(window, rect);
             }
         }
+        // Tiles that no longer hold the minimum float; ones floated for size return
+        // when there is room again (owner, M19b).
+        self.fit_tiles_to_area();
     }
 
     pub fn zones(&self) -> &Zones {
@@ -471,18 +498,115 @@ impl MonitorLayout {
             last_floating: None,
             snap: None,
             maximized_tiled: false,
+            floated_for_size: None,
         };
-        // Rule A: a new tiled window splits the tile under the pointer, otherwise the
-        // focused one; anything else gets its placeholder next to the focused window.
-        let next_to = match state.mode() {
-            Mode::Tiled => new
-                .pointer
-                .and_then(|(x, y)| self.tile_at(x, y))
-                .or(self.focused),
-            Mode::Floating => self.focused,
-        };
-        self.tree.insert_with_mode(window, next_to, state.mode());
+        let mode = state.mode();
         self.windows.insert(window, state);
+        match mode {
+            Mode::Tiled => self.place_tiled(window, new.pointer),
+            // Dialogs, parented and fixed-size windows, and every window while the
+            // default mode is floating: a placeholder next to the focused window.
+            Mode::Floating => self
+                .tree
+                .insert_with_mode(window, self.focused, Mode::Floating),
+        }
+    }
+
+    /// Where a new tiled window goes (owner, M19b; docs/plan.md, "M19b rules"): the
+    /// zone of the tile under the pointer (`placement::drop_side` on its visible
+    /// rectangle), else the focused tile split as centre. The split must leave both
+    /// tiles at least the minimum (and their clients' minimums); else the other axis
+    /// is tried, else the window floats. `pointer` is None when the pointer never
+    /// moved or is over a layer surface above the windows (the compositor decides).
+    fn place_tiled(&mut self, window: WindowId, pointer: Option<(i32, i32)>) {
+        #[cfg(test)]
+        if self.rule_a {
+            let next_to = pointer
+                .and_then(|(x, y)| self.tile_at(x, y))
+                .or(self.focused);
+            self.tree.insert_with_mode(window, next_to, Mode::Tiled);
+            return;
+        }
+        let under = pointer.and_then(|(x, y)| self.tile_at(x, y).map(|t| (t, (x, y))));
+        let (target, at) = match under {
+            Some((tile, at)) => (Some(tile), Some(at)),
+            None => (self.focused_tile(), None),
+        };
+        let Some(target) = target.filter(|t| self.tree.rect_of(*t).is_some()) else {
+            // No tiled window: it fills the usable area (placeholders take no space),
+            // if the area holds the minimum.
+            self.tree
+                .insert_with_mode(window, self.focused, Mode::Tiled);
+            if !self.holds_minimum(window, true) {
+                if let Some(state) = self.windows.get_mut(&window) {
+                    state.own_mode = Mode::Floating;
+                }
+                self.tree.set_mode(window, Mode::Floating);
+            }
+            return;
+        };
+        let visible = self.inset(self.tree.rect_of(target).expect("filtered"));
+        let side = at.map_or(DropSide::Centre, |(x, y)| drop_side(visible, x, y));
+        for side in [side, side.other_axis(visible, at)] {
+            let (side_by_side, new_first) = match side {
+                DropSide::Left => (true, true),
+                DropSide::Right => (true, false),
+                DropSide::Top => (false, true),
+                DropSide::Bottom => (false, false),
+                DropSide::Centre => (visible.w >= visible.h, false),
+            };
+            self.tree
+                .insert_split(window, target, side_by_side, new_first);
+            if self.holds_minimum(window, true) && self.holds_minimum(target, true) {
+                return;
+            }
+            self.tree.remove_returning_sibling(window);
+        }
+        // Neither axis fits: the new window floats (client size, cascaded).
+        if let Some(state) = self.windows.get_mut(&window) {
+            state.own_mode = Mode::Floating;
+        }
+        self.tree
+            .insert_with_mode(window, Some(target), Mode::Floating);
+    }
+
+    /// The focused tile, for placement without a pointer: the focused window if it is
+    /// tiled, else the most recently focused tiled window, else the last tiled leaf.
+    pub(super) fn focused_tile(&self) -> Option<WindowId> {
+        let tiled = |w: &WindowId| self.mode(*w) == Some(Mode::Tiled);
+        self.focused
+            .filter(tiled)
+            .or_else(|| self.history.iter().rev().copied().find(tiled))
+            .or_else(|| self.tree.rects().last().map(|(w, _)| *w))
+    }
+
+    /// The smallest visible size a tile of `window` may have: MIN_TILE_SIZE, or the
+    /// client's minimum plus its 1 px border where that is larger (`with_client`).
+    fn required(&self, window: WindowId, with_client: bool) -> (i32, i32) {
+        let (w, h) = MIN_TILE_SIZE;
+        let Some(state) = self.windows.get(&window).filter(|_| with_client) else {
+            return (w, h);
+        };
+        let (cw, ch) = Decoration::BORDER.outer_size(state.limits.min);
+        (w.max(cw), h.max(ch))
+    }
+
+    /// Whether `window`'s tile (if tiled) shows at least its required size.
+    pub(super) fn holds_minimum(&self, window: WindowId, with_client: bool) -> bool {
+        let Some(cell) = self.tree.rect_of(window) else {
+            return true;
+        };
+        let visible = self.inset(cell);
+        let (w, h) = self.required(window, with_client);
+        visible.w >= w && visible.h >= h
+    }
+
+    /// Whether every tile shows at least MIN_TILE_SIZE.
+    pub(super) fn tiles_fit(&self) -> bool {
+        self.tree
+            .rects()
+            .iter()
+            .all(|(w, _)| self.holds_minimum(*w, false))
     }
 
     /// The tiled window whose tile contains (x, y), whatever is drawn above it.
@@ -561,6 +685,8 @@ impl MonitorLayout {
                 other.parent = None;
             }
         }
+        // Room may have come back for windows floated for size (owner, M19b).
+        self.fit_tiles_to_area();
         true
     }
 
@@ -823,6 +949,7 @@ impl MonitorLayout {
     /// pre-snap rectangle). Fixed-size windows never snap. Returns false if nothing
     /// happened.
     pub fn snap(&mut self, window: WindowId, zone: ZoneId) -> bool {
+        self.touch(window);
         let Some(rect) = self.zone_rect(zone) else {
             return false;
         };
@@ -883,6 +1010,7 @@ impl MonitorLayout {
     /// first; the pre-snap rectangle is kept as for other snaps). A fullscreen window
     /// ignores it, and so does a window already in `zone`.
     pub fn snap_quarter(&mut self, window: WindowId, zone: ZoneId) -> bool {
+        self.touch(window);
         if self.fullscreen == Some(window) || self.snapped_zone(window) == Some(zone) {
             return false;
         }
@@ -900,6 +1028,7 @@ impl MonitorLayout {
     /// mod+arrow, by the state table (snap::snap_step). Maximize on a tiled window
     /// keeps its leaf; other zones float a tiled window first.
     pub fn snap_key(&mut self, window: WindowId, key: Direction) -> bool {
+        self.touch(window);
         let Some(state) = self.windows.get(&window) else {
             return false;
         };
@@ -947,6 +1076,7 @@ impl MonitorLayout {
     /// Client set_maximized / unset_maximized. A tiled window keeps its leaf; a
     /// floating one snaps to the maximized zone. Fixed-size windows never maximize.
     pub fn set_maximized(&mut self, window: WindowId, maximized: bool) -> bool {
+        self.touch(window);
         let Some(state) = self.windows.get(&window) else {
             return false;
         };
@@ -978,6 +1108,7 @@ impl MonitorLayout {
     /// new one replaces the old, which keeps its previous state. A window that goes
     /// fullscreen gets focus.
     pub fn set_fullscreen(&mut self, window: WindowId, fullscreen: bool) -> bool {
+        self.touch(window);
         if !self.contains(window) {
             return false;
         }
@@ -1058,9 +1189,29 @@ impl MonitorLayout {
                     self.floating.insert_at(window, rect);
                 }
             }
-            Mode::Floating => self.tile(window),
+            Mode::Floating => return self.try_tile(window),
         }
+        self.touch(window);
         true
+    }
+
+    /// Returns a floating window to its leaf if every tile then still holds the
+    /// minimum (and the window its client's); otherwise it stays floating where it is.
+    /// Returns whether it was tiled.
+    fn try_tile(&mut self, window: WindowId) -> bool {
+        let floating = self.floating.clone();
+        let state = self.windows.get(&window).cloned();
+        self.tile(window);
+        if self.tiles_fit() && self.holds_minimum(window, true) {
+            self.touch(window);
+            return true;
+        }
+        self.floating = floating;
+        if let Some(state) = state {
+            self.windows.insert(window, state);
+        }
+        self.set_own_mode(window, Mode::Floating);
+        false
     }
 
     /// Returns a non-forced floating window to its leaf, remembering its rectangle.
@@ -1115,7 +1266,9 @@ impl MonitorLayout {
         }
     }
 
-    /// mod+Shift+T: every floating window that is not forced returns to its leaf.
+    /// mod+Shift+T: every floating window that is not forced returns to its leaf,
+    /// oldest first, each only if every tile then still holds the minimum (owner,
+    /// M19b). A tree that fitted before float-all fits again: lossless.
     pub fn tile_all(&mut self) {
         let floating: Vec<WindowId> = self
             .windows
@@ -1124,7 +1277,7 @@ impl MonitorLayout {
             .map(|(w, _)| *w)
             .collect();
         for window in floating {
-            self.tile(window);
+            self.try_tile(window);
         }
     }
 
@@ -1170,9 +1323,68 @@ impl MonitorLayout {
                     self.floating.insert(window, &hint);
                 }
             }
-            Mode::Tiled => self.tile(window),
+            Mode::Tiled => {
+                self.try_tile(window);
+            }
         }
         true
+    }
+
+    /// The user acted on a window (owner, M19b): a window floated for size does not
+    /// return by itself any more. Moves and resizes (mouse, keyboard, client request),
+    /// snaps, maximize, fullscreen, a click and mod+F count; focus does not.
+    pub fn touch(&mut self, window: WindowId) {
+        if let Some(state) = self.windows.get_mut(&window) {
+            state.floated_for_size = None;
+        }
+    }
+
+    /// The usable area changed or a window closed (owner, M19b): while the tiles do
+    /// not all hold MIN_TILE_SIZE, the newest tile floats (from its visible rectangle,
+    /// keeping its leaf); then windows floated for size return, newest-floated first,
+    /// each only if every tile then fits; the first that does not fit stops the return.
+    /// Client minimums are left out here: one raised after mapping must not float
+    /// every tile.
+    fn fit_tiles_to_area(&mut self) {
+        #[cfg(test)]
+        if self.rule_a {
+            return;
+        }
+        while !self.tiles_fit() {
+            let Some(newest) = self.tree.rects().iter().map(|(w, _)| *w).max() else {
+                break;
+            };
+            self.float_in_place(newest);
+            self.size_floats += 1;
+            if let Some(state) = self.windows.get_mut(&newest) {
+                state.floated_for_size = Some(self.size_floats);
+            }
+        }
+        let mut waiting: Vec<(u64, WindowId)> = self
+            .windows
+            .iter()
+            .filter(|(_, s)| s.mode() == Mode::Floating && !s.forced)
+            .filter_map(|(w, s)| s.floated_for_size.map(|n| (n, *w)))
+            .collect();
+        waiting.sort_by(|a, b| b.cmp(a));
+        for (order, window) in waiting {
+            let floating = self.floating.clone();
+            let state = self.windows.get(&window).cloned();
+            self.tile(window);
+            if self.tiles_fit() {
+                if let Some(state) = self.windows.get_mut(&window) {
+                    state.floated_for_size = None;
+                }
+                continue;
+            }
+            self.floating = floating;
+            if let Some(mut state) = state {
+                state.floated_for_size = Some(order);
+                self.windows.insert(window, state);
+            }
+            self.set_own_mode(window, Mode::Floating);
+            break;
+        }
     }
 
     /// Sets a floating window's rectangle (drag, resize, client-chosen size): the size
@@ -1191,6 +1403,7 @@ impl MonitorLayout {
 
     /// Keyboard move by (dx, dy). A tiled window is floated in place first.
     pub fn move_by(&mut self, window: WindowId, dx: i32, dy: i32) -> Option<Rect> {
+        self.touch(window);
         self.float_in_place(window);
         let r = self.floating.rect_of(window)?;
         self.set_floating_rect(window, Rect::new(r.x + dx, r.y + dy, r.w, r.h))
@@ -1201,14 +1414,16 @@ impl MonitorLayout {
     /// happens on an edge that lies on the output boundary.
     pub fn resize_by(&mut self, window: WindowId, dw: i32, dh: i32) -> Option<Rect> {
         if self.mode(window) == Some(Mode::Tiled) {
-            if dw != 0 {
-                self.tree.resize_edge(window, Side::Right, dw);
-            }
-            if dh != 0 {
-                self.tree.resize_edge(window, Side::Bottom, dh);
+            for (side, delta) in [(Side::Right, dw), (Side::Bottom, dh)] {
+                if delta != 0
+                    && let Some((handle, first)) = self.tree.edge_split(window, side)
+                {
+                    self.move_split(&handle, first + delta);
+                }
             }
             return self.rect_of(window);
         }
+        self.touch(window);
         let r = self.floating.rect_of(window)?;
         self.set_floating_rect(window, Rect::new(r.x, r.y, r.w + dw, r.h + dh))
     }
@@ -1242,12 +1457,67 @@ impl MonitorLayout {
     pub fn drag_tiled_resize(&mut self, resize: &TiledResize, dx: i32, dy: i32) -> bool {
         let mut changed = false;
         if let Some((handle, start)) = &resize.horizontal {
-            changed |= self.tree.set_split_first(handle, start + dx);
+            changed |= self.move_split(handle, start + dx);
         }
         if let Some((handle, start)) = &resize.vertical {
-            changed |= self.tree.set_split_first(handle, start + dy);
+            changed |= self.move_split(handle, start + dy);
         }
         changed
+    }
+
+    /// Moves a divider (keyboard or mouse resize) toward `want` (its first part's
+    /// length) as far as the tiles allow (owner, M19b): no tile on the shrinking side
+    /// goes below MIN_TILE_SIZE, or its client's minimum plus border where that is
+    /// larger, measured on the visible rectangle. A tile already smaller (a client that
+    /// raised its minimum after mapping) may not get smaller. Returns whether the
+    /// divider moved.
+    pub fn move_split(&mut self, handle: &SplitHandle, want: i32) -> bool {
+        let Some((now, length)) = self.tree.split_first(handle) else {
+            return false;
+        };
+        let want = want.clamp(0, length.max(0));
+        if want == now {
+            return false;
+        }
+        // Each tile's floor: its required size, or its size now if it is smaller.
+        let floors: Vec<(WindowId, i32, i32)> = self
+            .tree
+            .rects()
+            .into_iter()
+            .map(|(w, cell)| {
+                let visible = self.inset(cell);
+                let (rw, rh) = self.required(w, true);
+                (w, rw.min(visible.w), rh.min(visible.h))
+            })
+            .collect();
+        let holds = |layout: &Self| {
+            floors.iter().all(|&(w, fw, fh)| {
+                layout
+                    .tree
+                    .rect_of(w)
+                    .map(|cell| layout.inset(cell))
+                    .is_none_or(|v| v.w >= fw && v.h >= fh)
+            })
+        };
+        // Tiles shrink monotonically as the divider moves on, so the positions that
+        // hold form a range from `now`: find its end toward `want`.
+        let (mut good, mut bad) = (now, want);
+        self.tree.set_split_first(handle, want);
+        if holds(self) {
+            good = want;
+        } else {
+            while (bad - good).abs() > 1 {
+                let mid = good + (bad - good) / 2;
+                self.tree.set_split_first(handle, mid);
+                if holds(self) {
+                    good = mid;
+                } else {
+                    bad = mid;
+                }
+            }
+        }
+        self.tree.set_split_first(handle, good);
+        good != now
     }
 
     /// Consistency checks used by tests: every window has exactly one leaf, leaf
@@ -1261,6 +1531,17 @@ impl MonitorLayout {
         tree_windows.sort();
         let known: Vec<WindowId> = self.windows().collect();
         assert_eq!(tree_windows, known, "every window has exactly one leaf");
+        // Owner, M19b: every tile's visible rectangle holds MIN_TILE_SIZE (not in
+        // replays of sessions from before it).
+        for (w, cell) in self.tree.rects().into_iter().filter(|_| !self.rule_a) {
+            let v = self.inset(cell);
+            assert!(
+                v.w >= MIN_TILE_SIZE.0 && v.h >= MIN_TILE_SIZE.1,
+                "{w:?} shows {}x{}, under the minimum tile",
+                v.w,
+                v.h
+            );
+        }
         let stack: Vec<WindowId> = self.floating.rects().iter().map(|(w, _)| *w).collect();
         let mut unique = stack.clone();
         unique.sort();
@@ -1756,24 +2037,45 @@ mod tests {
 
     #[test]
     fn windows_opened_and_closed_while_floating_follow_the_tiled_rules() {
-        // 1 | (2 / 3), float all, open 4 (focused: 3), close 2 (3's old sibling), tile all.
-        let mut layout = layout_with(3);
+        // 1 | (2 / 3) on 1600x1200, float all, open 4 (focused: 3), close 2 (3's old
+        // sibling), tile all.
+        let big = Rect::new(0, 0, 1600, 1200);
+        let with = |n: u64| {
+            let mut layout = MonitorLayout::new(big);
+            for i in 1..=n {
+                layout.open(id(i), NewWindow::default());
+            }
+            layout
+        };
+        let mut layout = with(3);
         layout.float_all();
         layout.open(id(4), NewWindow::default()); // default tiled: takes the whole area
-        assert_eq!(rect(&layout, 4), AREA, "placeholders take no space");
+        assert_eq!(rect(&layout, 4), big, "placeholders take no space");
         layout.close(id(2));
         layout.tile_all();
-        // Expected: the tree as if everything had stayed tiled. 4 split 3's 400x300 tile
+        // Expected: the tree as if everything had stayed tiled. 4 split 3's 800x600 tile
         // side by side; closing 2 promotes (3 | 4) to the right half.
-        let mut expected = layout_with(3);
+        let mut expected = with(3);
         expected.open(id(4), NewWindow::default());
         expected.close(id(2));
         assert_eq!(layout.tree(), expected.tree());
         assert_eq!(layout.tiled_rects(), expected.tiled_rects());
-        assert_eq!(rect(&layout, 1), Rect::new(0, 0, 400, 600));
-        assert_eq!(rect(&layout, 3), Rect::new(400, 0, 200, 600));
-        assert_eq!(rect(&layout, 4), Rect::new(600, 0, 200, 600));
+        assert_eq!(rect(&layout, 1), Rect::new(0, 0, 800, 1200));
+        assert_eq!(rect(&layout, 3), Rect::new(800, 0, 400, 1200));
+        assert_eq!(rect(&layout, 4), Rect::new(1200, 0, 400, 1200));
         layout.check_invariants();
+        // At 800x600 the same steps would leave 3 and 4 200 px wide, under the 233 px
+        // minimum tile (owner, M19b): tile-all leaves 3 floating, the tree otherwise as
+        // it was, and 4 keeps the right half.
+        let mut small = layout_with(3);
+        small.float_all();
+        small.open(id(4), NewWindow::default());
+        small.close(id(2));
+        small.tile_all();
+        assert_eq!(small.mode(id(3)), Some(Mode::Floating));
+        assert_eq!(rect(&small, 1), Rect::new(0, 0, 400, 600));
+        assert_eq!(rect(&small, 4), Rect::new(400, 0, 400, 600));
+        small.check_invariants();
     }
 
     #[test]
@@ -2289,6 +2591,9 @@ mod tests {
         let mut layout = MonitorLayout::new(Rect::new(0, 0, 3, 2));
         for i in 1..=3 {
             layout.open(id(i), NewWindow::default());
+            // Too small for the minimum tile: floating, placed when it maps.
+            assert_eq!(layout.mode(id(i)), Some(Mode::Floating));
+            layout.place(id(i), (1, 1));
         }
         for (i, zone) in [
             (1, ZoneId::LEFT),
@@ -2409,6 +2714,11 @@ mod tests {
         let mut layout = MonitorLayout::new(area);
         layout.open(id(1), NewWindow::default());
         layout.open(id(2), NewWindow::default());
+        // On an output too small for the minimum tile (3x2) they float (owner, M19b):
+        // they get their first rectangle as they would when mapping.
+        for n in [1, 2] {
+            layout.place(id(n), (1, 1));
+        }
         match start {
             Start::Tiled => {}
             Start::MaximizedTiled => assert!(layout.set_maximized(id(2), true)),

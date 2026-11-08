@@ -350,16 +350,17 @@ impl Sash {
 
         if !mapped && !toplevel.is_initial_configure_sent() {
             // Initial commit (also after an unmap): enter the layout.
-            // Rule A: a new tiled window splits the tile under the pointer; a pointer
-            // that has not moved since startup counts as none.
+            // Placement at the pointer (owner, M19b): a new tiled window splits the tile
+            // under the pointer; a pointer that has not moved since startup, or one
+            // over a layer surface above the windows (the dock, the launcher), counts
+            // as none (the focused tile).
             let pointer = self
                 .seat
                 .get_pointer()
                 .filter(|_| self.pointer_has_moved)
-                .map(|p| {
-                    let at = p.current_location();
-                    (at.x.floor() as i32, at.y.floor() as i32)
-                });
+                .map(|p| p.current_location())
+                .filter(|at| self.layer_above(*at).is_none())
+                .map(|at| (at.x.floor() as i32, at.y.floor() as i32));
             let new = NewWindow {
                 forced,
                 parent,
@@ -947,6 +948,8 @@ impl Sash {
         pressed_at: Point<f64, Logical>,
     ) -> bool {
         let mut tiled = None;
+        // A window floated for size that the user moves or resizes stays floating.
+        self.windows.layout.touch(id);
         match kind {
             DragKind::Move => {
                 self.windows.layout.float_in_place(id);

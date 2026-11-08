@@ -22,13 +22,13 @@ mod geometry;
 )]
 pub mod layers;
 mod monitor;
+pub mod placement;
 #[cfg(test)]
-mod proptests;
+pub(crate) mod proptests;
 pub mod shape;
 mod snap;
 
-#[cfg(test)]
-pub use bsp::MIN_TILE;
+pub use bsp::MIN_TILE_SIZE;
 #[cfg(any(test, feature = "debug-record"))]
 pub use bsp::OutlineNode;
 pub use bsp::{BspTree, Side, SplitHandle};

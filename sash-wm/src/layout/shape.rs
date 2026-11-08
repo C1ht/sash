@@ -215,12 +215,13 @@ mod tests {
         (pw, ph, out)
     }
 
-    /// Three tiles (1 | 2 / 3) of a 400 x 240 output laid out with the M18a gaps and
+    /// Three tiles (1 | 2 / 3) of an 800 x 480 output laid out with the M18a gaps and
     /// radius, drawn with the CPU reference: every corner rounded, the ring on every
-    /// edge, the background in the gaps (owner, M18a).
+    /// edge, the background in the gaps (owner, M18a). 800 x 480 since M19b: at the
+    /// former 400 x 240 tiles 2 and 3 would be under the minimum tile.
     pub fn tiles_picture(scale: f32) -> (u32, u32, Vec<u8>) {
         use super::super::{MonitorLayout, NewWindow, WindowId, gaps::Gaps};
-        let mut layout = MonitorLayout::new(Rect::new(0, 0, 400, 240));
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 800, 480));
         for n in 1..=3 {
             layout.open(WindowId(n), NewWindow::default());
             layout.set_server_side(WindowId(n), true);
@@ -232,8 +233,8 @@ mod tests {
             .collect();
         assert_eq!(shapes.len(), 3);
         let (pw, ph) = (
-            (400.0 * scale).round() as u32,
-            (240.0 * scale).round() as u32,
+            (800.0 * scale).round() as u32,
+            (480.0 * scale).round() as u32,
         );
         let background = [26.0, 26.0, 26.0];
         let content = [0x40 as f32, 0x60 as f32, 0x20 as f32];

@@ -10,12 +10,10 @@
 
 use super::{InsertHint, Layout, Mode, Rect, WindowId};
 
-/// The smallest a tile may be made by resizing, per axis.
-pub const MIN_TILE: i32 = 64;
-
-/// The spec's minimum tile (docs/design.md, "Interaction constants"; owner, M18c):
-/// defined here, enforced from M19 (where a new tiled window goes), not before.
-#[allow(dead_code, reason = "enforced from M19 (owner, M18c)")]
+/// The minimum tile (docs/design.md, "Interaction constants"; owner, M18c and M19b):
+/// 233 x 144 logical pixels of the VISIBLE rectangle. The layout (monitor.rs) enforces
+/// it: at insertion, for dividers and when the usable area shrinks. The tree itself
+/// only records structure and exact ratios.
 pub const MIN_TILE_SIZE: (i32, i32) = (233, 144);
 
 /// A split's share for its first child, as an exact fraction `num / den` with
@@ -57,27 +55,6 @@ impl Ratio {
     /// The first child's share of `len` pixels.
     pub fn first_of(self, len: i32) -> i32 {
         (len as i64 * self.num as i64 / self.den as i64) as i32
-    }
-
-    /// The smallest length whose first part is at least `first` and whose second part
-    /// is at least `second` pixels, with this ratio. None if no length works (a share
-    /// of zero that must hold something).
-    fn min_length_for(self, first: i32, second: i32) -> Option<i32> {
-        let (num, den) = (self.num as i64, self.den as i64);
-        let (first, second) = (first.max(0) as i64, second.max(0) as i64);
-        // floor(L * num / den) >= first  <=>  L >= ceil(first * den / num)
-        let for_first = match (first, num) {
-            (0, _) => 0,
-            (_, 0) => return None,
-            _ => (first * den + num - 1) / num,
-        };
-        // L - floor(L * num / den) >= second  <=>  L > (second - 1) * den / (den - num)
-        let for_second = match (second, den - num) {
-            (0, _) => 0,
-            (_, 0) => return None,
-            (s, rest) => (s - 1) * den / rest + 1,
-        };
-        i32::try_from(for_first.max(for_second)).ok()
     }
 }
 
@@ -198,32 +175,6 @@ impl Node {
         }
     }
 
-    /// Whether the subtree takes space: it has a tiled leaf, or the leaf of `also`
-    /// (treated as tiled, to ask where a placeholder would go).
-    /// The smallest length along `orientation` this subtree can have with every tiled
-    /// leaf at least MIN_TILE, given its current inner ratios. None if impossible.
-    fn min_length(&self, orientation: Orientation) -> Option<i32> {
-        match self {
-            Node::Leaf(leaf) => Some(if leaf.mode == Mode::Tiled {
-                MIN_TILE
-            } else {
-                0
-            }),
-            Node::Split(split) => {
-                let (first, second) = (
-                    split.first.min_length(orientation)?,
-                    split.second.min_length(orientation)?,
-                );
-                let both = split.first.takes_space(None) && split.second.takes_space(None);
-                if split.orientation == orientation && both {
-                    split.ratio.min_length_for(first, second)
-                } else {
-                    Some(first.max(second))
-                }
-            }
-        }
-    }
-
     /// The path (branches, true = second) to `window`'s leaf.
     fn path_to(&self, window: WindowId) -> Option<Vec<bool>> {
         match self {
@@ -239,6 +190,8 @@ impl Node {
         }
     }
 
+    /// Whether the subtree takes space: it has a tiled leaf, or the leaf of `also`
+    /// (treated as tiled, to ask where a placeholder would go).
     fn takes_space(&self, also: Option<WindowId>) -> bool {
         match self {
             Node::Leaf(leaf) => leaf.mode == Mode::Tiled || Some(leaf.window) == also,
@@ -508,6 +461,38 @@ impl BspTree {
         }));
     }
 
+    /// Adds tiled `window` by splitting `target`'s leaf 50:50: side by side or stacked,
+    /// the new window first (left or top) or second (owner, M19b: the zone function
+    /// chooses). With no target in the tree, the window becomes the only leaf.
+    pub fn insert_split(
+        &mut self,
+        window: WindowId,
+        target: WindowId,
+        side_by_side: bool,
+        new_first: bool,
+    ) {
+        debug_assert!(!self.contains(window), "{window:?} inserted twice");
+        let new = Node::leaf(window, Mode::Tiled);
+        let Some(slot) = self.root.as_mut().and_then(|root| root.find_mut(target)) else {
+            if self.root.is_none() {
+                self.root = Some(new);
+            }
+            return;
+        };
+        let old = std::mem::replace(slot, new.clone());
+        let (first, second) = if new_first { (new, old) } else { (old, new) };
+        *slot = Node::Split(Box::new(Split {
+            orientation: if side_by_side {
+                Orientation::SideBySide
+            } else {
+                Orientation::Stacked
+            },
+            ratio: Ratio::HALF,
+            first,
+            second,
+        }));
+    }
+
     /// Removes `window`'s leaf; its sibling takes the parent's place. Returns the
     /// windows of that sibling subtree (empty if `window` was the only leaf), or None
     /// if `window` is not in the tree.
@@ -607,32 +592,34 @@ impl BspTree {
         })
     }
 
-    /// Moves a split boundary so its first part is `first` pixels long, clamped so that
-    /// no tile on either side gets smaller than MIN_TILE. If the split is too small for
-    /// that, nothing changes (the tiny-output rule). Returns whether the ratio changed.
-    pub fn set_split_first(&mut self, handle: &SplitHandle, first: i32) -> bool {
+    /// The split's first part and its whole length now, in pixels. None if the handle
+    /// no longer names a split dividing that way.
+    pub fn split_first(&self, handle: &SplitHandle) -> Option<(i32, i32)> {
         let nodes = self.walk(&handle.path);
-        let Some(&(Node::Split(split), area)) = nodes.get(handle.path.len()) else {
-            return false;
+        let &(Node::Split(split), area) = nodes.get(handle.path.len())? else {
+            return None;
         };
         if split.orientation != handle.orientation {
-            return false;
+            return None;
         }
         let length = match split.orientation {
             Orientation::SideBySide => area.w,
             Orientation::Stacked => area.h,
         };
-        let (Some(low), Some(second_min)) = (
-            split.first.min_length(split.orientation),
-            split.second.min_length(split.orientation),
-        ) else {
+        Some((split.ratio.first_of(length), length))
+    }
+
+    /// Moves a split boundary so its first part is `first` pixels long, within the
+    /// split (0 to its length). The minimum tile is the layout's to enforce
+    /// (`MonitorLayout::move_split`). Returns whether the ratio changed.
+    pub fn set_split_first(&mut self, handle: &SplitHandle, first: i32) -> bool {
+        let Some((_, length)) = self.split_first(handle) else {
             return false;
         };
-        let high = length - second_min;
-        if length <= 0 || low > high {
+        if length <= 0 {
             return false;
         }
-        let ratio = Ratio::new(first.clamp(low, high) as u32, length as u32);
+        let ratio = Ratio::new(first.clamp(0, length) as u32, length as u32);
         let Some(Node::Split(split)) = self
             .root
             .as_mut()
@@ -645,8 +632,10 @@ impl BspTree {
         changed
     }
 
-    /// Moves `window`'s `side` edge by `delta` pixels (keyboard resize). Returns whether
-    /// anything changed.
+    /// Moves `window`'s `side` edge by `delta` pixels, unconstrained (tests; the layout
+    /// moves dividers through `MonitorLayout::move_split`). Returns whether anything
+    /// changed.
+    #[cfg(test)]
     pub fn resize_edge(&mut self, window: WindowId, side: Side, delta: i32) -> bool {
         let Some((handle, first)) = self.edge_split(window, side) else {
             return false;
@@ -925,10 +914,6 @@ pub(crate) mod tests {
         let r = Ratio::new(333, 1000);
         assert_eq!(r.first_of(1000), 333);
         assert_eq!(r.first_of(1000), r.first_of(1000));
-        // Minimum length with floors: first >= 64 and second >= 64 at 1/2 needs 128.
-        assert_eq!(Ratio::HALF.min_length_for(64, 64), Some(128));
-        assert_eq!(Ratio::new(1, 3).min_length_for(64, 64), Some(192));
-        assert_eq!(Ratio::new(0, 1).min_length_for(64, 0), None);
     }
 
     #[test]
@@ -956,16 +941,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn resizing_clamps_at_the_minimum_tile_size() {
-        let mut tree = tree_with(2);
-        tree.resize_edge(id(1), Side::Right, -10_000);
-        assert_eq!(rect_of(&tree, 1).w, MIN_TILE);
-        tree.resize_edge(id(1), Side::Right, 10_000);
-        assert_eq!(rect_of(&tree, 2).w, MIN_TILE);
-        check_invariants(&tree);
-    }
-
-    #[test]
     fn nested_splits() {
         let mut tree = tree_with(3); // 1 | (2 / 3)
         assert!(tree.resize_edge(id(2), Side::Bottom, 50));
@@ -978,22 +953,6 @@ pub(crate) mod tests {
         assert_eq!(rect_of(&tree, 1), Rect::new(0, 0, 300, 600));
         assert_eq!(rect_of(&tree, 2), Rect::new(300, 0, 500, 350));
         assert_eq!(rect_of(&tree, 3), Rect::new(300, 350, 500, 250));
-        check_invariants(&tree);
-    }
-
-    #[test]
-    fn minimum_respects_inner_splits() {
-        // 1 | (2 | 3) on a wide output: shrinking the right half keeps both 2 and 3 at
-        // least 64 wide.
-        let mut tree = BspTree::new(Rect::new(0, 0, 1600, 600));
-        tree.insert_with_mode(id(1), None, Mode::Tiled);
-        tree.insert_with_mode(id(2), Some(id(1)), Mode::Tiled);
-        tree.insert_with_mode(id(3), Some(id(2)), Mode::Tiled); // 800x600 splits side by side
-        assert_eq!(rect_of(&tree, 3), Rect::new(1200, 0, 400, 600));
-        tree.resize_edge(id(1), Side::Right, 10_000);
-        assert_eq!(rect_of(&tree, 2).w, MIN_TILE);
-        assert_eq!(rect_of(&tree, 3).w, MIN_TILE);
-        assert_eq!(rect_of(&tree, 1).w, 1600 - 2 * MIN_TILE);
         check_invariants(&tree);
     }
 
@@ -1017,18 +976,56 @@ pub(crate) mod tests {
         check_invariants(&tree);
     }
 
+    /// The tree moves a split anywhere inside it (0 to its length); the minimum tile
+    /// is the layout's (monitor.rs).
     #[test]
-    fn tiny_output_resize_does_nothing() {
-        let mut tree = BspTree::new(Rect::new(0, 0, 100, 50));
-        tree.insert_with_mode(id(1), None, Mode::Tiled);
-        tree.insert_with_mode(id(2), Some(id(1)), Mode::Tiled);
-        let before = tree.clone();
-        assert!(
-            !tree.resize_edge(id(1), Side::Right, 10),
-            "100 px cannot hold two 64 px tiles"
-        );
-        assert_eq!(tree, before);
+    fn a_split_moves_within_its_length_only() {
+        let mut tree = tree_with(2);
+        tree.resize_edge(id(1), Side::Right, -10_000);
+        assert_eq!(rect_of(&tree, 1).w, 0);
+        tree.resize_edge(id(1), Side::Right, 10_000);
+        assert_eq!(rect_of(&tree, 1).w, 800);
         check_invariants(&tree);
+    }
+
+    /// A split from the zone function: either axis, the new window first or second.
+    #[test]
+    fn insert_split_puts_the_new_window_first_or_second() {
+        for (side_by_side, new_first, new_rect, old_rect) in [
+            (
+                true,
+                true,
+                Rect::new(0, 0, 400, 600),
+                Rect::new(400, 0, 400, 600),
+            ),
+            (
+                true,
+                false,
+                Rect::new(400, 0, 400, 600),
+                Rect::new(0, 0, 400, 600),
+            ),
+            (
+                false,
+                true,
+                Rect::new(0, 0, 800, 300),
+                Rect::new(0, 300, 800, 300),
+            ),
+            (
+                false,
+                false,
+                Rect::new(0, 300, 800, 300),
+                Rect::new(0, 0, 800, 300),
+            ),
+        ] {
+            let mut tree = tree_with(1);
+            tree.insert_split(id(2), id(1), side_by_side, new_first);
+            assert_eq!(rect_of(&tree, 2), new_rect);
+            assert_eq!(rect_of(&tree, 1), old_rect);
+            check_invariants(&tree);
+            // Removing it restores the tree exactly.
+            tree.remove_returning_sibling(id(2));
+            assert_eq!(tree, tree_with(1));
+        }
     }
 
     #[test]

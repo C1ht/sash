@@ -267,8 +267,9 @@ fn unmapped_window_leaves_the_layout_and_reenters_on_remap() {
     });
 }
 
-/// Rule A: a new tiled window splits the tile under the pointer, not the focused
-/// window; with the pointer parked over another window, a spawn splits that one.
+/// A new tiled window splits the tile under the pointer, not the focused window; with
+/// the pointer parked over another window, a spawn splits that one. (100, 100) in the
+/// 400x600 tile is nearest its top edge (owner, M19b): the new window goes on top.
 #[test]
 fn a_new_window_splits_the_tile_under_the_pointer() {
     let mut harness = Harness::new();
@@ -289,8 +290,8 @@ fn a_new_window_splits_the_tile_under_the_pointer() {
             assert_tiles(
                 h,
                 &[
-                    (1, Rect::new(0, 0, 400, 300)),
-                    (3, Rect::new(0, 300, 400, 300)),
+                    (3, Rect::new(0, 0, 400, 300)),
+                    (1, Rect::new(0, 300, 400, 300)),
                     (2, Rect::new(400, 0, 400, 600)),
                 ],
             );
@@ -299,9 +300,9 @@ fn a_new_window_splits_the_tile_under_the_pointer() {
     });
 }
 
-/// Rule A: until the pointer has moved, it counts as no pointer and the focused window
-/// is split (the startup pointer at 0,0 would split the top-left tile); after it moves,
-/// the tile under it is split.
+/// Until the pointer has moved, it counts as no pointer and the focused window is
+/// split as centre (the startup pointer at 0,0 would split the top-left tile); after it
+/// moves, the tile under it is split: (100, 100) is in tile 1's top zone (M19b).
 #[test]
 fn an_unmoved_pointer_counts_as_no_pointer() {
     let mut harness = Harness::new();
@@ -336,8 +337,8 @@ fn an_unmoved_pointer_counts_as_no_pointer() {
             assert_tiles(
                 h,
                 &[
-                    (1, Rect::new(0, 0, 400, 300)),
-                    (4, Rect::new(0, 300, 400, 300)),
+                    (4, Rect::new(0, 0, 400, 300)),
+                    (1, Rect::new(0, 300, 400, 300)),
                     (2, Rect::new(400, 0, 400, 300)),
                     (3, Rect::new(400, 300, 400, 300)),
                 ],

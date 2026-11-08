@@ -500,7 +500,9 @@ change this file without the owner's approval.
 - Ratios are exact fractions or fixed-point, never drifting floats.
   Rectangles keep the exact-coverage rule. A tile is never smaller than
   64 px on an axis (constant); if the output is too small for that, the
-  tiny-output rule applies.
+  tiny-output rule applies. Superseded (owner, M19b): 233 x 144 on the
+  visible rectangle, or the client's minimum ("M19b, placement at the
+  pointer").
 - Edges on the output boundary do nothing. Lossless toggling keeps
   ratios.
 - Resize applies live while dragging; configures are batched per frame

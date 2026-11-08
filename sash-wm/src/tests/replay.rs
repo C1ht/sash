@@ -170,12 +170,12 @@ fn snapshots(events: &[Json]) -> Vec<(String, Json)> {
             .unwrap_or("?")
             .to_string();
         let empty = matches!(after.get("windows"), Some(Json::Arr(w)) if w.is_empty());
-        // The gaps and the focus setting are applied before the replay (see `replay`),
-        // not compared.
-        let mut snapshot = without_key(
-            &without_key(&without_key(&normalized(after, &ids), "gap"), "outer_gap"),
-            "focus_follows_pointer",
-        );
+        // The gaps, the focus setting and the placement rule are applied before the
+        // replay (see `replay`), not compared.
+        let mut snapshot = normalized(after, &ids);
+        for key in ["gap", "outer_gap", "focus_follows_pointer", "placement"] {
+            snapshot = without_key(&snapshot, key);
+        }
         if op == "open window" {
             snapshot = without_focus(&snapshot);
         }
@@ -266,6 +266,12 @@ fn replay_with(bundle: &Path, force_follows_pointer: Option<bool>) -> Result<Rep
         })
         .unwrap_or(false);
     let follows_pointer = force_follows_pointer.unwrap_or(follows_pointer);
+    // Placement at the pointer (owner, M19b): bundles from before it placed new
+    // windows by rule A with no minimum tile.
+    let rule_a = !events
+        .iter()
+        .filter(|e| kind(e) == "layout")
+        .any(|e| e.get("after").and_then(|a| a.get("placement")).is_some());
     let before_decorations = !events
         .iter()
         .any(|e| kind(e) == "commit" && e.get("server_side").is_some());
@@ -284,6 +290,7 @@ fn replay_with(bundle: &Path, force_follows_pointer: Option<bool>) -> Result<Rep
         server.on_server(move |h| {
             h.server.state.windows.layout.set_gaps(gaps);
             h.server.state.focus.follows_pointer = follows_pointer;
+            h.server.state.windows.layout.set_rule_a(rule_a);
             h.server.state.set_layout_area((width, height).into());
             let config = Config {
                 dir,
@@ -661,7 +668,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "pointer_position",
         "key",
     ];
-    const FIELDS: [&str; 36] = [
+    const FIELDS: [&str; 37] = [
         "t_us",
         "kind",
         "op",
@@ -671,6 +678,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "gap",
         "outer_gap",
         "focus_follows_pointer",
+        "placement",
         "focus",
         "windows",
         "tree",

@@ -488,6 +488,7 @@ impl Sash {
         serial: Serial,
     ) {
         record_context!(self, format!("decoration press {part:?}"));
+        self.windows.layout.touch(window);
         self.focus_window(window);
         if button != BTN_LEFT {
             return;

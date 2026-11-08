@@ -724,6 +724,44 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
      - Client minimums are not part of this check: a client whose minimum rose after mapping could otherwise float every tile.
      - They return when there is room again: after an area change or a close, newest-floated first, each only if every tile then fits. The first that does not fit stops the return.
      - Only windows untouched while floating return. Touching means a move or resize (mouse, keyboard or client request), a snap, maximize, fullscreen, a click on it, or mod+F. Pointer and keyboard focus do not count, nor does a client changing its own size.
+- **M19b done, waiting for the owner (no tag).**
+  - **Code:**
+    - `layout/placement.rs`: `drop_side`, pure integer arithmetic, and `other_axis`.
+    - `BspTree::insert_split`: either axis, the new window first or second. `set_split_first` is now unconstrained within the split, and `split_first` reads a divider.
+    - `MonitorLayout`:
+      - `place_tiled` (the target, its fall-backs, both axes, else floating);
+      - `required` and `holds_minimum` (MIN_TILE_SIZE, or the client's minimum plus the border, on the visible rectangle through `inset`, the one gap function);
+      - `move_split`: dividers by keyboard and mouse. It searches between where the divider is and where it was asked to go, because tiles shrink monotonically as it moves;
+      - `try_tile` (mod+F, tile-all oldest first, a window that stops being forced);
+      - `fit_tiles_to_area`, after an area change, a gap change and a close;
+      - `touch`.
+    - Compositor: no pointer over a layer surface above the windows (`layer_above`); `touch` on drags, clicks and decoration presses.
+    - `MIN_TILE` (64) and the tree's `min_length` are removed.
+    - A first window that does not hold the minimum (an output smaller than 259 x 170 with the gaps) floats.
+    - A gap change (the debug overrides) runs the shrink rule too, because larger gaps shrink every visible rectangle.
+    - The layout invariant gained "every tile holds 233 x 144 visible".
+  - **Replays:**
+    - New bundles record `"placement": "m19b"` in their layout snapshots.
+    - A bundle without it replays with rule A (longer side, new window second) and no minimum tile, as recorded. This is compiled into test builds only (`MonitorLayout::set_rule_a`), not into sash-wm.
+    - The NVIDIA fixture matches 13 of 13 again. Under the M19b rule its first windows go elsewhere, and 12 snapshots differ.
+  - **Tests:**
+    - The zone function: 4 unit tests and 3 property tests:
+      - square tiles rotate and mirror, with diagonal ties to top/bottom;
+      - the centre box has its size and symmetry, and every point gets one deterministic result;
+      - the nearest edge wins.
+    - `tests/placement.rs`, on four 800 px columns at 3200 x 1200 with the real gaps:
+      - each zone (top of column 3, left of column 2, right of column 1, bottom of column 4, centre, the inner and the outer gap);
+      - never moved; a panel and a layer surface above the windows;
+      - the other axis and the float fall-back;
+      - dividers at 233 and at a client minimum (keyboard and mouse);
+      - the shrink and the return, with a touched window that stays floating;
+      - after every step the layout invariants and the physical gaps at scales 1, 1.25, 1.5, 1.75 and 2.
+    - **Mutation:** turning the diagonal comparison around (`vertical >= horizontal`) fails 8 tests (3 unit, 5 harness).
+  - **Tests changed by the rules:**
+    - two rule-A harness tests (the new window now goes on top of tile 1 for a pointer at (100, 100));
+    - the property tests' expectations: the split target, a toggle or tile-all refused when it does not fit, and lossless toggling, where a window that fits only in one of the areas may be floating at one end;
+    - three unit tests on outputs too small for the minimum (3x2, and three columns at 800x600);
+    - the rounded-tiles goldens, redrawn at 800 x 480 because their 400 x 240 scene had tiles under the minimum (looked at: rounded corners, the ring on every edge, even gaps).
 - **Interim state (owner, M19 brief), until E5/E6:**
   - The rule that only user-started windows (an xdg-activation token from sash-shell) are placed at the pointer and take focus needs the shell. Until then every new tiled window is placed at the pointer and takes focus when it maps, as focus-at-map does today (M9e).
   - **Known risk, focus stealing:** a window the user did not start takes the keyboard when it maps. Examples: a client opening a second window by itself, a slow app mapping long after its launch, or anything that maps while the user types. Keys meant for the old window, passwords included, go to the new one, and the user's tile is split under the pointer without their asking.
