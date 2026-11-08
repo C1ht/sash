@@ -621,6 +621,27 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 - Clients that use the cursor-shape protocol (wp_cursor_shape_v1) follow a change immediately: sash-wm draws their cursor from the theme. Clients that draw their own cursor surface (libwayland-cursor, most toolkits without cursor-shape) read XCURSOR_SIZE (and XCURSOR_THEME) when they start, so they show the old size until they are restarted; this is documented for users in Settings next to the choice. The dock and the launcher start apps with a clean environment (M17), so they pass XCURSOR_SIZE and XCURSOR_THEME=Adwaita in it. XCURSOR_SIZE is always the setting's LOGICAL size (24, 36 or 48), never the scaled size from the table above: toolkits multiply it by the output scale themselves, so a scaled value would be scaled twice. The scale table applies only to the cursors sash-wm draws (for cursor-shape clients and its own).
 - Today: the size is the constant 24 (M11a), with XCURSOR_THEME and XCURSOR_SIZE overrides in debug builds only. Nothing changes until the settings milestone. CLAUDE.md's list of the future input group ("Settings and configuration") names the cursor size (owner, after M18c).
 
+### M19: focus follows the cursor, placement at the pointer (investigation; owner decides; no code)
+
+The report is docs/m19-investigation.md: tables A to E and eight questions for the owner.
+
+- **Today:**
+  - Pointer motion never changes focus. Focus changes on map, click, keybinds, close and mod+Tab, and always raises.
+  - Rule A splits the cell under the pointer along its longer side, with the new window as the second child. A pointer that never moved counts as no pointer.
+  - Nothing re-evaluates the pointer after a layout change. A click without motion after a swap or a refill is delivered to the surface that was under the pointer before (an existing defect, fixed in M19a by a pointer refresh after each arrange).
+  - The xdg `activated` state is never sent.
+- **Measured** (release, headless, 5120x1440, 10 windows): a motion event costs 5.4 µs p50 and 8.4 µs p99 tiled, 3.8 and 5.6 µs floating; a focus change 7.0 µs p50. At 1000 Hz that is about 0.5% of a core. M19 adds one `window_at` per motion (+0.5 µs).
+- **Proposal:**
+  - **Focus:** changes when one real motion crosses into a different window, comparing the window under the old and the new position at the current geometry. No raise, never ending fullscreen.
+  - **Holds:** grabs (move, resize, drag and drop, a held button), a grabbed popup chain, a layer surface holding the keyboard, mod+Tab, later the lock.
+  - **Placement:** a pure `drop_side` (diagonals plus a 23.6% centre zone, 50:50, the new window first on the left and top); the minimum of 233 x 144 on the visible rectangle through `gaps::visible`, trying the other axis, else floating. MIN_TILE (64) is replaced by MIN_TILE_SIZE plus the client's own minimum for tiled resizes.
+  - **Drop into tiling:** a new interaction (today a dragged tile floats), its trigger for the owner.
+- **Steps:** M19a focus, M19b placement, M19c drop. Each with the standard checks, a report and a STOP.
+- **Interim state (owner, M19 brief), until E5/E6:**
+  - The rule that only user-started windows (an xdg-activation token from sash-shell) are placed at the pointer and take focus needs the shell. Until then every new tiled window is placed at the pointer and takes focus when it maps, as focus-at-map does today (M9e).
+  - **Known risk, focus stealing:** a window the user did not start takes the keyboard when it maps. Examples: a client opening a second window by itself, a slow app mapping long after its launch, or anything that maps while the user types. Keys meant for the old window, passwords included, go to the new one, and the user's tile is split under the pointer without their asking.
+  - Nothing mitigates this before E5.
+
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
 On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.
