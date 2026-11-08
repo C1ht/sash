@@ -16,10 +16,15 @@ change this file without the owner's approval.
     the owner after M16; created when the dock is built, E6, not before).
   - `sash-settings` — the Settings app (approved by name after M16;
     created later, not before).
+  - `sash-theme` — the theme tokens of docs/design.md (dark and light),
+    the appearance choice and the contrast maths, with no dependencies
+    (approved by the owner in M18b). sash-wm and sash-ui both take every
+    colour from it.
 - Dependencies between them (owner, after M16): sash-wm never depends
   on sash-ui as a normal or build dependency; a dev-dependency used by
   tests only is allowed. sash-ui never depends on sash-wm (no cycle).
-  sash-text is the only crate shared by sash-wm and sash-ui. Enforced by
+  sash-text and sash-theme are the only crates shared by sash-wm and
+  sash-ui (sash-theme: owner, M18b). Enforced by
   tools/check-release.sh (run by tools/check-all.sh).
 - Do not create any other crate without asking first.
 - Development platform: Arch Linux. Target distro: Debian 13 (trixie).
@@ -28,7 +33,8 @@ change this file without the owner's approval.
 
 ## Names
 
-- Use only: sash, sash-wm, sash-ui, sash-text, sash-shell, sash-settings.
+- Use only: sash, sash-wm, sash-ui, sash-text, sash-theme, sash-shell,
+  sash-settings.
 - Binary names are sash-<role> (owner, after M16); what the user sees is
   the plain name (the dock, the launcher, Settings).
 - First-party apps get plain, unbranded names: Settings, Files,
@@ -146,6 +152,10 @@ change this file without the owner's approval.
   absent from release builds. SASH_DEBUG_GAP_PX is removed.
 - Logical rectangles become physical pixels by rounding each edge on its
   own, so neighbours keep the exact gap at scales 1, 1.5 and 2.
+- After M18a (owner): each gap is rounded to whole physical pixels once
+  per scale (halves up: 13 at 1.5 is 20 on all four sides, 8 is 12), then
+  the edges are placed; cell edges keep the per-edge rounding. Everything
+  drawn inside a window is placed by that window's physical frame.
 - Kept: the snap preview shows the visible rectangle; a drop or snap
   trigger over a gap belongs to the tile it borders; a tile floated from
   tiling starts from its visible rectangle; tile-all restores the exact
@@ -155,6 +165,72 @@ change this file without the owner's approval.
 - Tests, standard checks, render time for 10 windows at 5120x1440 and
   3440x1440 (p50/p95/p99, no regression), a table of every constant
   changed; no tag; STOP and ask. M18b is not started.
+
+## Theme, decorations and focus (M18b, owner)
+
+- One theme module, the crate sash-theme: its values are exactly the
+  tokens in docs/design.md, dark and light, selected by the appearance
+  setting (automatic, light, dark). No colour literal anywhere else in
+  sash-wm or sash-ui. A test compares every token with the spec's table
+  (it reads docs/design.md) and fails if one differs. Until the settings
+  protocol exists the appearance is a value in sash-wm's state; automatic
+  has no source yet and means dark (known limit).
+- Default accent teal (#5EC4BE dark, #0B6E6E light); blue (#0A84FF dark,
+  #007AFF light) stays a preset. The accent never draws a window outline.
+- Focus is shown by the bar tone (#15191C focused, #1B2024 not; light
+  #E5E9EC, #EEF1F3), the outline (white 14% focused, 8% not; light black
+  18%, 10%) and the inactive dim. Never a coloured outline.
+- The inactive dim: black 14% (dark) or 4% (light) over the client area
+  of an unfocused window (inside the outline, below it), never over its
+  bar, never on a fullscreen window. It is one of the effect toggles on
+  the closed settings list, default on; until the settings protocol
+  exists it is a value in sash-wm's state (no environment variable).
+- Server-side decorations: bar 34 px; buttons 34 x 34 in the order close,
+  maximize, on the left (the M11b side); glyphs 15 px at a 2 px stroke,
+  drawn by sash-wm from simple shapes (anti-aliased; sash-wm never
+  depends on sash-ui or resvg); a hovered button shows a 21 px square of
+  radius 5 behind its glyph (close #FF453A; the others the overlay at 12%:
+  white dark, #1B2126 light); no hairline under the bar. The third slot
+  (minimize, E5) is reserved: no glyph, no hover, no action of its own; it
+  is bar (a drag moves the window, a press focuses and raises it, as on
+  the rest of the bar), so the title does not move when E5 adds it.
+- Glyphs and the title: the text token when the window is focused, the
+  secondary token when not (white 92% / 62% dark; #1B2126 / #5A636A
+  light), also on a hovered button.
+- The title is untrusted text (sash-text's client text): Manrope 13 px,
+  weight 500 focused and 400 not, centred in the width left after
+  reserving 3 x 34 + 8 px on BOTH sides of the bar, cut with an ellipsis,
+  laid out as one isolated run (an RTL or mixed title never reaches the
+  buttons and never moves them; the full bidi algorithm is still a known
+  limit), never in the debug recorder or logs.
+- Window radius 13, the outline 1 px on all edges. No shadows (later).
+- Snap preview: the accent at 12% fill with a 1 px accent edge at 60%,
+  the same rounded shape and gaps as the window it previews.
+- The old coloured focus border and the old palette are deleted, not
+  hidden behind a flag.
+- sash-ui takes its colours and focus-ring metrics from sash-theme (focus
+  ring: 2 px accent, 3 px off the widget, docs/design.md). The derived
+  tokens #006CDA, #006ADE and the 56% light secondary are removed with
+  their floor test; the contrast tests use the spec tokens. Text on the
+  accent fill is #14181B (dark) or #FFFFFF (light); the accent fill is the
+  accent. Surfaces: page, raised and chrome (the spec's card is dark-only
+  and unused). Hover is the overlay at 5%, pressed and selected 8%. There
+  is no 35% level: a disabled control uses the secondary token plus a
+  state shape.
+- Contrast thresholds as before (text 4.5:1; glyphs and the focus ring
+  3:1). A pair under its threshold is reported to the owner; a token is
+  never changed to make a test pass.
+- Tests: the token table against docs/design.md; contrast of every pair
+  the spec uses; goldens at scales 1, 1.5 and 2, dark and light (focused,
+  unfocused, hovered close, hovered maximize, maximized with the restore
+  glyph, a tiled window with and without the dim); titles (long, empty,
+  RTL, mixed script) never overlap the buttons and stay centred when
+  short; hit-testing of both buttons, the reserved slot, the bar and the
+  resize zones; mutation checks (the dim over the bar; swapped bar tones).
+- Standard checks, render time for 10 windows with bars at 5120x1440 and
+  3440x1440 with the dim on and off; a table of every constant and colour
+  changed; no tag; STOP and ask. Minimize, shadows and M19 are not
+  started.
 
 ## BSP tiling (M3)
 
@@ -313,7 +389,9 @@ change this file without the owner's approval.
   right edge = that edge's zone. Corners win over edges.
 - While the pointer is in a zone, a preview rectangle is drawn: fill
   #0A84FF at 30% alpha plus a 2 px border at 80% alpha. Plain rectangle,
-  no blur, rounding or animation. It disappears when the pointer leaves
+  no blur, rounding or animation. Superseded (owner, M18b): the accent at
+  12% with a 1 px accent edge at 60%, rounded like the window ("Theme,
+  decorations and focus (M18b, owner)"). It disappears when the pointer leaves
   the zone or the drag ends. Releasing inside a zone snaps the window;
   dragging a tiled window to a zone floats and snaps it.
 - A snapped window remembers its pre-snap floating rectangle and its
@@ -945,6 +1023,9 @@ change this file without the owner's approval.
   toggles the top-zone snap. No minimize, no menu, no double-click
   action. A left-drag on the bar moves the window like mod+left-drag
   (snapping and zones included).
+- Superseded (owner, M18b): colours, the bar (34 px), buttons, glyphs,
+  hover squares and the title ("Theme, decorations and focus (M18b,
+  owner)").
 - Colours (dark values until the appearance setting exists): bar fill
   #2C2C2E; border focused #0A84FF, unfocused #3A3A3C; glyphs focused
   #FFFFFF at 92% alpha, unfocused #FFFFFF at 35% alpha; hover background
@@ -1377,6 +1458,9 @@ change this file without the owner's approval.
   the last 20, in a file of mode 0600 under ~/.local/state/sash/; a
   clear action; never in the debug recorder.
 - Contrast (owner):
+  - Superseded (owner, M18b): the palette, the derived tokens and the
+    35% level ("Theme, decorations and focus (M18b, owner)"); the
+    thresholds stay.
   - Text at 35% alpha only for disabled items and decoration.
   - Non-text glyphs need 3:1 against their background.
   - The accent is never body text on dark backgrounds.
@@ -1446,6 +1530,8 @@ change this file without the owner's approval.
     fill (the dark accent fill against the dark surfaces is only
     2.25-3.37:1). The derived accent fills #006CDA (dark) and #006ADE
     (light) are a floor: a test fails if they are made lighter.
+    Superseded in part (owner, M18b): the derived fills and their floor
+    test are removed; the outline-or-state-shape rule stays.
   - Tab order is the document order of the widget tree, not screen
     position.
 - E3 rules (owner, after E2): icon lookup and SVG.
@@ -1613,7 +1699,9 @@ change this file without the owner's approval.
   Activity Manager will show titles).
 - Bar layout: the buttons on the left as built; the title follows them,
   left-aligned, with 12 px padding, cut with an ellipsis at the right
-  padding. No tooltips, no double-click action.
+  padding. No tooltips, no double-click action. Superseded (owner, M18b):
+  centred after reserving 3 x 34 + 8 px on both sides; colours and
+  weights as in "Theme, decorations and focus (M18b, owner)".
 - Typeface Manrope at 13 px (a constant). Focused: weight 500, #FFFFFF at
   92% alpha; unfocused: weight 400, #FFFFFF at 55% alpha. Focus shows by
   weight and brightness as well as the border, not by colour alone. The
