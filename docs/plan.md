@@ -529,6 +529,54 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
   - sash-ui maps to page, raised and chrome (both themes have them; the dark-only card is unused); hover is the overlay at 5%, pressed and selected 8%; no 35% level (a disabled control uses the secondary token plus a state shape).
 - Decided while writing the rules (for the owner to confirm): the reserved minimize slot is part of the bar (a drag there moves the window, a press focuses and raises it; no glyph, no hover square, no action of its own); the automatic appearance has no source yet and means dark; the dim is a field in sash-wm's state, default on, with no environment variable; the bar fill reaches under the outline (the outline is drawn on top), so no background shows through a 1.5 px outline at fractional scales; the title is laid out as one isolated run (no full bidi; a known limit since M14).
 - Out of scope: minimize (E5), shadows, blur and glass, the dock, M19.
+- **M18b done, waiting for the owner (no tag).**
+    - `sash-theme` (new crate, no dependencies): the docs/design.md tokens dark and light (`Theme::DARK`, `Theme::LIGHT`), `Appearance` (automatic means dark until it has a source), the accent presets (teal default, blue), the focus ring (2 px, 3 px off), `over`/`contrast`, and `pairs()` (every pair the spec uses). `every_token_is_the_spec_table` reads docs/design.md, cuts its two colour lists at ", " and compares them item by item with the tokens written the spec's way (`spec_items`); the blue preset line and the focus ring sentence are checked the same way.
+    - sash-wm: `Sash::appearance` and `Sash::dim` (the effect toggle, default on); `decorations::pieces(theme, outer, decoration, look)`: bottom to top the dim (unfocused, not fullscreen, the client area only), the bar (reaching under the outline), a hovered button's square (21 px, radius 5, its own rounded shape in the shader), the glyphs (`glyphs.rs`: 15 px, 2 px stroke, Tabler proportions, anti-aliased 5 x 5 samples per pixel at the output scale), the title, then the outline (a ring at the outline token, never coloured). Glyphs and titles are drawn pixel for pixel (`render::Exact`). The title (`titles::title_box`) is centred on the bar in physical pixels within the title area (the bar less 3 x 34 + 8 px on both sides). The snap preview: the accent at 12% and a 1 px edge at 60%, through the window radius's rounded shape, by its frame. The clear colour is the theme's page; the fixed-size fullscreen backdrop and the built-in arrow use the spec's black and white; the debug outline palette is made of dark tokens.
+    - sash-ui: `theme.rs` maps widgets to the tokens (page, raised, chrome; hover 5%, pressed 8%; secondary for disabled; the accent fill is the accent, text on it the spec's); the derived tokens, the 35% level and their tests are gone. A disabled accent button is an outline without fill. The focus ring is 2 px wide, 3 px off.
+    - Found and fixed in sash-ui's canvas: a partial redraw whose clip cut through an anti-aliased rounded shape differed from a full draw by 1 to 2 levels (tiny-skia's coverage changes where a path meets the scratch pixmap's edge). The 3 px ring's damage was the first to reach a neighbour's corner. `fill_path` now rasterises the whole shape and blends in only the clipped part; `a_clip_through_a_rounded_shape_matches_a_full_draw` fails on the old code.
+    - Found in the GPU captures: the outline tokens are translucent (white 8 / 14%, black 10 / 18%) and sash-wm's 1 px outline lies outside the client (the M11b geometry), so beside the client nothing of the window is under it and the background showed through (beside the bar, the bar is under it). The outline is now the token drawn over the bar tone, made opaque (`sash_theme::over`): in the bar the pixel is the same as before; beside the client it is a solid hairline. Tokens unchanged; for the owner to confirm.
+    - The contrast test (sash-theme) found that the secondary token as a glyph on the hovered close square is 2.07:1 (dark) and 1.80:1 (light), under 3:1; a hovered button's glyph therefore uses the text token in both focus states (3.08:1 dark, 4.77:1 light; the M11b behaviour: hover brightened the glyph). For the owner to confirm; no token was changed.
+    - Tests: the token table and presets; contrast of 54 spec pairs plus 24 widget pairs, none under its threshold; `tests/look.rs`: contact sheets (fixtures/decorations/windows-{dark,light}-x{1,1.5,2}.png: focused, unfocused, hovered close, hovered maximize, maximized with the restore glyph, a tile focused, unfocused with and without the dim), the bar tone, the dim on the client area only, the outline never coloured, titles (short, long, empty, RTL, long RTL, mixed script) never reaching the reserved slots and centred within 1 px when short at 5 scales and 4 widths; `the_reserved_slot_is_bar` (no hover square, no action, a click focuses, a drag moves); decor unit tests for the new geometry; the GPU test now compares every pixel of two whole windows (bar, glyphs, dim, outline, cut corners) with the CPU reference (tests/reference.rs) at 1, 1.5 and 2: worst difference 2, 1 and 2 levels over 147k, 328k and 579k pixels. Mutations: the dim drawn over the bar fails 4 tests (the goldens, the bar tone, the dim test, the title bars); swapped bar tones fail 6.
+    - Captures (real GPU path): docs/screenshots/m18b-{dark,light}-x{1,1.5,2}.png.
+
+| Constant or colour | Old | New | File |
+|---|---|---|---|
+| Bar height | 32 | 34 | sash-wm/src/layout/decor.rs |
+| Button hit area | 32 x 32 | 34 x 34 | sash-wm/src/layout/decor.rs |
+| Glyph | 12 px mask, about 2 px lines, no anti-aliasing | 15 px, 2 px stroke, anti-aliased (`GLYPH_STROKE`) | sash-wm/src/layout/decor.rs, sash-wm/src/glyphs.rs |
+| Hover square | 24 px, square | 21 px, radius 5 (`HOVER_SQUARE`, `HOVER_RADIUS`) | sash-wm/src/layout/decor.rs |
+| Title placement | after the buttons, 12 px padding (`TITLE_PADDING`), left-aligned | centred; 3 slots x 34 + 8 off both ends (`SLOTS`, `TITLE_MARGIN`) | sash-wm/src/layout/decor.rs |
+| Title weight and ink | 500 / white 92% focused, 400 / white 55% not | 500 / text, 400 / secondary | sash-wm/src/titles.rs |
+| Bar fill | #2C2C2E | #15191C focused, #1B2024 not (light #E5E9EC, #EEF1F3) | sash-theme/src/lib.rs |
+| Border / outline | #0A84FF focused, #3A3A3C not | white 14% / 8% (light black 18% / 10%) over the bar tone, opaque | sash-theme/src/lib.rs, sash-wm/src/decorations.rs |
+| Glyph ink | white 92% focused or hovered, 35% not | text focused, secondary not, text when hovered | sash-theme/src/lib.rs |
+| Hover close | #FF453A | #FF453A (the token) | sash-theme/src/lib.rs |
+| Hover maximize | #3A3A3C | overlay 12% (white; light #1B2126) | sash-theme/src/lib.rs |
+| Inactive dim | none | black 14% (light 4%), client area of unfocused windows | sash-theme/src/lib.rs, sash-wm/src/decorations.rs |
+| Snap preview | #0A84FF 30% fill, 2 px edge at 80%, square | accent 12% fill, 1 px edge at 60%, radius 13 | sash-wm/src/render.rs |
+| Clear colour | #1A1A1A (0.1) | page (#1D2226; light #FFFFFF) | sash-wm/src/render.rs |
+| Backdrop, built-in arrow | black, white literals | `sash_theme::BLACK`, `WHITE` (same values) | sash-wm/src/render.rs |
+| Debug outline palette | 26/26/26, 52/56/64, 72/62/48, 190, #0A84FF, white, 255/64/64, 140 | page, raised, accent tile, secondary over page, accent, text over page, close hover, hairline (dark) | sash-wm/src/record/outline.rs |
+| sash-ui surfaces | #1C1C1E, #2C2C2E, #3A3A3C (light #F2F2F7, #FFFFFF, #E5E5EA) | page #1D2226, raised #22282C, chrome #15191C (light #FFFFFF, #F3F5F7, #E5E9EC) | sash-ui/src/theme.rs |
+| sash-ui text | white (light black) at 92 / 55 / 35%; light secondary 56% | text white 92%, secondary white 62% (light #1B2126, #5A636A); no 35% | sash-ui/src/theme.rs |
+| sash-ui accent | #0A84FF / #007AFF | #5EC4BE / #0B6E6E | sash-theme/src/lib.rs |
+| sash-ui accent fill | derived #006CDA / #006ADE | the accent | sash-ui/src/theme.rs |
+| sash-ui text on accent | white 92% | #14181B (light #FFFFFF) | sash-theme/src/lib.rs |
+| sash-ui hover / pressed fill | the next surface | overlay 5% / 8% | sash-ui/src/theme.rs |
+| sash-ui hovered edge | ink at 10% | hairline (#2B3238; light #DCE0E5) | sash-ui/src/theme.rs |
+| sash-ui focus ring | 2 px, 1 px off | 2 px, 3 px off (`FOCUS_RING_WIDTH`, `FOCUS_RING_OFFSET`) | sash-theme/src/lib.rs, sash-ui/src/ui.rs |
+
+    - Render time (release, headless NVIDIA, 300 whole frames per run, radius 13; before = e28920f in a worktree, runs alternated before, after, before, after; then `gpu_dim_cost` twice; budget 4.17 ms):
+
+| Output | Scene | Before p50 / p95 / p99 (us) | After, dim on | After, dim off |
+|---|---|---|---|---|
+| 5120x1440 | 10 windows with bars | 710-729 / 1920-2024 / 2117-2193 | 784-799 / 1959-2072 / 2154-2383 | 702-713 / 1924-1999 / 2083-2264 |
+| 3440x1440 | 10 windows with bars | 628-637 / 1869-1902 / 2071-2141 | 672-690 / 1920-2043 / 2131-2309 | 620-637 / 1874-1952 / 2122-2212 |
+| 5120x1440 | 10 tiles with gaps | 316-329 / 363-676 / 1618-1680 | 364-376 / 426-495 / 1710-1878 | 320-332 / 405-447 / 1653-1735 |
+| 3440x1440 | 10 tiles with gaps | 273-285 / 323-457 / 1618-1647 | 304-316 / 382-548 / 1673-1714 | 276-287 / 366-482 / 1692-1856 |
+
+    - With the dim off the new decorations cost the same as the old ones (within the spread between runs). The dim (nine dimmed windows, each one shape-clipped fill over its client area) costs about 75 to 90 us at p50 at 5120x1440 and 40 to 55 us at 3440x1440 for the windows with bars, 40 to 50 and 25 to 30 us for the tiles; p95 and p99 move by up to about 50 to 100 us, inside or near the spread.
+    - Values in code that docs/design.md does not have (not changed; for the owner): the resize zones (6 px inside the outline, 16 x 16 at the corners); the snap triggers (8 px, 64 px corners) and edge snapping (12 px); the 64 px visibility rule and minimum tile (the spec's minimum tile 233 x 144 is not built); keyboard steps (40 px) and the cascade (32 px); the cursor size 24 (the spec leaves 21 or 34 open); sash-ui's button height 32, padding 12, icon 16, radius 0.25 x the shorter side (the spec: 0.236, at most 21); the glyph shapes' proportions (Tabler's 24 px grid); the clear colour is the page token until a wallpaper exists; the fixed-size fullscreen backdrop is opaque black; the snap preview's 12% / 60% / 1 px and the title reserve 3 x 34 + 8 come from the brief, not the spec.
 
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 

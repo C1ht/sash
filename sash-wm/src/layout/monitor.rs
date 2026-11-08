@@ -163,6 +163,11 @@ impl MonitorLayout {
         self.gaps
     }
 
+    /// The corner radius.
+    pub fn radius(&self) -> i32 {
+        self.radius
+    }
+
     /// Sets the corner radius (never negative).
     pub fn set_radius(&mut self, radius: i32) {
         self.radius = radius.max(0);
@@ -1324,16 +1329,15 @@ impl MonitorLayout {
                     "{window:?} ({layer:?}): a border edge is missing"
                 );
             }
-            // The title (M15) sits in the bar, after the buttons and their padding.
+            // The title (M18b) sits in the bar, the slots and a margin off both ends.
             if let Some(title) = decoration.title_rect(rect) {
                 let bar = decoration.bar_rect(rect).expect("a title needs a bar");
-                let start = bar.x
-                    + super::decor::BUTTONS.len() as i32 * super::decor::BUTTON
-                    + super::decor::TITLE_PADDING;
+                let reserve =
+                    super::decor::SLOTS * super::decor::BUTTON + super::decor::TITLE_MARGIN;
                 assert!(
                     title.w > 0
-                        && title.x >= start
-                        && title.right() <= bar.right() - super::decor::TITLE_PADDING
+                        && title.x >= bar.x + reserve
+                        && title.right() <= bar.right() - reserve
                         && title.y == bar.y
                         && title.h == bar.h,
                     "{window:?}: title {title:?} outside its place in the bar {bar:?}"

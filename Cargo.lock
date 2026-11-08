@@ -1702,6 +1702,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sash-theme"
+version = "0.1.0"
+
+[[package]]
 name = "sash-ui"
 version = "0.1.0"
 dependencies = [
@@ -1709,6 +1713,7 @@ dependencies = [
  "proptest",
  "resvg",
  "sash-text",
+ "sash-theme",
  "smithay-client-toolkit 0.21.1",
  "tiny-skia",
 ]
@@ -1722,6 +1727,7 @@ dependencies = [
  "png",
  "proptest",
  "sash-text",
+ "sash-theme",
  "sash-ui",
  "smithay",
  "tracing",

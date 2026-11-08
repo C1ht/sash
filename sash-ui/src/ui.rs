@@ -22,16 +22,17 @@ use crate::{
     input::{Input, Key, Pointer},
     layout::layout,
     panel::View,
-    theme::{Surface, TextLevel, Theme},
+    theme::{Overlay, Surface, TextLevel, Theme},
     tree::{
         BUTTON_PADDING, Button, ButtonStyle, ICON_GAP, Icon, Issue, Kind, Node, NodeId, Semantics,
         Text, Tree,
     },
 };
 
-/// The focus ring: 2 px wide, 1 px outside the widget (logical pixels).
-pub const RING_WIDTH: i32 = 2;
-pub const RING_GAP: i32 = 1;
+/// The focus ring (docs/design.md, through sash-theme): 2 px wide, 3 px outside the
+/// widget (logical pixels).
+pub const RING_WIDTH: i32 = crate::theme::FOCUS_RING_WIDTH;
+pub const RING_GAP: i32 = crate::theme::FOCUS_RING_OFFSET;
 /// Chrome radius proportional to the element's size (owner, M16): a quarter of the
 /// shorter side.
 pub const RADIUS_FRACTION: f32 = 0.25;
@@ -571,7 +572,7 @@ impl Ui {
                 Kind::Container(_) => {}
                 Kind::Label(l) => {
                     let level = if disabled {
-                        TextLevel::Disabled
+                        TextLevel::Secondary
                     } else {
                         l.level
                     };
@@ -580,7 +581,7 @@ impl Ui {
                 }
                 Kind::Icon(i) => {
                     let level = if disabled {
-                        TextLevel::Disabled
+                        TextLevel::Secondary
                     } else {
                         TextLevel::Primary
                     };
@@ -595,7 +596,7 @@ impl Ui {
             let width = ((RING_WIDTH as f32 * s).round() as i32).max(1);
             let outset = ((RING_GAP + RING_WIDTH) as f32 * s).round();
             let radius = (r.w.min(r.h) as f32 - 2.0 * outset) * RADIUS_FRACTION + outset;
-            canvas.ring(r, radius, width, self.theme.accent);
+            canvas.ring(r, radius, width, self.theme.accent());
         }
     }
 
@@ -608,46 +609,46 @@ impl Ui {
         let hover = self.drawn_hover(id);
         let pressed = self.pressed == Some(id);
         let theme = self.theme;
+        // A colour at `k` (0..1) of its own alpha: hover fades in and out.
+        let faded = |c: crate::canvas::Color, k: f32| {
+            c.with_alpha(f32::from(c.a) / 255.0 * k.clamp(0.0, 1.0))
+        };
         let content = match b.style {
             ButtonStyle::Flat => {
-                let fill = theme.hover(self.background);
-                if pressed {
-                    // Pressed: the fill shrinks by a pixel (a change of shape).
-                    canvas.fill_rounded(inset(r, px(1)), radius, fill);
+                if off {
+                    // Disabled: the secondary token, and no hover or pressed shape.
+                } else if pressed {
+                    // Pressed: the 8% fill, a pixel smaller (a change of shape).
+                    canvas.fill_rounded(inset(r, px(1)), radius, theme.overlay(Overlay::Pressed));
                 } else if hover > 0.0 {
-                    canvas.fill_rounded(r, radius, fill.with_alpha(hover));
-                    let border = theme.border();
-                    canvas.ring(
-                        r,
-                        radius,
-                        px(1),
-                        border.with_alpha(hover * theme.border_alpha),
-                    );
+                    // Hover: the 5% fill and a hairline edge (never only a fill).
+                    canvas.fill_rounded(r, radius, faded(theme.overlay(Overlay::Hover), hover));
+                    canvas.ring(r, radius, px(1), faded(theme.hairline(), hover));
                 }
                 theme.text(if off {
-                    TextLevel::Disabled
+                    TextLevel::Secondary
                 } else {
                     TextLevel::Primary
                 })
             }
+            ButtonStyle::Accent if off => {
+                // Disabled: the outline only, no fill (a state shape), secondary text.
+                canvas.ring(r, radius, px(1), theme.accent());
+                theme.text(TextLevel::Secondary)
+            }
             ButtonStyle::Accent => {
                 let body = if pressed { inset(r, px(1)) } else { r };
-                canvas.fill_rounded(body, radius, theme.accent_fill);
-                // The fill alone is under 3:1 on the dark surfaces: the accent outline
-                // (3:1 on every surface) marks the shape (owner, after E2). Hover
-                // widens it to 2 px: a change of shape.
+                canvas.fill_rounded(body, radius, theme.accent_fill());
+                // The outline marks the shape (owner, after E2: interactive shapes get
+                // an outline or a state shape, never only a fill). Hover widens it to
+                // 2 px: a change of shape.
                 let width = if hover > 0.5 && !pressed {
                     px(2)
                 } else {
                     px(1)
                 };
-                canvas.ring(r, radius, width, theme.accent);
-                let text = theme.on_accent();
-                if off {
-                    text.with_alpha(theme.disabled_alpha)
-                } else {
-                    text
-                }
+                canvas.ring(r, radius, width, theme.accent());
+                theme.on_accent()
             }
         };
         let mut x = rect.x + BUTTON_PADDING;

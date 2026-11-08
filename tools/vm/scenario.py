@@ -718,12 +718,16 @@ try:
     vm.pointer_abs(w17 // 2, h17 // 2, w17, h17)
     time.sleep(0.5)
     dump = read_png(shot(vm, "17g-title"))
-    fill = (0x2C, 0x2C, 0x2E)
-    # Floated at its visible rectangle, GAP in from the edges (M18a). Bar inside the 1 px
-    # border: y 1..33; buttons x 1..65; title from 77 (12 px padding); all + GAP.
-    title_px = [p for p in region(dump, GAP + 77, GAP + 6, min(w17 - 13, GAP + 400), GAP + 28)
+    # The focused bar's tone (M18b, the dark theme: chrome #15191C).
+    fill = (0x15, 0x19, 0x1C)
+    # Floated at its visible rectangle, GAP in from the edges (M18a). The bar inside the
+    # 1 px outline: y 1..35; three 34 px slots and 8 px off both ends (M18b), so the
+    # title area starts at x 111 and a short title is centred on the bar (the screen's
+    # centre); all + GAP. Between the second button and the title area (the reserved
+    # slot and the margin): only the bar's fill.
+    title_px = [p for p in region(dump, w17 // 2 - 150, GAP + 6, w17 // 2 + 150, GAP + 28)
                 if sum(p) > 3 * 110]
-    padding = [p for p in region(dump, GAP + 66, GAP + 6, GAP + 76, GAP + 28) if p != fill]
+    padding = [p for p in region(dump, GAP + 70, GAP + 6, GAP + 110, GAP + 28) if p != fill]
     vm.keys("meta_l", "f11")
     time.sleep(2)
     b17 = sh(vm, "ls -d /home/sash/rec17g/bundle-* | tail -1").strip()
@@ -734,10 +738,10 @@ try:
         f.write(base64.b64decode(encoded))
     outline = read_png(outline_path)
     scale17 = outline[0] / w17
-    colours = set(region(outline, int((GAP + 77) * scale17), int((GAP + 6) * scale17),
-                         int((GAP + 400) * scale17), int((GAP + 28) * scale17)))
-    check("titles: foot's title is drawn in its bar after the buttons; the outline "
-          "screenshot has no text there",
+    colours = set(region(outline, int((w17 // 2 - 150) * scale17), int((GAP + 6) * scale17),
+                         int((w17 // 2 + 150) * scale17), int((GAP + 28) * scale17)))
+    check("titles: foot's title is drawn centred in its bar, nothing between the buttons "
+          "and the title area; the outline screenshot has no text there",
           len(title_px) > 20 and not padding and len(colours) <= 3,
           f"bright title pixels {len(title_px)}, padding pixels off the fill {len(padding)}, "
           f"colours in the outline's title area {len(colours)}")

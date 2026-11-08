@@ -3,7 +3,7 @@
 #
 # Crate boundaries (owner, M17): sash-wm never depends on sash-ui as a normal or build
 # dependency (a dev-dependency used by tests only is allowed); sash-ui never depends on
-# sash-wm; sash-text is the only crate they share.
+# sash-wm; sash-text and sash-theme (owner, M18b) are the only crates they share.
 #
 # CLIENT_ONLY lists the crates (name@version) only sash-ui's normal and build tree brings
 # in, i.e. what sash-wm does not use already. None of them may be in sash-wm's normal

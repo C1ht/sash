@@ -676,7 +676,7 @@ fn sheet(theme: Theme, loader: &Rc<RefCell<IconLoader>>) -> (Ui, i32, i32) {
             .width(Size::Flex(1))
             .height(Size::Flex(1)),
         theme,
-        Surface::Surface,
+        Surface::Raised,
     );
     let root = ui.root();
     for row in Symbol::ALL.chunks(per_row as usize) {
@@ -752,7 +752,7 @@ fn symbolic_tint_passes_3_to_1_on_every_surface() {
             assert!(
                 best >= NON_TEXT_CONTRAST,
                 "{:?} on {surface:?}: {best:.2}",
-                theme.appearance
+                theme.tokens.mode
             );
         }
     }
@@ -767,7 +767,7 @@ fn the_icon_widget_loads_theme_icons_by_name() {
         png_bytes(24, 24, [0, 200, 0, 255]),
     );
     let loader = Rc::new(RefCell::new(loader(&root, &root.join("none"), "T")));
-    let mut ui = Ui::new(Node::row(), Theme::dark(), Surface::Surface);
+    let mut ui = Ui::new(Node::row(), Theme::dark(), Surface::Raised);
     let r = ui.root();
     ui.add(
         r,

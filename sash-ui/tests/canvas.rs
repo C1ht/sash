@@ -165,3 +165,28 @@ proptest! {
         }
     }
 }
+
+/// A clip that cuts through a rounded fill or a ring (its anti-aliased corners) gives
+/// exactly the pixels of a full draw (found in M18b: tiny-skia's coverage changed where
+/// the path met the edge of a scratch pixmap cut to the clip).
+#[test]
+fn a_clip_through_a_rounded_shape_matches_a_full_draw() {
+    let shapes = |canvas: &mut Canvas| {
+        let tone = Color::rgb(0xFFFFFF).with_alpha(0.05);
+        canvas.fill_rounded(Rect::new(20, 6, 90, 36), 9.0, tone);
+        canvas.ring(Rect::new(20, 6, 90, 36), 9.0, 1, tone);
+        canvas.ring(Rect::new(140, 3, 60, 42), 12.0, 2, Color::rgb(0x5EC4BE));
+    };
+    let mut full = vec![0; (W * H * 4) as usize];
+    shapes(&mut Canvas::new(&mut full, W, H, Rect::sized(W as i32, H as i32)).unwrap());
+    for x in (0..W as i32).step_by(3) {
+        for w in [1, 2, 3, 7, 30] {
+            let mut part = full.clone();
+            let clip = Rect::new(x, 0, w, H as i32);
+            let mut canvas = Canvas::new(&mut part, W, H, clip).unwrap();
+            canvas.clear();
+            shapes(&mut canvas);
+            assert!(part == full, "clip {clip:?}");
+        }
+    }
+}

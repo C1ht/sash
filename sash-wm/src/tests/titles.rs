@@ -1,36 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Window titles in the bars (M15). Bar pictures are composed on the CPU the way a
-//! frame draws them (fill, button glyphs, the title image where `bar_title` puts it);
-//! goldens live in fixtures/titles/ (SASH_TEXT_BLESS=1 writes them; look at each).
-//! Goldens that need the Noto fonts are ignored here and run in the debian:trixie
-//! container by tools/text-goldens.sh (an ignored test is listed as ignored, never as
-//! passed).
+//! Window titles in the bars (M15; centred and themed in M18b). Bar pictures are the
+//! CPU reference's (tests/reference.rs: the bar, the glyphs, the title where
+//! `bar_title` puts it), cut to the bar; goldens live in fixtures/titles/
+//! (SASH_TEXT_BLESS=1 writes them; look at each). Goldens that need the Noto fonts are
+//! ignored here and run in the debian:trixie container by tools/text-goldens.sh (an
+//! ignored test is listed as ignored, never as passed).
 
 use std::{path::PathBuf, time::Instant};
 
 use sash_text::{ClientText, Image, TextStack};
+use sash_theme::Theme;
 use smithay::{backend::input::ButtonState, utils::Scale};
 
 use super::{
     client::TestClient,
     decorations::{FLOAT, decorated, floating},
     harness::Harness,
+    reference::{Picture, Window, compose},
 };
 use crate::{
-    decorations::{Glyph, glyph_mask},
+    decorations::Look,
     layout::{
         Rect, WindowId, ZoneId,
-        decor::{BUTTONS, Decoration, GLYPH},
+        decor::{BUTTON, Decoration, SLOTS, TITLE_MARGIN},
+        gaps::Frame,
     },
     seat::BTN_LEFT,
-    titles::{self, FOCUSED, UNFOCUSED},
+    titles,
 };
 
-const FILL: [u8; 3] = [0x2C, 0x2C, 0x2E];
-
-/// The bar of a FLOAT-sized window with title `text`, at `scale`: opaque RGB rows
-/// (width = bar width x scale).
+/// The bar of a window `outer_w` wide with title `text`, at `scale`, dark: opaque RGB
+/// rows of the bar band (the bar under the outline included).
 fn bar_picture(
     stack: &mut TextStack,
     text: &str,
@@ -38,64 +39,28 @@ fn bar_picture(
     outer_w: i32,
     scale: f32,
 ) -> (u32, u32, Vec<u8>) {
+    let theme = &Theme::DARK;
     let outer = Rect::new(0, 0, outer_w, 300);
     let d = Decoration::FULL;
     let bar = d.bar_rect(outer).expect("a bar");
-    let px = |v: i32| (v as f32 * scale).round() as i32;
-    let (w, h) = (px(bar.w) as u32, px(bar.h) as u32);
-    let mut rgb = FILL.repeat((w * h) as usize);
-    let mut over = |x: i32, y: i32, a: u8, color: [u8; 3]| {
-        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-            return;
-        }
-        let i = (y as usize * w as usize + x as usize) * 3;
-        for c in 0..3 {
-            let dst = u32::from(rgb[i + c]);
-            rgb[i + c] = ((u32::from(color[c]) * u32::from(a) + dst * (255 - u32::from(a)) + 127)
-                / 255) as u8;
-        }
+    let frame = Frame::plain(outer, f64::from(scale));
+    let band = frame.map(Rect::new(bar.x, bar.y, bar.w, bar.h));
+    let mut picture = Picture::new(band, theme.page);
+    let client = |_: i32, _: i32| [0.0; 3];
+    let window = Window {
+        outer,
+        decoration: d,
+        look: Look {
+            focused,
+            rounded: true,
+            dim: true,
+            ..Look::default()
+        },
+        title: Some(text),
+        client: &client,
     };
-    let glyph_alpha = ((if focused { 0.92 } else { 0.35 }) * 255.0f32).round() as u8;
-    for (button, glyph) in BUTTONS.iter().zip([Glyph::Close, Glyph::Maximize]) {
-        let area = d.button_rect(outer, *button).expect("button");
-        let mask = glyph_mask(glyph);
-        let x0 = area.x - bar.x + (area.w - GLYPH) / 2;
-        let y0 = area.y - bar.y + (area.h - GLYPH) / 2;
-        for y in 0..px(GLYPH) {
-            for x in 0..px(GLYPH) {
-                let (gx, gy) = ((x as f32 / scale) as i32, (y as f32 / scale) as i32);
-                if mask[(gy.min(GLYPH - 1) * GLYPH + gx.min(GLYPH - 1)) as usize] {
-                    over(px(x0) + x, px(y0) + y, glyph_alpha, [255, 255, 255]);
-                }
-            }
-        }
-    }
-    if let Some(area) = d.title_rect(outer) {
-        let line = titles::shape(stack, &ClientText::from(text), focused);
-        let image = titles::draw(stack, &line, focused, area.w, scale);
-        let top = (f64::from(area.y - bar.y)
-            + ((f64::from(area.h) - f64::from(line.height())) / 2.0).round())
-            * f64::from(scale);
-        let x0 = px(area.x - bar.x) - image.origin.0 as i32;
-        let y0 = top as i32 - image.origin.1 as i32;
-        // The image is premultiplied ARGB (white text, colour emoji): source over.
-        for y in 0..image.height {
-            for x in 0..image.width {
-                let (a, r, g, b) = image.argb(x, y);
-                let (dx, dy) = (x0 + x as i32, y0 + y as i32);
-                if a == 0 || dx < 0 || dy < 0 || dx >= w as i32 || dy >= h as i32 {
-                    continue;
-                }
-                let i = (dy as usize * w as usize + dx as usize) * 3;
-                for (c, s) in [r, g, b].into_iter().enumerate() {
-                    let dst = u32::from(rgb[i + c]);
-                    rgb[i + c] =
-                        (u32::from(s) + (dst * (255 - u32::from(a)) + 127) / 255).min(255) as u8;
-                }
-            }
-        }
-    }
-    (w, h, rgb)
+    compose(&mut picture, stack, theme, &frame, &window);
+    (picture.w as u32, picture.h as u32, picture.bytes())
 }
 
 fn golden_dir() -> PathBuf {
@@ -227,11 +192,19 @@ fn truncation_at_the_button_and_padding_edges() {
         for outer_w in (60..=520).step_by(7) {
             let outer = Rect::new(0, 0, outer_w, 300);
             let Some(area) = Decoration::FULL.title_rect(outer) else {
-                assert!(outer_w <= 2 * 32 + 2 * 12 + 2, "{outer_w}: no title area");
+                assert!(
+                    outer_w <= 2 * (SLOTS * BUTTON + TITLE_MARGIN) + 2,
+                    "{outer_w}: no title area"
+                );
                 continue;
             };
-            let image = titles::draw(&mut stack, &line, focused, area.w, 1.0);
+            let ink = Theme::DARK.bar_ink(focused);
+            let (image, width) = titles::draw(&mut stack, &line, ink, area.w, 1.0);
             let fitted = line.fit(Some(area.w as f32));
+            assert_eq!(width, fitted.width());
+            // Centred on the bar, as `bar_title` places it.
+            let bar = Decoration::FULL.bar_rect(outer).unwrap();
+            let left = bar.x + (bar.w - fitted.width().round() as i32).div_euclid(2);
             assert!(fitted.width() <= area.w as f32 + 0.01, "{outer_w}");
             assert_eq!(
                 fitted.truncated(),
@@ -241,13 +214,12 @@ fn truncation_at_the_button_and_padding_edges() {
             let ink: Vec<i32> = (0..image.height)
                 .flat_map(|y| (0..image.width).map(move |x| (x, y)))
                 .filter(|(x, y)| image.argb(*x, *y).0 > 0)
-                .map(|(x, _)| area.x + x as i32 - image.origin.0 as i32)
+                .map(|(x, _)| left + x as i32 - image.origin.0 as i32)
                 .collect();
             if let (Some(min), Some(max)) = (ink.iter().min(), ink.iter().max()) {
-                let buttons_end = 1 + BUTTONS.len() as i32 * 32;
                 assert!(
-                    *min >= buttons_end + 12 - 1,
-                    "{outer_w}: ink at {min} reaches the buttons' padding"
+                    *min >= area.x - 1,
+                    "{outer_w}: ink at {min} reaches the reserved slots"
                 );
                 assert!(
                     *max < area.right() + 1,
@@ -260,64 +232,47 @@ fn truncation_at_the_button_and_padding_edges() {
 }
 
 #[test]
-fn focus_changes_weight_and_brightness() {
+fn focus_changes_weight_and_ink() {
     let mut stack = TextStack::new();
     let text = ClientText::from("Settings");
-    let draw = |stack: &mut TextStack, focused| {
-        let line = titles::shape(stack, &text, focused);
-        titles::draw(stack, &line, focused, 300, 1.0)
-    };
-    let (on, off) = (draw(&mut stack, true), draw(&mut stack, false));
-    let max = |i: &Image| {
-        i.pixels
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| p[3])
-            .max()
-            .unwrap_or(0)
-    };
-    assert_eq!(max(&on), (FOCUSED.1 * 255.0).round() as u8, "focused: 92%");
-    assert_eq!(
-        max(&off),
-        (UNFOCUSED.1 * 255.0).round() as u8,
-        "unfocused: 55%"
-    );
-    // Weight: the focused title has more ink per unit of alpha (500 against 400).
-    let coverage = |i: &Image, alpha: f32| {
-        i.pixels
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| f32::from(p[3]))
-            .sum::<f32>()
-            / alpha
-    };
-    assert!(coverage(&on, FOCUSED.1) > coverage(&off, UNFOCUSED.1) * 1.03);
-}
-
-/// WCAG contrast of the unfocused title (white at 55% over #2C2C2E) against the bar.
-#[test]
-fn contrast_of_the_unfocused_title() {
-    fn luminance(rgb: [f64; 3]) -> f64 {
-        let lin = |c: f64| {
-            let c = c / 255.0;
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
+    for theme in [&Theme::DARK, &Theme::LIGHT] {
+        let draw = |stack: &mut TextStack, focused| {
+            let line = titles::shape(stack, &text, focused);
+            titles::draw(stack, &line, theme.bar_ink(focused), 300, 1.0).0
         };
-        0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+        let (on, off) = (draw(&mut stack, true), draw(&mut stack, false));
+        // The densest pixel carries the ink itself (premultiplied ARGB).
+        let solid = |i: &Image| {
+            let p = i
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .max_by_key(|p| p[3])
+                .copied()
+                .unwrap_or([0; 4]);
+            [p[2], p[1], p[0], p[3]]
+        };
+        let ink = |c: sash_theme::Color| {
+            let [r, g, b, a] = c.rgba8();
+            let pre = |v: u8| ((u32::from(v) * u32::from(a) + 127) / 255) as u8;
+            [pre(r), pre(g), pre(b), a]
+        };
+        assert_eq!(solid(&on), ink(theme.text), "focused: the text token");
+        assert_eq!(solid(&off), ink(theme.secondary), "unfocused: secondary");
+        // Weight: the focused title has more ink per unit of alpha (500 against 400).
+        let coverage = |i: &Image| {
+            let peak = f32::from(solid(i)[3]);
+            i.pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| f32::from(p[3]))
+                .sum::<f32>()
+                / peak
+        };
+        assert!(coverage(&on) > coverage(&off) * 1.03);
     }
-    let fill = FILL.map(f64::from);
-    let ratio = |alpha: f64| {
-        let text = fill.map(|c| 255.0 * alpha + c * (1.0 - alpha));
-        (luminance(text) + 0.05) / (luminance(fill) + 0.05)
-    };
-    let (unfocused, focused) = (ratio(f64::from(UNFOCUSED.1)), ratio(f64::from(FOCUSED.1)));
-    eprintln!("contrast on #2C2C2E: unfocused {unfocused:.2}:1, focused {focused:.2}:1");
-    assert!(unfocused >= 4.5, "WCAG AA for normal text: {unfocused:.2}");
 }
 
 /// Untrusted titles: invalid UTF-8, zero-width only, controls, overlong.
@@ -338,7 +293,7 @@ fn untrusted_titles_never_panic() {
         for focused in [true, false] {
             let line = titles::shape(&mut stack, &text, focused);
             for width in [0, 1, 50, 310, 2000] {
-                let image = titles::draw(&mut stack, &line, focused, width, 1.0);
+                let (image, _) = titles::draw(&mut stack, &line, Theme::DARK.text, width, 1.0);
                 assert_eq!(image.pixels.len(), (image.stride * image.height) as usize);
             }
         }
@@ -591,13 +546,13 @@ fn title_redraw_time() {
             ClientText::from(format!("Settings - Displays and Monitors {i}").as_str()),
         );
         let t = Instant::now();
-        titles.prepare(id, 310, true, 1.0, now);
+        titles.prepare(id, 310, true, Theme::DARK.text, 1.0, now);
         new_title.push(t.elapsed());
         let t = Instant::now();
-        titles.prepare(id, 250 + i % 50, true, 1.0, now);
+        titles.prepare(id, 250 + i % 50, true, Theme::DARK.text, 1.0, now);
         resized.push(t.elapsed());
         let t = Instant::now();
-        titles.prepare(id, 250 + i % 50, true, 1.0, now);
+        titles.prepare(id, 250 + i % 50, true, Theme::DARK.text, 1.0, now);
         unchanged.push(t.elapsed());
     }
     eprintln!(

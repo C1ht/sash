@@ -10,10 +10,7 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            element::{
-                Kind,
-                memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-            },
+            element::memory::MemoryRenderBuffer,
             gles::{GlesRenderer, element::PixelShaderElement},
         },
     },
@@ -27,17 +24,20 @@ use smithay::{
             Client, DataInit, Dispatch, DisplayHandle, backend::ClientId, delegate_dispatch,
         },
     },
-    utils::{Logical, Point, Scale, Serial, Transform},
+    utils::{Logical, Physical, Point, Rectangle, Scale, Serial, Transform},
     wayland::shell::xdg::{
         ToplevelSurface,
         decoration::{XdgDecorationHandler, XdgDecorationManagerGlobalData, XdgDecorationState},
     },
 };
 
+use sash_theme::{Color, Overlay, Theme};
+
 use crate::{
     layout::{
         Edges, Rect, WindowId,
-        decor::{BUTTONS, Button, Decoration, GLYPH, Part},
+        decor::{BUTTONS, Button, Decoration, GLYPH, HOVER_RADIUS, HOVER_SQUARE, Part},
+        shape::Shape,
     },
     render::OutputElement,
     seat::BTN_LEFT,
@@ -45,78 +45,100 @@ use crate::{
     windows::DragKind,
 };
 
-/// Colours (dark values until the appearance setting exists).
-pub(crate) const BAR_FILL: [f32; 4] = rgb(0x2C, 0x2C, 0x2E);
-pub(crate) const BORDER_FOCUSED: [f32; 4] = rgb(0x0A, 0x84, 0xFF);
-pub(crate) const BORDER_UNFOCUSED: [f32; 4] = rgb(0x3A, 0x3A, 0x3C);
-const GLYPH_FOCUSED: f32 = 0.92;
-const GLYPH_UNFOCUSED: f32 = 0.35;
-const HOVER_CLOSE: [f32; 4] = rgb(0xFF, 0x45, 0x3A);
-const HOVER_MAXIMIZE: [f32; 4] = rgb(0x3A, 0x3A, 0x3C);
-/// The filled square a hovered button shows behind its glyph.
-const HOVER_SIZE: i32 = 24;
+pub use crate::glyphs::Glyph;
 
-const fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {
-    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
-}
-
-/// A glyph, drawn from simple shapes (no font).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Glyph {
-    Close,
-    Maximize,
-    /// The maximize button of a maximized window: two overlapping squares.
-    Restore,
+/// How a window's decorations look this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub focused: bool,
+    pub hover: Option<Button>,
+    pub maximized: bool,
+    /// Drawn through the rounded shape (the shaders compiled, the window has one).
+    pub rounded: bool,
+    /// The inactive dim over the client area (owner, M18b): unfocused, not fullscreen,
+    /// the effect on.
+    pub dim: bool,
 }
 
 /// One thing drawn for a window's decorations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Piece {
-    Fill(Rect, [f32; 4]),
-    /// A fill clipped by the window's rounded shape (M15b step 2): the bar, a hovered
-    /// button's square.
-    ShapeFill(Rect, [f32; 4]),
-    /// The border as one ring along the rounded shape, on these edges.
-    Ring(Edges, [f32; 4]),
-    /// A white glyph at this alpha.
-    Glyph(Glyph, Rect, f32),
+    /// A fill placed by the window's frame: square windows, the outline's strips.
+    Fill(Rect, Color),
+    /// A fill clipped by the window's rounded shape (M15b step 2): the bar, the dim.
+    ShapeFill(Rect, Color),
+    /// A hovered button's square (HOVER_SQUARE, rounded by HOVER_RADIUS), centred in
+    /// this button area.
+    Square(Rect, Color),
+    /// The outline as one ring along the rounded shape, on these edges.
+    Ring(Edges, Color),
+    /// A strip of the outline of a square window.
+    Outline(Rect, Color),
+    /// A glyph centred in this button area, in this ink.
+    Glyph(Glyph, Rect, Color),
 }
 
-/// What is drawn for a window's decorations, bottom first: the border, the bar, each
-/// button's hover square and its glyph. Focus shows in the border colour and the
-/// glyphs' brightness together; hover adds a filled square (a fill, not only colour).
-pub fn pieces(
-    outer: Rect,
-    decoration: Decoration,
-    focused: bool,
-    hover: Option<Button>,
-    maximized: bool,
-    rounded: bool,
-) -> Vec<Piece> {
+/// What is drawn for a window's decorations, bottom first: the dim over the client
+/// area, the bar (reaching under the outline, so nothing shows through a 1.5 px outline
+/// at fractional scales), each hovered button's square and every glyph, then the
+/// outline on top (owner, M18b), on the bar tone. Focus shows by the bar's tone, the outline's alpha, the
+/// glyphs' ink and the dim; never by a coloured outline.
+pub fn pieces(theme: &Theme, outer: Rect, decoration: Decoration, look: Look) -> Vec<Piece> {
     let mut out = Vec::new();
-    let edges = decoration.border;
-    let fill = |rect: Rect, color: [f32; 4]| {
-        if rounded {
+    if decoration == Decoration::NONE {
+        return out;
+    }
+    let fill = |rect: Rect, color: Color| {
+        if look.rounded {
             Piece::ShapeFill(rect, color)
         } else {
             Piece::Fill(rect, color)
         }
     };
-    // The ring goes on top of the bar (its arcs reach into the bar's corners).
-    let ring = (edges != Edges::NONE && rounded).then(|| {
-        let color = if focused {
-            BORDER_FOCUSED
-        } else {
-            BORDER_UNFOCUSED
-        };
-        Piece::Ring(edges, color)
-    });
-    if edges != Edges::NONE && !rounded {
-        let color = if focused {
-            BORDER_FOCUSED
-        } else {
-            BORDER_UNFOCUSED
-        };
+    if look.dim && !look.focused {
+        let inner = decoration.inner(outer);
+        if inner.w > 0 && inner.h > 0 {
+            out.push(fill(inner, theme.dim));
+        }
+    }
+    if let Some(bar) = decoration.bar_rect(outer) {
+        let band = Rect::new(outer.x, outer.y, outer.w, bar.bottom() - outer.y);
+        out.push(fill(band, theme.bar(look.focused)));
+        for button in BUTTONS {
+            let Some(area) = decoration.button_rect(outer, button) else {
+                continue;
+            };
+            let hovered = look.hover == Some(button);
+            if hovered && area.w >= HOVER_SQUARE && area.h >= HOVER_SQUARE {
+                let color = match button {
+                    Button::Close => theme.close_hover,
+                    Button::Maximize => theme.overlay(Overlay::Strong),
+                };
+                out.push(Piece::Square(area, color));
+            }
+            if area.w >= GLYPH && area.h >= GLYPH {
+                let glyph = match button {
+                    Button::Close => Glyph::Close,
+                    Button::Maximize if look.maximized => Glyph::Restore,
+                    Button::Maximize => Glyph::Maximize,
+                };
+                let ink = if hovered {
+                    theme.hovered_glyph()
+                } else {
+                    theme.bar_ink(look.focused)
+                };
+                out.push(Piece::Glyph(glyph, area, ink));
+            }
+        }
+    }
+    let edges = decoration.border;
+    // The outline is a translucent token drawn on the window's own frame: over the bar
+    // tone, made opaque, so the 1 px frame beside the client never shows what is behind
+    // the window (in the bar the pixel is the same either way).
+    let outline = sash_theme::over(theme.outline(look.focused), theme.bar(look.focused));
+    if edges != Edges::NONE && look.rounded {
+        out.push(Piece::Ring(edges, outline));
+    } else if edges != Edges::NONE {
         let b = crate::layout::decor::BORDER;
         // Top and bottom strips run the full width; the sides fill between them.
         let top = if edges.top { b.min(outer.h) } else { 0 };
@@ -138,95 +160,22 @@ pub fn pieces(
             ),
         ];
         for (_, rect) in strips.into_iter().filter(|(on, _)| *on) {
-            out.push(Piece::Fill(rect, color));
+            out.push(Piece::Outline(rect, outline));
         }
     }
-    let Some(bar) = decoration.bar_rect(outer) else {
-        out.extend(ring);
-        return out;
-    };
-    out.push(fill(bar, BAR_FILL));
-    for button in BUTTONS {
-        let Some(area) = decoration.button_rect(outer, button) else {
-            continue;
-        };
-        let hovered = hover == Some(button);
-        if hovered {
-            let color = match button {
-                Button::Close => HOVER_CLOSE,
-                Button::Maximize => HOVER_MAXIMIZE,
-            };
-            out.push(fill(centered(area, HOVER_SIZE), color));
-        }
-        if area.w >= GLYPH && area.h >= GLYPH {
-            let glyph = match button {
-                Button::Close => Glyph::Close,
-                Button::Maximize if maximized => Glyph::Restore,
-                Button::Maximize => Glyph::Maximize,
-            };
-            let alpha = if focused || hovered {
-                GLYPH_FOCUSED
-            } else {
-                GLYPH_UNFOCUSED
-            };
-            out.push(Piece::Glyph(glyph, centered(area, GLYPH), alpha));
-        }
-    }
-    out.extend(ring);
     out
 }
 
-/// A size x size square centered in `area`, clipped to it.
-fn centered(area: Rect, size: i32) -> Rect {
-    let w = size.min(area.w);
-    let h = size.min(area.h);
-    Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h)
-}
-
-/// A glyph's GLYPH x GLYPH mask, row by row.
-pub fn glyph_mask(glyph: Glyph) -> Vec<bool> {
-    let n = GLYPH;
-    let outline = |x: i32, y: i32, (x0, y0, x1, y1): (i32, i32, i32, i32)| {
-        let inside = (x0..=x1).contains(&x) && (y0..=y1).contains(&y);
-        // A 1 px outline with a 2 px top edge (a window's title).
-        inside && (x == x0 || x == x1 || y == y0 || y == y0 + 1 || y == y1)
-    };
-    let inside = |x: i32, y: i32, (x0, y0, x1, y1): (i32, i32, i32, i32)| {
-        (x0..=x1).contains(&x) && (y0..=y1).contains(&y)
-    };
-    let mut mask = Vec::with_capacity((n * n) as usize);
-    for y in 0..n {
-        for x in 0..n {
-            mask.push(match glyph {
-                // Two diagonals about 2 px wide.
-                Glyph::Close => (x - y).abs() <= 1 || (x + y - (n - 1)).abs() <= 1,
-                Glyph::Maximize => outline(x, y, (1, 1, n - 2, n - 2)),
-                Glyph::Restore => {
-                    let front = (1, 4, n - 5, n - 2);
-                    let back = (4, 1, n - 2, n - 5);
-                    outline(x, y, front) || (outline(x, y, back) && !inside(x, y, front))
-                }
-            });
-        }
-    }
-    mask
-}
-
-fn glyph_buffer(glyph: Glyph) -> MemoryRenderBuffer {
-    let pixels: Vec<u8> = glyph_mask(glyph)
-        .into_iter()
-        .flat_map(|on| {
-            let argb: u32 = if on { 0xffff_ffff } else { 0 };
-            argb.to_le_bytes()
-        })
-        .collect();
-    MemoryRenderBuffer::from_slice(
-        &pixels,
-        Fourcc::Argb8888,
-        (GLYPH, GLYPH),
-        1,
-        Transform::Normal,
-        None,
+/// A `size` square centred in the physical rectangle `area` (the hover square and the
+/// glyphs; the renderer and the CPU reference place them alike).
+pub fn centred_px(area: Rectangle<i32, Physical>, size: i32) -> Rectangle<i32, Physical> {
+    Rectangle::new(
+        (
+            area.loc.x + (area.size.w - size).div_euclid(2),
+            area.loc.y + (area.size.h - size).div_euclid(2),
+        )
+            .into(),
+        (size, size).into(),
     )
 }
 
@@ -262,10 +211,10 @@ struct ShaderKey {
 impl ShaderKey {
     fn new(
         rect: Rect,
-        clip: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        clip: Rectangle<i32, Physical>,
         paint: crate::rounded::Paint,
         color: [f32; 4],
-        shape: &crate::layout::shape::Shape,
+        shape: &Shape,
         scale: f64,
     ) -> Self {
         let [a, b, c, d] = shape.radii;
@@ -282,6 +231,10 @@ impl ShaderKey {
 
 type Shaders = HashMap<(WindowId, usize), (PixelShaderElement, ShaderKey)>;
 
+/// Glyph buffers by glyph, scale and ink; a handful in practice (bounded anyway).
+type GlyphBuffers = HashMap<(Glyph, u64, Color), MemoryRenderBuffer>;
+const GLYPH_BUFFERS: usize = 64;
+
 /// The pointer on decorations, and the buffers drawn for them (kept from frame to
 /// frame so damage tracking sees unchanged decorations as unchanged).
 pub struct Decorations {
@@ -292,7 +245,7 @@ pub struct Decorations {
     fills: RefCell<HashMap<(WindowId, usize), Fill>>,
     /// The ring and clipped fills of rounded windows (rounded.rs).
     shaders: RefCell<Shaders>,
-    glyphs: [MemoryRenderBuffer; 3],
+    glyphs: RefCell<GlyphBuffers>,
 }
 
 impl Decorations {
@@ -302,16 +255,30 @@ impl Decorations {
             pressed: None,
             fills: RefCell::new(HashMap::new()),
             shaders: RefCell::new(HashMap::new()),
-            glyphs: [Glyph::Close, Glyph::Maximize, Glyph::Restore].map(glyph_buffer),
+            glyphs: RefCell::new(HashMap::new()),
         }
     }
 
-    fn glyph(&self, glyph: Glyph) -> &MemoryRenderBuffer {
-        &self.glyphs[match glyph {
-            Glyph::Close => 0,
-            Glyph::Maximize => 1,
-            Glyph::Restore => 2,
-        }]
+    /// The glyph's buffer at `scale` in `ink`, made on first use.
+    fn glyph(&self, glyph: Glyph, scale: f64, ink: Color) -> MemoryRenderBuffer {
+        let mut glyphs = self.glyphs.borrow_mut();
+        if glyphs.len() >= GLYPH_BUFFERS {
+            glyphs.clear();
+        }
+        glyphs
+            .entry((glyph, scale.to_bits(), ink))
+            .or_insert_with(|| {
+                let n = crate::glyphs::size_px(scale);
+                MemoryRenderBuffer::from_slice(
+                    &crate::glyphs::argb(glyph, scale, ink),
+                    Fourcc::Argb8888,
+                    (n, n),
+                    1,
+                    Transform::Normal,
+                    None,
+                )
+            })
+            .clone()
     }
 
     /// Forgets the buffers of windows that are not drawn any more.
@@ -325,6 +292,24 @@ impl Decorations {
     }
 }
 
+impl Sash {
+    /// How window `id`'s decorations look this frame.
+    pub fn decoration_look(&self, id: WindowId, rounded: bool) -> Look {
+        let layout = &self.windows.layout;
+        let hover = match self.decorations.hover {
+            Some((window, Part::Button(button))) if window == id => Some(button),
+            _ => None,
+        };
+        Look {
+            focused: layout.focused() == Some(id),
+            hover,
+            maximized: layout.is_maximized(id),
+            rounded,
+            dim: self.dim && layout.fullscreen() != Some(id),
+        }
+    }
+}
+
 /// Render elements for one window's decorations, front to back.
 pub fn decoration_elements(
     state: &Sash,
@@ -335,22 +320,13 @@ pub fn decoration_elements(
     scale: Scale<f64>,
 ) -> Vec<OutputElement> {
     let layout = &state.windows.layout;
-    let hover = match state.decorations.hover {
-        Some((window, Part::Button(button))) if window == id => Some(button),
-        _ => None,
-    };
-    // The rounded shape (M15b step 2) clips the bar and carries the border ring.
+    // The rounded shape (M15b step 2) clips the bar and the dim and carries the outline.
+    let programs = crate::rounded::programs(renderer);
     let shaped = layout
         .shape(id, scale.x as f32)
-        .and_then(|shape| crate::rounded::programs(renderer).map(|p| (p.shape, shape)));
-    let pieces = pieces(
-        outer,
-        decoration,
-        layout.focused() == Some(id),
-        hover,
-        layout.is_maximized(id),
-        shaped.is_some(),
-    );
+        .and_then(|shape| programs.as_ref().map(|p| (p.shape.clone(), shape)));
+    let look = state.decoration_look(id, shaped.is_some());
+    let pieces = pieces(state.theme(), outer, decoration, look);
     // Everything is placed by the window's frame, so it lines up with its edges.
     let Some(frame) = layout.frame(id, scale.x) else {
         return Vec::new();
@@ -358,79 +334,120 @@ pub fn decoration_elements(
     let decorations = &state.decorations;
     let mut fills = decorations.fills.borrow_mut();
     let mut shader_cache = decorations.shaders.borrow_mut();
-    let mut out = Vec::with_capacity(pieces.len());
-    for (index, piece) in pieces.into_iter().enumerate() {
-        let shader_piece = match piece {
-            Piece::ShapeFill(rect, color) => Some((rect, crate::rounded::Paint::Fill, color)),
-            Piece::Ring(edges, color) => Some((
-                outer,
-                crate::rounded::Paint::Ring {
-                    width: crate::layout::decor::BORDER,
-                    edges,
-                },
+    let mut out = Vec::with_capacity(pieces.len() + 1);
+    let mut shader = |index: usize,
+                      rect: Rect,
+                      clip: Rectangle<i32, Physical>,
+                      shape: &Shape,
+                      program: &smithay::backend::renderer::gles::GlesPixelProgram,
+                      paint: crate::rounded::Paint,
+                      color: Color| {
+        let color = color.rgba_f32();
+        let key = ShaderKey::new(rect, clip, paint, color, shape, scale.x);
+        let cached = shader_cache.remove(&(id, index));
+        let element = match cached {
+            Some((element, was)) if was == key => element,
+            cached => crate::rounded::shape_element(
+                program,
+                cached.map(|(e, _)| e),
+                rect,
+                clip,
+                shape,
+                scale.x,
+                paint,
                 color,
-            )),
-            _ => None,
+            ),
         };
-        if let (Some((rect, paint, color)), Some((program, shape))) = (shader_piece, &shaped) {
-            let clip = frame.map(rect);
-            let key = ShaderKey::new(rect, clip, paint, color, shape, scale.x);
-            let cached = shader_cache.remove(&(id, index));
-            let element = match cached {
-                Some((element, was)) if was == key => element,
-                cached => crate::rounded::shape_element(
-                    program,
-                    cached.map(|(e, _)| e),
+        shader_cache.insert((id, index), (element.clone(), key));
+        OutputElement::Shader(element)
+    };
+    // The title goes above the bar and glyphs, below the outline.
+    let mut title_at = None;
+    for (index, piece) in pieces.into_iter().enumerate() {
+        if matches!(piece, Piece::Ring(..) | Piece::Outline(..)) {
+            title_at.get_or_insert(out.len());
+        }
+        match (piece, &shaped) {
+            (Piece::ShapeFill(rect, color), Some((program, shape))) => {
+                let clip = frame.map(rect);
+                out.push(shader(
+                    index,
                     rect,
                     clip,
                     shape,
-                    scale.x,
+                    program,
+                    crate::rounded::Paint::Fill,
+                    color,
+                ));
+            }
+            (Piece::Ring(edges, color), Some((program, shape))) => {
+                let paint = crate::rounded::Paint::Ring {
+                    width: crate::layout::decor::BORDER,
+                    edges,
+                };
+                out.push(shader(
+                    index,
+                    outer,
+                    frame.physical,
+                    shape,
+                    program,
                     paint,
                     color,
-                ),
-            };
-            shader_cache.insert((id, index), (element.clone(), key));
-            out.push(OutputElement::Shader(element));
-            continue;
-        }
-        match piece {
-            Piece::ShapeFill(..) | Piece::Ring(..) => {}
-            Piece::Fill(rect, color) => {
+                ));
+            }
+            (Piece::Square(area, color), _) => {
+                let size = crate::layout::gaps::physical_gap(HOVER_SQUARE, scale.x);
+                let square = centred_px(frame.map(area), size);
+                match &programs {
+                    Some(programs) => {
+                        let shape = Shape::from_physical(square, HOVER_RADIUS, scale.x as f32);
+                        out.push(shader(
+                            index,
+                            area,
+                            square,
+                            &shape,
+                            &programs.shape,
+                            crate::rounded::Paint::Fill,
+                            color,
+                        ));
+                    }
+                    None => {
+                        let solid = fills
+                            .entry((id, index))
+                            .or_insert_with(|| Fill::new(area, color.rgba_f32()));
+                        solid.update(area, color.rgba_f32());
+                        out.push(OutputElement::Solid(solid.element_at(square, 1.0)));
+                    }
+                }
+            }
+            (
+                Piece::Fill(rect, color)
+                | Piece::ShapeFill(rect, color)
+                | Piece::Outline(rect, color),
+                _,
+            ) => {
                 let solid = fills
                     .entry((id, index))
-                    .or_insert_with(|| crate::render::Solid::new(rect, color));
-                solid.update(rect, color);
+                    .or_insert_with(|| Fill::new(rect, color.rgba_f32()));
+                solid.update(rect, color.rgba_f32());
                 out.push(OutputElement::Solid(solid.element_in(&frame, 1.0)));
             }
-            Piece::Glyph(glyph, rect, alpha) => {
-                let location = frame.point(rect.x, rect.y).to_f64();
-                if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
-                    renderer,
-                    location,
-                    decorations.glyph(glyph),
-                    Some(alpha),
-                    None,
-                    None,
-                    Kind::Unspecified,
-                ) {
-                    out.push(OutputElement::Memory(element));
+            (Piece::Ring(..), None) => {}
+            (Piece::Glyph(glyph, area, ink), _) => {
+                let size = crate::glyphs::size_px(scale.x);
+                let at = centred_px(frame.map(area), size);
+                let buffer = decorations.glyph(glyph, scale.x, ink);
+                if let Some(element) = crate::render::Exact::new(renderer, &buffer, at) {
+                    out.push(OutputElement::Exact(element));
                 }
             }
         }
     }
-    // The title, above the bar's fill (titles.rs).
-    if let Some((drawn, location)) = state.bar_title(id, outer, decoration, scale)
-        && let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
-            renderer,
-            location,
-            &drawn.buffer,
-            None,
-            None,
-            None,
-            Kind::Unspecified,
-        )
+    // The title, above the bar's fill and below the outline (titles.rs).
+    if let Some((drawn, at)) = state.bar_title(id, outer, decoration, scale)
+        && let Some(element) = crate::render::Exact::new(renderer, &drawn.buffer, at)
     {
-        out.push(OutputElement::Memory(element));
+        out.insert(title_at.unwrap_or(out.len()), OutputElement::Exact(element));
     }
     // Front to back: the last piece is on top.
     out.reverse();
@@ -632,38 +649,6 @@ impl Dispatch<ZxdgToplevelDecorationV1, ToplevelSurface> for Sash {
 mod tests {
     use super::*;
 
-    fn picture(glyph: Glyph) -> String {
-        glyph_mask(glyph)
-            .chunks(GLYPH as usize)
-            .map(|row| {
-                row.iter()
-                    .map(|on| if *on { '#' } else { '.' })
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn glyphs_are_distinct_shapes() {
-        let close = picture(Glyph::Close);
-        let maximize = picture(Glyph::Maximize);
-        let restore = picture(Glyph::Restore);
-        println!("{close}\n\n{maximize}\n\n{restore}");
-        assert_ne!(close, maximize);
-        assert_ne!(maximize, restore);
-        assert_ne!(close, restore);
-        // The close glyph is symmetric under both reflections.
-        let mask = glyph_mask(Glyph::Close);
-        let n = GLYPH as usize;
-        for y in 0..n {
-            for x in 0..n {
-                assert_eq!(mask[y * n + x], mask[y * n + (n - 1 - x)]);
-                assert_eq!(mask[y * n + x], mask[x * n + y]);
-            }
-        }
-    }
-
     #[test]
     fn resize_icons_cover_every_edge_and_corner() {
         let e = |l, t, r, b| Edges {
@@ -706,94 +691,129 @@ mod tests {
         );
     }
 
-    /// Greyscale picture of the decorations (luminance per pixel, white glyphs blended
-    /// over what is below): focus and hover must show without colour.
-    fn grey(pieces: &[Piece], outer: Rect) -> Vec<u8> {
-        let lum = |c: [f32; 4]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-        let mut out = vec![0.0f32; (outer.w * outer.h) as usize];
-        for piece in pieces {
-            match *piece {
-                Piece::Fill(r, color) => {
-                    for y in r.y..r.bottom() {
-                        for x in r.x..r.right() {
-                            out[((y - outer.y) * outer.w + x - outer.x) as usize] = lum(color);
-                        }
-                    }
-                }
-                Piece::ShapeFill(..) | Piece::Ring(..) => {}
-                Piece::Glyph(glyph, r, alpha) => {
-                    let mask = glyph_mask(glyph);
-                    for (i, on) in mask.iter().enumerate() {
-                        let (x, y) = (r.x + i as i32 % GLYPH, r.y + i as i32 / GLYPH);
-                        if *on {
-                            let p = &mut out[((y - outer.y) * outer.w + x - outer.x) as usize];
-                            *p = alpha + (1.0 - alpha) * *p;
-                        }
-                    }
-                }
+    const OUTER: Rect = Rect::new(0, 0, 300, 160);
+
+    fn look(focused: bool) -> Look {
+        Look {
+            focused,
+            rounded: true,
+            dim: true,
+            ..Look::default()
+        }
+    }
+
+    /// Bottom to top: the dim (unfocused only), the bar, glyphs, the outline.
+    #[test]
+    fn pieces_in_order_from_the_theme() {
+        let t = &Theme::DARK;
+        let focused = pieces(t, OUTER, Decoration::FULL, look(true));
+        assert!(matches!(focused[0], Piece::ShapeFill(_, c) if c == t.chrome));
+        let ring = sash_theme::over(t.outline_focused, t.chrome);
+        assert!(matches!(focused.last(), Some(Piece::Ring(Edges::ALL, c)) if *c == ring));
+        let glyphs: Vec<Color> = focused
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Glyph(_, _, ink) => Some(*ink),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(glyphs, [t.text, t.text]);
+        let unfocused = pieces(t, OUTER, Decoration::FULL, look(false));
+        let inner = Decoration::FULL.inner(OUTER);
+        assert_eq!(
+            unfocused[0],
+            Piece::ShapeFill(inner, t.dim),
+            "the dim first"
+        );
+        assert!(matches!(unfocused[1], Piece::ShapeFill(_, c) if c == t.unfocused_bar));
+        let ring = sash_theme::over(t.outline, t.unfocused_bar);
+        assert!(matches!(unfocused.last(), Some(Piece::Ring(_, c)) if *c == ring));
+        assert!(
+            unfocused
+                .iter()
+                .any(|p| matches!(p, Piece::Glyph(_, _, c) if *c == t.secondary))
+        );
+    }
+
+    /// The bar reaches under the outline (the outline is drawn on it) and never under the
+    /// client; the dim is the client area exactly.
+    #[test]
+    fn the_bar_band_and_the_dim() {
+        let t = &Theme::LIGHT;
+        let p = pieces(t, OUTER, Decoration::FULL, look(false));
+        assert_eq!(p[0], Piece::ShapeFill(Rect::new(1, 35, 298, 124), t.dim));
+        assert_eq!(
+            p[1],
+            Piece::ShapeFill(Rect::new(0, 0, 300, 35), t.unfocused_bar)
+        );
+        let off = Look {
+            dim: false,
+            ..look(false)
+        };
+        assert!(!pieces(t, OUTER, Decoration::FULL, off).contains(&p[0]));
+    }
+
+    #[test]
+    fn hover_squares_and_hovered_glyphs() {
+        let t = &Theme::DARK;
+        for (button, square) in [
+            (Button::Close, t.close_hover),
+            (Button::Maximize, t.overlay(Overlay::Strong)),
+        ] {
+            for focused in [true, false] {
+                let p = pieces(
+                    t,
+                    OUTER,
+                    Decoration::FULL,
+                    Look {
+                        hover: Some(button),
+                        ..look(focused)
+                    },
+                );
+                let area = Decoration::FULL.button_rect(OUTER, button).unwrap();
+                assert!(p.contains(&Piece::Square(area, square)), "{button:?}");
+                // The hovered glyph is the text token (secondary fails 3:1 on red).
+                assert!(
+                    p.iter()
+                        .any(|q| matches!(q, Piece::Glyph(_, a, c) if *a == area && *c == t.text))
+                );
             }
         }
-        out.into_iter().map(|v| (v * 255.0).round() as u8).collect()
+        let max = pieces(
+            t,
+            OUTER,
+            Decoration::FULL,
+            Look {
+                maximized: true,
+                ..look(true)
+            },
+        );
+        assert!(
+            max.iter()
+                .any(|p| matches!(p, Piece::Glyph(Glyph::Restore, ..)))
+        );
     }
 
     #[test]
-    fn focus_and_hover_show_without_colour() {
-        let outer = Rect::new(0, 0, 200, 120);
-        let d = Decoration::FULL;
-        let focused = grey(&pieces(outer, d, true, None, false, false), outer);
-        let unfocused = grey(&pieces(outer, d, false, None, false, false), outer);
-        // The border and the glyphs both change brightness.
-        let border = |g: &[u8]| g[(60 * 200) as usize];
-        assert!(
-            border(&focused).abs_diff(border(&unfocused)) > 30,
-            "border brightness"
-        );
-        let glyph_peak = |g: &[u8]| {
-            (1..33)
-                .flat_map(|y| (1..65).map(move |x| (x, y)))
-                .map(|(x, y)| g[(y * 200 + x) as usize])
-                .max()
-                .unwrap()
+    fn tiles_get_the_outline_and_fullscreen_nothing() {
+        let t = &Theme::DARK;
+        let square = Look {
+            rounded: false,
+            ..look(true)
         };
-        assert!(
-            glyph_peak(&focused) > glyph_peak(&unfocused) + 80,
-            "glyph brightness"
-        );
-        // Hover adds a filled square: more pixels change than the glyph alone.
-        for button in BUTTONS {
-            let hovered = grey(&pieces(outer, d, true, Some(button), false, false), outer);
-            let changed = hovered
-                .iter()
-                .zip(&focused)
-                .filter(|(a, b)| a.abs_diff(**b) > 4)
-                .count();
-            assert!(changed > 200, "{button:?} hover changes {changed} pixels");
-        }
-        // Maximized shows the restore glyph.
-        let maximized = grey(&pieces(outer, d, true, None, true, false), outer);
-        assert_ne!(maximized, focused);
-    }
-
-    #[test]
-    fn tiles_get_the_border_only_and_fullscreen_nothing() {
-        let outer = Rect::new(0, 0, 100, 80);
-        let border = pieces(outer, Decoration::BORDER, true, None, false, false);
+        let border = pieces(t, OUTER, Decoration::BORDER, square);
         assert_eq!(border.len(), 4);
         assert!(
             border
                 .iter()
-                .all(|p| matches!(p, Piece::Fill(_, c) if *c == BORDER_FOCUSED))
+                .all(|p| matches!(p, Piece::Outline(_, c) if *c == sash_theme::over(t.outline_focused, t.chrome)))
         );
-        assert!(pieces(outer, Decoration::NONE, true, None, false, false).is_empty());
+        assert!(pieces(t, OUTER, Decoration::NONE, look(false)).is_empty());
         // A window too small for its glyphs still draws its bar, without glyphs.
-        let tiny = pieces(
-            Rect::new(0, 0, 10, 40),
-            Decoration::FULL,
-            true,
-            None,
-            false,
-            false,
+        let tiny = pieces(t, Rect::new(0, 0, 10, 40), Decoration::FULL, square);
+        assert!(
+            tiny.iter()
+                .all(|p| matches!(p, Piece::Fill(..) | Piece::Outline(..)))
         );
-        assert!(tiny.iter().all(|p| matches!(p, Piece::Fill(..))));
     }
 }

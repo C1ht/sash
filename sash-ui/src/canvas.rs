@@ -178,23 +178,38 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// The whole shape is rasterised into a scratch pixmap of its bounds and only the
+    /// part inside the clip is blended in: tiny-skia's anti-aliasing changes slightly
+    /// where a path is cut by the pixmap's edge, so rasterising only the clipped part
+    /// made a partial redraw differ from a full one by a level or two (found in M18b,
+    /// when the 3 px focus ring's damage first reached a neighbour's rounded corner).
     fn fill_path(&mut self, bounds: Rect, path: &Path, rule: FillRule, color: Color) {
         let area = bounds.intersect(&self.clip);
         if area.is_empty() || color.a == 0 {
             return;
         }
-        let Some(mut scratch) = Pixmap::new(area.w as u32, area.h as u32) else {
+        let Some(mut scratch) = Pixmap::new(bounds.w as u32, bounds.h as u32) else {
             return;
         };
         let mut paint = Paint::default();
         paint.set_color_rgba8(color.r, color.g, color.b, color.a);
         paint.anti_alias = true;
-        let shift = Transform::from_translate(-area.x as f32, -area.y as f32);
+        let shift = Transform::from_translate(-bounds.x as f32, -bounds.y as f32);
         scratch.fill_path(path, &paint, rule, shift, None);
+        let part = tiny_skia::IntRect::from_xywh(
+            area.x - bounds.x,
+            area.y - bounds.y,
+            area.w as u32,
+            area.h as u32,
+        )
+        .and_then(|r| scratch.clone_rect(r));
+        let Some(part) = part else {
+            return;
+        };
         self.pixmap.draw_pixmap(
             area.x,
             area.y,
-            scratch.as_ref(),
+            part.as_ref(),
             &PixmapPaint::default(),
             Transform::identity(),
             None,

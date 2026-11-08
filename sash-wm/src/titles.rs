@@ -23,7 +23,7 @@ use sash_text::{ClientText, Image, Line, Style, TextStack};
 use smithay::{
     backend::{allocator::Fourcc, renderer::element::memory::MemoryRenderBuffer},
     reexports::calloop::timer::{TimeoutAction, Timer},
-    utils::{Logical, Physical, Point, Scale, Transform},
+    utils::{Physical, Rectangle, Scale, Transform},
     wayland::{
         compositor,
         shell::xdg::{ToplevelSurface, XdgToplevelSurfaceData},
@@ -35,10 +35,10 @@ use crate::{
     state::Sash,
 };
 
-/// Weight and white's alpha of a focused window's title, and of an unfocused one's
-/// (owner, M15): focus shows by weight and brightness as well as the border.
-pub const FOCUSED: (u16, f32) = (500, 0.92);
-pub const UNFOCUSED: (u16, f32) = (400, 0.55);
+/// The weight of a focused window's title, and of an unfocused one's (owner, M18b: 500
+/// and 400); the ink is the theme's (text focused, secondary not).
+pub const FOCUSED_WEIGHT: u16 = 500;
+pub const UNFOCUSED_WEIGHT: u16 = 400;
 /// New titles shaped per second and window, at most.
 pub const SHAPINGS_PER_SECOND: u32 = 20;
 const SHAPING_INTERVAL: Duration = Duration::from_millis(1000 / SHAPINGS_PER_SECOND as u64);
@@ -65,17 +65,27 @@ pub fn title_px() -> f32 {
     sash_text::UI_SIZE
 }
 
-/// A title drawn in white for the bar: `width` logical pixels at most (cut with an
-/// ellipsis), at `scale`. Also what the golden tests draw.
-pub fn draw(stack: &mut TextStack, line: &Line, focused: bool, width: i32, scale: f32) -> Image {
-    let alpha = if focused { FOCUSED.1 } else { UNFOCUSED.1 };
+/// A title drawn in `ink` for the bar: `width` logical pixels at most (cut with an
+/// ellipsis), at `scale`; with the cut line's width in logical pixels (what is centred).
+/// Also what the golden tests draw.
+pub fn draw(
+    stack: &mut TextStack,
+    line: &Line,
+    ink: sash_theme::Color,
+    width: i32,
+    scale: f32,
+) -> (Image, f32) {
     let line = line.fit(Some(width.max(0) as f32));
-    stack.draw(&line, scale, [255, 255, 255, (alpha * 255.0).round() as u8])
+    (stack.draw(&line, scale, ink.rgba8()), line.width())
 }
 
 /// Shapes a title for the bar.
 pub fn shape(stack: &mut TextStack, text: &ClientText, focused: bool) -> Line {
-    let weight = if focused { FOCUSED.0 } else { UNFOCUSED.0 };
+    let weight = if focused {
+        FOCUSED_WEIGHT
+    } else {
+        UNFOCUSED_WEIGHT
+    };
     stack.line(
         text,
         Style {
@@ -95,11 +105,14 @@ struct Shaped {
 /// What the bar shows: the image and where the line's box starts in it.
 #[derive(Clone)]
 pub struct Drawn {
-    key: (u64, bool, i32, u32),
+    key: (u64, bool, i32, u32, sash_theme::Color),
     pub buffer: MemoryRenderBuffer,
+    /// The image's size in physical pixels.
+    pub size: (i32, i32),
     /// Physical pixels: where the line box's top-left corner is in the image.
     pub origin: (i32, i32),
-    /// Logical height of the line box (for centring in the bar).
+    /// Logical width of the cut line and height of its box (for centring in the bar).
+    pub line_width: f32,
     pub line_height: f32,
 }
 
@@ -188,6 +201,7 @@ impl Titles {
         id: WindowId,
         width: i32,
         focused: bool,
+        ink: sash_theme::Color,
         scale: f32,
         now: Instant,
     ) -> Option<Drawn> {
@@ -220,9 +234,9 @@ impl Titles {
         if title.shaped_text.is_empty() {
             return None;
         }
-        let key = (shaped.generation, focused, width, scale.to_bits());
+        let key = (shaped.generation, focused, width, scale.to_bits(), ink);
         if title.drawn.as_ref().is_none_or(|d| d.key != key) {
-            let image = draw(&mut stack, &shaped.line, focused, width, scale);
+            let (image, line_width) = draw(&mut stack, &shaped.line, ink, width, scale);
             self.draws.set(self.draws.get() + 1);
             if image.width == 0 || image.height == 0 {
                 title.drawn = None;
@@ -239,7 +253,9 @@ impl Titles {
             title.drawn = Some(Drawn {
                 key,
                 buffer,
+                size: (image.width as i32, image.height as i32),
                 origin: (image.origin.0 as i32, image.origin.1 as i32),
+                line_width,
                 line_height: shaped.line.height(),
             });
         }
@@ -247,27 +263,48 @@ impl Titles {
     }
 }
 
+/// Where a title's line box (`width` x `height` logical pixels, the cut line) goes in
+/// a bar at `bar` (physical pixels): centred both ways, on whole pixels.
+pub fn title_box(
+    (width, height): (f32, f32),
+    bar: Rectangle<i32, Physical>,
+    scale: f64,
+) -> Rectangle<i32, Physical> {
+    let w = (f64::from(width) * scale).round() as i32;
+    let h = (f64::from(height) * scale).round() as i32;
+    let x = bar.loc.x + (bar.size.w - w).div_euclid(2);
+    let y = bar.loc.y + (bar.size.h - h).div_euclid(2);
+    Rectangle::new((x, y).into(), (w, h).into())
+}
+
 impl Sash {
-    /// The title of window `id` for its bar (shaped and drawn if needed) and where its
-    /// image goes, in physical pixels; None without a bar, title or room.
+    /// The title of window `id` for its bar (shaped and drawn if needed) and the exact
+    /// physical rectangle its image goes to; None without a bar, title or room.
     pub fn bar_title(
         &self,
         id: WindowId,
         outer: Rect,
         decoration: Decoration,
         scale: Scale<f64>,
-    ) -> Option<(Drawn, Point<f64, Physical>)> {
+    ) -> Option<(Drawn, Rectangle<i32, Physical>)> {
         let area = decoration.title_rect(outer)?;
+        let bar = decoration.bar_rect(outer)?;
+        let frame = self.windows.layout.frame(id, scale.x)?;
         let focused = self.windows.layout.focused() == Some(id);
-        let drawn = self
-            .titles
-            .prepare(id, area.w, focused, scale.x as f32, Instant::now())?;
-        // The line's box is centred in the bar; the image may reach past it (ink).
-        let top =
-            f64::from(area.y) + ((f64::from(area.h) - f64::from(drawn.line_height)) / 2.0).round();
-        let location = Point::<f64, Logical>::from((f64::from(area.x), top)).to_physical(scale)
-            - Point::from((f64::from(drawn.origin.0), f64::from(drawn.origin.1)));
-        Some((drawn, location))
+        let ink = self.theme().bar_ink(focused);
+        let drawn =
+            self.titles
+                .prepare(id, area.w, focused, ink, scale.x as f32, Instant::now())?;
+        let line = title_box(
+            (drawn.line_width, drawn.line_height),
+            frame.map(bar),
+            scale.x,
+        );
+        let at = Rectangle::new(
+            (line.loc.x - drawn.origin.0, line.loc.y - drawn.origin.1).into(),
+            drawn.size.into(),
+        );
+        Some((drawn, at))
     }
 
     /// Tests (the harness draws nothing): what a frame does for the titles, for every

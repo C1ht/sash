@@ -82,8 +82,8 @@ fn snap_zones_use_the_usable_area_and_trigger_at_the_true_output_edge() {
         });
         c.roundtrip();
         c.ack_and_commit(&w);
-        // 400 x 560 minus the bar (32) and the border on every edge.
-        assert_eq!(size(&c, &w), (398, 526));
+        // 400 x 560 minus the bar (34) and the border on every edge.
+        assert_eq!(size(&c, &w), (398, 524));
     });
 }
 

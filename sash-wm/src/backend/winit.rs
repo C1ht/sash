@@ -449,7 +449,7 @@ impl Nested {
                 &mut framebuffer,
                 age,
                 &elements,
-                render::CLEAR_COLOR,
+                render::clear_color(state),
             )?;
             result.damage.cloned()
         };

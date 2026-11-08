@@ -32,7 +32,7 @@ done
 SRC=$(mktemp -d)
 trap 'rm -rf -- "$SRC"' EXIT
 cp -r "$ROOT"/Cargo.toml "$ROOT"/Cargo.lock "$ROOT"/rust-toolchain.toml "$ROOT"/sash-wm \
-    "$ROOT"/sash-ui "$ROOT"/sash-text "$SRC"/
+    "$ROOT"/sash-ui "$ROOT"/sash-text "$ROOT"/sash-theme "$SRC"/
 mounts=(-v "$SRC":/src:Z -v "$CACHE":/cache:Z)
 [ -n "$report" ] && mounts+=(-v "$report":/report:Z)
 podman run --rm "${mounts[@]}" -e BLESS="$bless" -e LONG="$long" -e BENCH="$bench" \

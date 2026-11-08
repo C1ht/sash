@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 sash-text = { path = "../sash-text" }
+# Every colour (owner, M18b): the docs/design.md tokens.
+sash-theme = { path = "../sash-theme" }
 # Wayland client plumbing (owner, after M16), behind sash-ui's own wrapper.
 smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop", "xkbcommon"] }
 # CPU drawing into wl_shm (owner, after M16).

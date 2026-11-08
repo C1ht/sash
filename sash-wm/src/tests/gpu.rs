@@ -129,7 +129,7 @@ fn gpu_overlay_cost() {
                     &mut framebuffer,
                     0,
                     &elements,
-                    render::CLEAR_COLOR,
+                    sash_theme::Theme::DARK.page.rgba_f32(),
                 )
                 .expect("render");
             result.sync.wait().expect("GPU done");
@@ -244,6 +244,8 @@ fn gpu_dmabuf_windows_and_popup() {
     let blue = colour_dmabuf(&mut renderer, (50, 40), [0.0, 0.0, 1.0, 1.0]);
     let formats = renderer.dmabuf_formats().into_iter().collect();
     let mut harness = Harness::with_dmabuf_formats(formats);
+    // The buffers' own pixels are checked: no inactive dim (M18b) over the unfocused one.
+    harness.server.state.dim = false;
     let socket = harness.socket_path();
     harness.run_with_remote(move |_server| {
         let mut c1 = TestClient::connect(&socket);
@@ -332,7 +334,7 @@ fn frame_with_cursor(renderer: &mut GlesRenderer, state: &crate::state::Sash) ->
                 &mut framebuffer,
                 0,
                 &elements,
-                render::CLEAR_COLOR,
+                render::clear_color(state),
             )
             .expect("render");
         renderer
@@ -371,6 +373,8 @@ fn gpu_rebuild_restores_windows_and_cursor_without_client_help() {
     let mut first = new_renderer();
     let formats = first.dmabuf_formats().into_iter().collect();
     let mut harness = Harness::with_dmabuf_formats(formats);
+    // The buffers' own pixels are checked: no inactive dim (M18b) over the unfocused one.
+    harness.server.state.dim = false;
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
         let mut c1 = TestClient::connect(&socket);
@@ -549,7 +553,7 @@ fn gpu_decorations_cost() {
                     &mut framebuffer,
                     0,
                     &elements,
-                    render::CLEAR_COLOR,
+                    sash_theme::Theme::DARK.page.rgba_f32(),
                 )
                 .expect("render");
             result.sync.wait().expect("GPU done");
@@ -612,7 +616,7 @@ fn gpu_decorations_cost() {
                     &mut framebuffer,
                     0,
                     &elements,
-                    render::CLEAR_COLOR,
+                    render::clear_color(&harness.server.state),
                 )
                 .expect("render");
             result.sync.wait().expect("GPU done");
@@ -715,7 +719,7 @@ fn frame_at_scale(
                 &mut framebuffer,
                 0,
                 &elements,
-                render::CLEAR_COLOR,
+                render::clear_color(state),
             )
             .expect("render");
         renderer
@@ -733,79 +737,34 @@ fn frame_at_scale(
     )
 }
 
-/// What the CPU reference (layout::shape) says a pixel of window `id` looks like: the
-/// background, the client's colour masked by the shape inside the client rectangle,
-/// the bar clipped by the shape, the ring on top. None where something else is drawn
-/// (the buttons).
+/// The output at `scale` as the CPU reference composes it (tests/reference.rs): the
+/// clear colour, then every window in stacking order with its client's colour.
 #[cfg(debug_assertions)]
-fn reference_pixel(
+fn reference_frame(
     state: &crate::state::Sash,
-    id: crate::layout::WindowId,
-    content: [f32; 3],
-    background: [f32; 3],
+    contents: &[[f32; 3]],
     scale: f64,
-    (x, y): (usize, usize),
-) -> [f32; 3] {
-    use crate::decorations::{BAR_FILL, BORDER_FOCUSED, BORDER_UNFOCUSED};
+) -> crate::tests::reference::Picture {
+    use crate::tests::reference::{Picture, Window, compose};
     let layout = &state.windows.layout;
-    let shape = layout.shape(id, scale as f32).expect("a rounded window");
-    let outer = layout.shown_rect(id).expect("shown");
-    let decoration = layout.decoration(id);
-    // Placed by the window's frame, as the renderer does.
-    let frame = layout.frame(id, scale).expect("frame");
-    let phys = |r: crate::layout::Rect| {
-        let p = frame.map(r);
-        (
-            f64::from(p.loc.x),
-            f64::from(p.loc.y),
-            f64::from(p.loc.x + p.size.w),
-            f64::from(p.loc.y + p.size.h),
-        )
-    };
-    let inside =
-        |r: (f64, f64, f64, f64), px: f64, py: f64| px >= r.0 && px < r.2 && py >= r.1 && py < r.3;
-    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-    let cov = shape.coverage(px, py);
-    let mut c = background;
-    let blend = |c: &mut [f32; 3], over: [f32; 3], a: f32| {
-        for i in 0..3 {
-            c[i] = over[i] * a + c[i] * (1.0 - a);
-        }
-    };
-    // The client's buffer starts where the frame puts it and keeps its own size.
-    let client = decoration.inner(outer);
-    let at = frame.point(client.x, client.y);
-    let client_px = (
-        f64::from(at.x),
-        f64::from(at.y),
-        f64::from(at.x) + (f64::from(client.w) * scale).round(),
-        f64::from(at.y) + (f64::from(client.h) * scale).round(),
-    );
-    if inside(client_px, px as f64, py as f64) {
-        blend(&mut c, content, cov);
+    let area = crate::layout::gaps::Frame::plain(crate::layout::Rect::new(0, 0, 800, 600), scale);
+    let mut picture = Picture::new(area.physical, state.theme().page);
+    let mut stack = sash_text::TextStack::new();
+    for visible in state.visible_windows() {
+        let i = (visible.id.0 - 1) as usize;
+        let content = contents[i];
+        let paint = move |_: i32, _: i32| content;
+        let frame = layout.frame(visible.id, scale).expect("frame");
+        let window = Window {
+            outer: visible.outer,
+            decoration: visible.decoration,
+            look: state.decoration_look(visible.id, true),
+            title: None,
+            client: &paint,
+        };
+        compose(&mut picture, &mut stack, state.theme(), &frame, &window);
     }
-    if let Some(bar) = decoration.bar_rect(outer)
-        && inside(phys(bar), px as f64, py as f64)
-    {
-        blend(
-            &mut c,
-            [BAR_FILL[0], BAR_FILL[1], BAR_FILL[2]].map(|v| v * 255.0),
-            cov,
-        );
-    }
-    let ring = if layout.focused() == Some(id) {
-        BORDER_FOCUSED
-    } else {
-        BORDER_UNFOCUSED
-    };
-    let rc = shape.ring_coverage(
-        px,
-        py,
-        crate::layout::decor::BORDER as f32 * scale as f32,
-        decoration.border,
-    );
-    blend(&mut c, [ring[0], ring[1], ring[2]].map(|v| v * 255.0), rc);
-    c
+    picture
 }
 
 /// Rounded corners on the GPU against the CPU reference (M15b step 2), at scales 1,
@@ -832,52 +791,45 @@ fn gpu_rounded_corners_match_the_cpu_reference() {
     let harness = rounded_scene(&mut client_gpu, false);
     let state = &harness.server.state;
     let mut renderer = new_renderer();
-    const TOLERANCE: f32 = 3.0;
+    const TOLERANCE: u8 = 3;
+    // Window 1 green (shm), window 2 red (dmabuf).
+    let contents = [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
     for scale in [1.0, 1.5, 2.0] {
         let (w, _h, pixels) = frame_at_scale(&mut renderer, state, scale);
-        let at = |x: usize, y: usize| {
-            let i = (y * w + x) * 4;
-            [pixels[i] as f32, pixels[i + 1] as f32, pixels[i + 2] as f32]
+        let at = |x: i32, y: i32| {
+            let i = (y as usize * w + x as usize) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2]]
         };
-        let background = at(2, 2);
-        let mut worst = 0.0f32;
+        let reference = reference_frame(state, &contents, scale);
+        let background = reference.at(2, 2);
+        let mut worst = 0;
         let mut compared = 0;
-        for (i, content) in [[0.0, 255.0, 0.0], [255.0, 0.0, 0.0]]
-            .into_iter()
-            .enumerate()
-        {
+        // Every pixel of each whole window and 2 px around it: the client, the bar,
+        // the glyphs, the dim on the unfocused window, the outline, the cut corners.
+        for i in 0..2 {
             let id = crate::layout::WindowId(i as u64 + 1);
-            let (ox, oy, ow, oh) = ROUNDED_RECTS[i];
-            let s = |v: i32| (v as f64 * scale).round() as usize;
-            let boxed = s(crate::layout::shape::RADIUS + 3);
-            // Top right, bottom right, bottom left (top left holds the buttons).
-            let corners = [
-                (s(ox + ow) - boxed, s(oy)),
-                (s(ox + ow) - boxed, s(oy + oh) - boxed),
-                (s(ox), s(oy + oh) - boxed),
-            ];
-            for (cx, cy) in corners {
-                for y in cy..cy + boxed {
-                    for x in cx..cx + boxed {
-                        let want = reference_pixel(state, id, content, background, scale, (x, y));
-                        let got = at(x, y);
-                        let diff = (0..3).map(|k| (want[k] - got[k]).abs()).fold(0.0, f32::max);
-                        worst = worst.max(diff);
-                        compared += 1;
-                        assert!(
-                            diff <= TOLERANCE,
-                            "x{scale}, window {}: pixel {x},{y} is {got:?}, the reference {want:?}",
-                            i + 1
-                        );
-                    }
+            let p = state
+                .windows
+                .layout
+                .frame(id, scale)
+                .expect("frame")
+                .physical;
+            for y in p.loc.y - 2..p.loc.y + p.size.h + 2 {
+                for x in p.loc.x - 2..p.loc.x + p.size.w + 2 {
+                    let (want, got) = (reference.at(x, y), at(x, y));
+                    let diff = (0..3).map(|k| want[k].abs_diff(got[k])).max().unwrap_or(0);
+                    worst = worst.max(diff);
+                    compared += 1;
+                    assert!(
+                        diff <= TOLERANCE,
+                        "x{scale}, window {}: pixel {x},{y} is {got:?}, the reference {want:?}",
+                        i + 1
+                    );
                 }
             }
             // The outermost corner pixel is cut off: background.
-            assert_eq!(
-                at(s(ox + ow) - 1, s(oy + oh) - 1),
-                background,
-                "x{scale}: cut-off corner"
-            );
+            let (rx, ry) = (p.loc.x + p.size.w - 1, p.loc.y + p.size.h - 1);
+            assert_eq!(at(rx, ry), background, "x{scale}: cut-off corner");
         }
         println!("x{scale}: {compared} pixels compared, worst difference {worst}");
         if let Some(dir) = std::env::var_os(crate::capture::CAPTURE_DIR_VAR) {
@@ -930,7 +882,7 @@ fn gpu_rounded_cost() {
                     &mut framebuffer,
                     0,
                     &elements,
-                    render::CLEAR_COLOR,
+                    sash_theme::Theme::DARK.page.rgba_f32(),
                 )
                 .expect("render");
             result.sync.wait().expect("GPU done");
@@ -957,7 +909,7 @@ fn gpu_rounded_cost() {
                     &mut framebuffer,
                     0,
                     &elements,
-                    render::CLEAR_COLOR,
+                    sash_theme::Theme::DARK.page.rgba_f32(),
                 )
                 .expect("render");
             result.sync.wait().expect("GPU done");
@@ -1024,7 +976,7 @@ fn gpu_rounded_cost_by_resolution() {
                         &mut framebuffer,
                         0,
                         &elements,
-                        render::CLEAR_COLOR,
+                        sash_theme::Theme::DARK.page.rgba_f32(),
                     )
                     .expect("render");
                 result.sync.wait().expect("GPU done");
@@ -1034,6 +986,74 @@ fn gpu_rounded_cost_by_resolution() {
                 &format!("{w}x{h}, full frame, {scene}, radius {radius}"),
                 times,
             );
+        }
+    }
+}
+
+/// M18b measurement: the cost of the inactive dim. Ten floating windows with bars
+/// (one focused, nine dimmed) and ten tiles with the gaps (nine dimmed), rounded, at
+/// 5120x1440 and 3440x1440; the dim off and on, alternating, twice each. Every frame is
+/// drawn whole and waited for on the GPU.
+/// Run: `cargo test --release -p sash-wm -- --ignored --nocapture gpu_dim_cost`.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_dim_cost() {
+    let mut renderer = renderer();
+    for ((w, h), tiled) in [
+        ((5120, 1440), false),
+        ((3440, 1440), false),
+        ((5120, 1440), true),
+        ((3440, 1440), true),
+    ] {
+        let size: Size<i32, smithay::utils::Physical> = (w, h).into();
+        let mut target: GlesTexture = renderer
+            .create_buffer(Fourcc::Abgr8888, (w, h).into())
+            .expect("offscreen buffer");
+        let mut harness = Harness::new();
+        if tiled {
+            harness
+                .server
+                .state
+                .windows
+                .layout
+                .set_gaps(crate::layout::gaps::Gaps::DEFAULT);
+            ten_tiled_on(&mut harness, (w, h));
+        } else {
+            ten_floating_on(&mut harness, true, (w, h));
+        }
+        harness
+            .server
+            .state
+            .windows
+            .layout
+            .set_radius(crate::layout::shape::RADIUS);
+        let scene = if tiled {
+            "10 tiles with gaps"
+        } else {
+            "10 windows with bars"
+        };
+        for dim in [false, true, false, true] {
+            harness.server.state.dim = dim;
+            let mut times = Vec::new();
+            for _ in 0..300 {
+                let start = Instant::now();
+                let elements = render::output_elements(&harness.server.state, &mut renderer, 1.0);
+                let mut framebuffer = renderer.bind(&mut target).expect("bind");
+                let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+                let result = damage
+                    .render_output(
+                        &mut renderer,
+                        &mut framebuffer,
+                        0,
+                        &elements,
+                        render::clear_color(&harness.server.state),
+                    )
+                    .expect("render");
+                result.sync.wait().expect("GPU done");
+                times.push(start.elapsed());
+            }
+            let dim = if dim { "dim on" } else { "dim off" };
+            percentiles(&format!("{w}x{h}, full frame, {scene}, {dim}"), times);
         }
     }
 }
@@ -1196,7 +1216,7 @@ fn gpu_shm_upload_cost() {
                                     &mut framebuffer,
                                     0,
                                     &elements,
-                                    render::CLEAR_COLOR,
+                                    sash_theme::Theme::DARK.page.rgba_f32(),
                                 )
                                 .expect("render");
                             result.sync.wait().expect("GPU done");
@@ -1297,7 +1317,7 @@ fn gpu_capture_icon_contact_sheet() {
                 .width(Size::Flex(1))
                 .height(Size::Flex(1)),
             Theme::dark(),
-            Surface::Surface,
+            Surface::Raised,
         );
         let root = ui.root();
         for row in Symbol::ALL.chunks(10) {
@@ -1413,5 +1433,87 @@ fn gpu_capture_gaps() {
         let path = std::path::Path::new(&dir).join(format!("m18a-gaps-x{scale}.png"));
         std::fs::write(&path, png).expect("write");
         println!("wrote {}", path.display());
+    }
+}
+
+/// M18b captures for the owner: the theme's look on the real GPU path, dark and light,
+/// at scales 1, 1.5 and 2. Two tiles (a light and a dark stand-in client; the unfocused
+/// one dimmed) and a floating window with a title, focused, its close button hovered.
+/// Run: `SASH_CAPTURE_DIR=<dir> cargo test -p sash-wm -- --ignored --nocapture gpu_capture_look`.
+#[test]
+#[ignore = "needs a GPU"]
+#[cfg(debug_assertions)]
+fn gpu_capture_look() {
+    let dir = std::env::var_os(crate::capture::CAPTURE_DIR_VAR).expect("set SASH_CAPTURE_DIR");
+    for (appearance, name) in [
+        (sash_theme::Appearance::Dark, "dark"),
+        (sash_theme::Appearance::Light, "light"),
+    ] {
+        let mut harness = Harness::new();
+        let state = &mut harness.server.state;
+        state.appearance = appearance;
+        state
+            .windows
+            .layout
+            .set_gaps(crate::layout::gaps::Gaps::DEFAULT);
+        state
+            .windows
+            .layout
+            .set_radius(crate::layout::shape::RADIUS);
+        let socket = harness.socket_path();
+        harness.run_with_remote(move |server| {
+            let mut clients = Vec::new();
+            // Stand-in clients: a light app, a dark app, then a dialog-sized one.
+            for (i, color) in [0xffff_ffffu32, 0xff1d_2226, 0xfff3_f5f7]
+                .into_iter()
+                .enumerate()
+            {
+                if i > 0 {
+                    server.pointer_over_focused();
+                }
+                let mut c = TestClient::connect(&socket);
+                let mut w = c.create_window_without_commit();
+                w.color = color;
+                w.toplevel
+                    .set_title(["Files", "Terminal", "Text Editor — notes.txt"][i].into());
+                std::mem::forget(c.decorate(&w, None));
+                w.surface.commit();
+                c.dispatch_until("configure", |e| e.configures >= 1);
+                c.ack_and_commit(&w);
+                let acked = c.events.configures;
+                clients.push((c, w, acked));
+            }
+            // Window 3 floats over the tiles, focused, the pointer on its close button.
+            server.on_server(|h| {
+                h.chord(&[ALT, F]);
+                let layout = &mut h.server.state.windows.layout;
+                layout.set_floating_rect(
+                    crate::layout::WindowId(3),
+                    crate::layout::Rect::new(220, 150, 420, 280),
+                );
+                h.server.state.focus_window(crate::layout::WindowId(3));
+                h.server.state.arrange();
+                h.pointer_to(238.0, 168.0);
+            });
+            for (c, w, acked) in &mut clients {
+                c.roundtrip();
+                if c.events.configures > *acked {
+                    c.ack_and_commit(w);
+                }
+            }
+            std::mem::forget(clients);
+        });
+        for _ in 0..20 {
+            harness.step();
+        }
+        let mut gpu = renderer();
+        for scale in [1.0, 1.5, 2.0] {
+            let (w, _, pixels) = frame_at_scale(&mut gpu, &harness.server.state, scale);
+            let png = crate::capture::encode_png(&pixels, w as u32, (pixels.len() / 4 / w) as u32)
+                .expect("png");
+            let path = std::path::Path::new(&dir).join(format!("m18b-{name}-x{scale}.png"));
+            std::fs::write(&path, png).expect("write");
+            println!("wrote {}", path.display());
+        }
     }
 }

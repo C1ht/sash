@@ -2,7 +2,7 @@
 
 [workspace]
 resolver = "3"
-members = ["sash-wm", "sash-ui", "sash-text"]
+members = ["sash-wm", "sash-ui", "sash-text", "sash-theme"]
 
 [workspace.package]
 version = "0.1.0"

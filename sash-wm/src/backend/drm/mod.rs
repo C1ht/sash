@@ -817,7 +817,7 @@ impl Drm {
         let result = self.compositor.render_frame(
             &mut self.renderer,
             &elements,
-            render::CLEAR_COLOR,
+            render::clear_color(state),
             FrameFlags::DEFAULT,
         );
         let drawn = start.elapsed();

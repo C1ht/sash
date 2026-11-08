@@ -64,7 +64,7 @@ fn dock(theme: Theme) -> Dock {
             .width(Size::Flex(1))
             .height(Size::Flex(1)),
         theme,
-        Surface::Surface,
+        Surface::Raised,
     );
     let root = ui.root();
     let apps = ui.add(root, Node::row().spacing(4).group().named("Apps"));
@@ -144,7 +144,7 @@ fn a_widget_without_an_accessible_name_fails() {
         Node::button("  "),
         Node::icon_button(dot(), ClientText::new(b"")),
     ] {
-        let mut ui = Ui::new(Node::row(), Theme::dark(), Surface::Surface);
+        let mut ui = Ui::new(Node::row(), Theme::dark(), Surface::Raised);
         let root = ui.root();
         let added = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let id = ui.add(root, node);
@@ -228,7 +228,7 @@ fn a_group_is_entered_where_it_was_left() {
 
 #[test]
 fn a_vertical_group_uses_up_and_down() {
-    let mut ui = Ui::new(Node::column().group(), Theme::dark(), Surface::Surface);
+    let mut ui = Ui::new(Node::column().group(), Theme::dark(), Surface::Raised);
     let root = ui.root();
     let a = ui.add(root, Node::button("A"));
     let b = ui.add(root, Node::button("B"));
@@ -429,8 +429,10 @@ fn damage_covers_only_the_changed_widget() {
     let damage = d.ui.take_damage();
     let bounds = damage.bounds();
     let open = rect(&d.ui, d.open);
-    // The widget plus the ring and anti-aliasing margin (4 px), nothing else.
-    let grown = Rect::new(open.x - 4, open.y - 4, open.w + 8, open.h + 8);
+    // The widget plus the ring (3 px off, 2 px wide) and 1 px of anti-aliasing,
+    // nothing else.
+    let m = sash_ui::ui::RING_GAP + sash_ui::ui::RING_WIDTH + 1;
+    let grown = Rect::new(open.x - m, open.y - m, open.w + 2 * m, open.h + 2 * m);
     assert!(grown.contains_rect(&bounds), "{bounds:?} in {grown:?}");
     for other in [d.files, d.terminal, d.settings, d.label, d.off] {
         assert!(
@@ -443,7 +445,7 @@ fn damage_covers_only_the_changed_widget() {
 #[test]
 fn client_text_never_prints() {
     const MARKER: &str = "untrusted-title-marker-4711";
-    let mut ui = Ui::new(Node::row(), Theme::dark(), Surface::Surface);
+    let mut ui = Ui::new(Node::row(), Theme::dark(), Surface::Raised);
     let root = ui.root();
     let label = ui.add(root, Node::label(ClientText::from(MARKER)));
     ui.add(
@@ -505,7 +507,7 @@ fn the_focus_ring_adds_a_shape_outside_the_widget() {
 }
 
 #[test]
-fn enabled_text_is_never_drawn_at_the_disabled_alpha() {
+fn disabled_text_uses_the_secondary_token() {
     let mut d = dock(Theme::dark());
     let (pixels, w, _) = render(&mut d.ui, 1.0);
     let brightest = |r: Rect| {
@@ -518,12 +520,11 @@ fn enabled_text_is_never_drawn_at_the_disabled_alpha() {
         }
         max
     };
-    let bg = 0x2C;
     let on = brightest(rect(&d.ui, d.open));
     let off = brightest(rect(&d.ui, d.off));
-    // 92% white over #2C2C2E is about 238; 35% about 118.
+    // White at 92% over raised #22282C is about 237; at 62% (secondary) about 171.
     assert!(on > 220, "enabled text {on}");
-    assert!(off > bg && off < 130, "disabled text {off}");
+    assert!((150..190).contains(&off), "disabled text {off}");
 }
 
 #[test]
@@ -581,7 +582,7 @@ fn row_of(sizes: &[(Size, i32)], width: i32, spacing: i32) -> (Ui, Vec<NodeId>) 
             .padding(Insets::all(3))
             .width(Size::Flex(1)),
         Theme::dark(),
-        Surface::Surface,
+        Surface::Raised,
     );
     let root = ui.root();
     let ids = sizes
@@ -619,7 +620,7 @@ fn alignment_and_stacks() {
     let mut ui = Ui::new(
         Node::column().align(Align::Center).width(Size::Flex(1)),
         Theme::dark(),
-        Surface::Surface,
+        Surface::Raised,
     );
     let root = ui.root();
     let a = ui.add(
@@ -718,9 +719,9 @@ fn a_filled_button_has_an_outline_of_at_least_3_to_1() {
             b: pixels[i + 2],
             a: 255,
         };
-        let surface = theme.surface_color(Surface::Surface);
+        let surface = theme.surface_color(Surface::Raised);
         let ratio = sash_ui::theme::contrast(edge, surface);
-        assert_eq!(edge, theme.accent, "the outline is the accent");
+        assert_eq!(edge, theme.accent(), "the outline is the accent");
         assert!(ratio >= 3.0, "{ratio}");
     }
 }

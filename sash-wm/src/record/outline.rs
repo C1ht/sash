@@ -8,15 +8,17 @@ use crate::layout::{Layer, Rect, WindowId, decor::Decoration};
 
 pub type Rgba = [u8; 4];
 
-pub const BACKGROUND: Rgba = [26, 26, 26, 255];
-pub const TILED_FILL: Rgba = [52, 56, 64, 255];
-pub const FLOATING_FILL: Rgba = [72, 62, 48, 255];
-pub const BORDER: Rgba = [190, 190, 190, 255];
-pub const FOCUSED_BORDER: Rgba = [10, 132, 255, 255];
-pub const TEXT: Rgba = [255, 255, 255, 255];
-pub const POINTER: Rgba = [255, 64, 64, 255];
+// The colours (owner, M18b: every colour from the theme): dark tokens, made opaque.
+const DARK: &sash_theme::Theme = &sash_theme::Theme::DARK;
+pub const BACKGROUND: Rgba = DARK.page.rgba8();
+pub const TILED_FILL: Rgba = DARK.raised.rgba8();
+pub const FLOATING_FILL: Rgba = DARK.accent_tile.rgba8();
+pub const BORDER: Rgba = sash_theme::over(DARK.secondary, DARK.page).rgba8();
+pub const FOCUSED_BORDER: Rgba = DARK.accent.rgba8();
+pub const TEXT: Rgba = sash_theme::over(DARK.text, DARK.page).rgba8();
+pub const POINTER: Rgba = DARK.close_hover.rgba8();
 /// The outlines of the bar band and the client's rectangle inside the border (M11b).
-pub const DECORATION: Rgba = [140, 140, 140, 255];
+pub const DECORATION: Rgba = DARK.hairline.rgba8();
 
 /// Every colour an outline picture can contain.
 #[cfg(test)]

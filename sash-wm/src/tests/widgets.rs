@@ -62,7 +62,7 @@ fn ui() -> (Ui, Ids) {
             .width(Size::Flex(1))
             .height(Size::Flex(1)),
         Theme::dark(),
-        Surface::Surface,
+        Surface::Raised,
     );
     let root = ui.root();
     let apps = ui.add(root, Node::row().spacing(4).group().named("Apps"));
@@ -252,8 +252,9 @@ fn an_animation_draws_only_while_it_runs_then_idle_is_zero_frames() {
         let rect = |id| panel.view().tree().get(id).expect("node").rect();
         let ring = grown(
             rect(ids.files).bounds(&rect(ids.terminal)),
-            // The ring lies 3 px outside a widget; damage adds 4 for its edges.
-            sash_ui::ui::RING_GAP + sash_ui::ui::RING_WIDTH + 4,
+            // The ring's outer edge lies RING_GAP + RING_WIDTH (5 px) outside a widget;
+            // damage adds that again plus 1 px for its anti-aliased edges.
+            2 * (sash_ui::ui::RING_GAP + sash_ui::ui::RING_WIDTH) + 1,
         );
         // Every commit of the animation damages only the ring's path.
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -311,7 +312,12 @@ fn hovering_draws_only_the_hovered_button() {
             p.view().hovered() == Some(ids.open)
         });
         settled(&mut panel);
-        let open = grown(panel.view().tree().get(ids.open).expect("open").rect(), 4);
+        // The button plus the ring's reach and 1 px of anti-aliasing.
+        let margin = sash_ui::ui::RING_GAP + sash_ui::ui::RING_WIDTH + 1;
+        let open = grown(
+            panel.view().tree().get(ids.open).expect("open").rect(),
+            margin,
+        );
         let last = panel.stats().last_damage.clone();
         assert!(panel.stats().commits > before);
         for r in &last {

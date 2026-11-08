@@ -56,7 +56,7 @@ pub fn render_rgba(
             &mut framebuffer,
             0,
             &elements,
-            render::CLEAR_COLOR,
+            render::clear_color(state),
         )?;
         renderer.copy_framebuffer(
             &framebuffer,

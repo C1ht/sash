@@ -1,240 +1,131 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Theme tokens (owner, M16 and after M16) and the contrast rules they must keep.
+//! The theme as sash-ui draws it (owner, M18b): every colour comes from sash-theme, the
+//! tokens of docs/design.md. This module only says which token a widget uses.
 //!
-//! The palette is fixed: three neutral surfaces per appearance, text as white (dark) or
-//! black (light) at 92 / 55 / 35% alpha, borders at 10%, and one accent per appearance.
-//! Two tokens are derived (owner, after M16), each the smallest change that passes:
-//! - the accent fill under text: the accent made darker (HSL lightness lowered in
-//!   steps of 0.001, hue and saturation kept) until primary text on it reaches 4.5:1;
-//! - light-mode secondary text: the smallest whole-percent alpha of at least 55% that
-//!   reaches 4.5:1 on all three light surfaces (56%).
+//! - Surfaces: page, raised and chrome (the spec's card is dark-only and unused).
+//! - Text: the text and secondary tokens. There is no 35% level: a disabled control is
+//!   drawn with the secondary token and a state shape.
+//! - Hover is the overlay at 5%, pressed and selected the overlay at 8%.
+//! - The accent fill is the accent; text on it is the spec's "text on accent fill".
+//! - The focus ring: 2 px of the accent, 3 px off the widget.
 //!
-//! Thresholds (WCAG 2.2): text 4.5:1; non-text glyphs and the focus ring 3:1. Text at
-//! the disabled alpha (35%) is only for disabled and decorative items, which WCAG
-//! exempts. The accent is never text: labels have no accent style.
+//! Thresholds (WCAG 2.2): text 4.5:1; non-text glyphs and the focus ring 3:1. A pair
+//! under its threshold goes to the owner; a token is never changed to pass.
+
+pub use sash_theme::{
+    FOCUS_RING_OFFSET, FOCUS_RING_WIDTH, NON_TEXT_CONTRAST, Overlay, TEXT_CONTRAST,
+};
 
 use crate::canvas::Color;
-
-/// Text and glyph contrast, WCAG 2.2 level AA.
-pub const TEXT_CONTRAST: f64 = 4.5;
-/// Non-text glyphs (icons) and the focus ring.
-pub const NON_TEXT_CONTRAST: f64 = 3.0;
 
 /// How long an animation runs (owner, M16: about 180 ms).
 pub const ANIMATION_MS: u64 = 180;
 
-/// The surfaces a widget can sit on, darkest (dark) or palest (light) first.
+/// The surfaces a widget can sit on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
-    Background,
-    Surface,
+    Page,
     Raised,
+    Chrome,
 }
 
-pub const SURFACES: [Surface; 3] = [Surface::Background, Surface::Surface, Surface::Raised];
+pub const SURFACES: [Surface; 3] = [Surface::Page, Surface::Raised, Surface::Chrome];
 
-/// The text levels; there is no accent level.
+/// The text levels; there is no accent level and no disabled level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextLevel {
     Primary,
     Secondary,
-    /// Disabled and decorative items only.
-    Disabled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Appearance {
-    Dark,
-    Light,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
-    pub appearance: Appearance,
-    pub background: Color,
-    pub surface: Color,
-    pub raised: Color,
-    /// The colour text and glyphs are drawn in, at the alphas below.
-    pub ink: Color,
-    pub primary_alpha: f32,
-    pub secondary_alpha: f32,
-    pub disabled_alpha: f32,
-    pub border_alpha: f32,
-    pub accent: Color,
-    /// Derived: the accent as a fill under text.
-    pub accent_fill: Color,
+    pub tokens: &'static sash_theme::Theme,
 }
 
-/// Derived token values (checked by the tests in this module).
-pub const DARK_ACCENT_FILL: u32 = 0x006CDA;
-pub const LIGHT_ACCENT_FILL: u32 = 0x006ADE;
-pub const LIGHT_SECONDARY_ALPHA: f32 = 0.56;
+/// A token as the canvas's colour (straight alpha, 8 bits).
+pub fn color(c: sash_theme::Color) -> Color {
+    let [r, g, b, a] = c.rgba8();
+    Color { r, g, b, a }
+}
 
 impl Theme {
     pub const fn dark() -> Self {
         Self {
-            appearance: Appearance::Dark,
-            background: Color::rgb(0x1C1C1E),
-            surface: Color::rgb(0x2C2C2E),
-            raised: Color::rgb(0x3A3A3C),
-            ink: Color::rgb(0xFFFFFF),
-            primary_alpha: 0.92,
-            secondary_alpha: 0.55,
-            disabled_alpha: 0.35,
-            border_alpha: 0.10,
-            accent: Color::rgb(0x0A84FF),
-            accent_fill: Color::rgb(DARK_ACCENT_FILL),
+            tokens: &sash_theme::Theme::DARK,
         }
     }
 
     pub const fn light() -> Self {
         Self {
-            appearance: Appearance::Light,
-            background: Color::rgb(0xF2F2F7),
-            surface: Color::rgb(0xFFFFFF),
-            raised: Color::rgb(0xE5E5EA),
-            ink: Color::rgb(0x000000),
-            primary_alpha: 0.92,
-            secondary_alpha: LIGHT_SECONDARY_ALPHA,
-            disabled_alpha: 0.35,
-            border_alpha: 0.10,
-            accent: Color::rgb(0x007AFF),
-            accent_fill: Color::rgb(LIGHT_ACCENT_FILL),
+            tokens: &sash_theme::Theme::LIGHT,
+        }
+    }
+
+    pub fn of(mode: sash_theme::Mode) -> Self {
+        Self {
+            tokens: sash_theme::Theme::of(mode),
+        }
+    }
+
+    fn surface_token(&self, surface: Surface) -> sash_theme::Color {
+        match surface {
+            Surface::Page => self.tokens.page,
+            Surface::Raised => self.tokens.raised,
+            Surface::Chrome => self.tokens.chrome,
         }
     }
 
     pub fn surface_color(&self, surface: Surface) -> Color {
-        match surface {
-            Surface::Background => self.background,
-            Surface::Surface => self.surface,
-            Surface::Raised => self.raised,
-        }
+        color(self.surface_token(surface))
     }
 
     /// Text (and glyph) colour at `level`, straight alpha.
     pub fn text(&self, level: TextLevel) -> Color {
-        self.ink.with_alpha(match level {
-            TextLevel::Primary => self.primary_alpha,
-            TextLevel::Secondary => self.secondary_alpha,
-            TextLevel::Disabled => self.disabled_alpha,
-        })
+        color(self.text_token(level))
     }
 
-    /// Text on the accent fill: always white at the primary alpha.
+    pub fn text_token(&self, level: TextLevel) -> sash_theme::Color {
+        match level {
+            TextLevel::Primary => self.tokens.text,
+            TextLevel::Secondary => self.tokens.secondary,
+        }
+    }
+
+    pub fn accent(&self) -> Color {
+        color(self.tokens.accent)
+    }
+
+    /// The accent fill under text: the accent itself.
+    pub fn accent_fill(&self) -> Color {
+        color(self.tokens.accent)
+    }
+
+    /// Text on the accent fill.
     pub fn on_accent(&self) -> Color {
-        Color::rgb(0xFFFFFF).with_alpha(self.primary_alpha)
+        color(self.tokens.on_accent)
     }
 
-    /// The hover fill on `surface`: the next surface up (dark) or down (light).
-    pub fn hover(&self, surface: Surface) -> Color {
-        match surface {
-            Surface::Background => self.surface,
-            Surface::Surface | Surface::Raised => self.raised,
-        }
+    /// The fill of a hovered (5%) or pressed and selected (8%) control.
+    pub fn overlay(&self, level: Overlay) -> Color {
+        color(self.tokens.overlay(level))
     }
 
-    pub fn border(&self) -> Color {
-        self.ink.with_alpha(self.border_alpha)
+    /// Lines: a hovered flat button's edge.
+    pub fn hairline(&self) -> Color {
+        color(self.tokens.hairline)
     }
 }
 
-/// WCAG relative luminance of an opaque colour.
-pub fn luminance(c: Color) -> f64 {
-    let lin = |v: u8| {
-        let v = f64::from(v) / 255.0;
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
-}
-
-/// `fg` (straight alpha) drawn over the opaque `bg`, as the canvas draws it (8-bit
-/// alpha, source over).
-pub fn over(fg: Color, bg: Color) -> Color {
-    let a = u32::from(fg.a);
-    let mix = |f: u8, b: u8| ((u32::from(f) * a + u32::from(b) * (255 - a) + 127) / 255) as u8;
-    Color {
-        r: mix(fg.r, bg.r),
-        g: mix(fg.g, bg.g),
-        b: mix(fg.b, bg.b),
-        a: 255,
-    }
-}
-
-/// The contrast ratio of `fg` (drawn over `bg`) against `bg`.
+/// The contrast of the canvas colour `fg` (drawn over the opaque `bg`, 8-bit alpha)
+/// against `bg`.
 pub fn contrast(fg: Color, bg: Color) -> f64 {
-    let (a, b) = (luminance(over(fg, bg)), luminance(bg));
-    (a.max(b) + 0.05) / (a.min(b) + 0.05)
-}
-
-/// The derivation of the accent fill: the lightest colour of the accent's hue and
-/// saturation, at most its own lightness, under which `text` reaches 4.5:1.
-pub fn derive_accent_fill(accent: Color, text: Color) -> Color {
-    let (h, s, l) = hsl(accent);
-    let mut step = (l * 1000.0).floor() as i32;
-    while step > 0 {
-        let fill = from_hsl(h, s, f64::from(step) / 1000.0);
-        if contrast(text, fill) >= TEXT_CONTRAST {
-            return fill;
-        }
-        step -= 1;
-    }
-    Color::rgb(0)
-}
-
-fn hsl(c: Color) -> (f64, f64, f64) {
-    let [r, g, b] = [c.r, c.g, c.b].map(|v| f64::from(v) / 255.0);
-    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-    let l = (max + min) / 2.0;
-    if max == min {
-        return (0.0, 0.0, l);
-    }
-    let d = max - min;
-    let s = if l > 0.5 {
-        d / (2.0 - max - min)
-    } else {
-        d / (max + min)
-    };
-    let h = if max == r {
-        (g - b) / d + if g < b { 6.0 } else { 0.0 }
-    } else if max == g {
-        (b - r) / d + 2.0
-    } else {
-        (r - g) / d + 4.0
-    };
-    (h / 6.0, s, l)
-}
-
-fn from_hsl(h: f64, s: f64, l: f64) -> Color {
-    let q = if l < 0.5 {
-        l * (1.0 + s)
-    } else {
-        l + s - l * s
-    };
-    let p = 2.0 * l - q;
-    let channel = |mut t: f64| {
-        t = t.rem_euclid(1.0);
-        let v = if t < 1.0 / 6.0 {
-            p + (q - p) * 6.0 * t
-        } else if t < 0.5 {
-            q
-        } else if t < 2.0 / 3.0 {
-            p + (q - p) * (2.0 / 3.0 - t) * 6.0
-        } else {
-            p
-        };
-        (v * 255.0).round() as u8
-    };
-    Color {
-        r: channel(h + 1.0 / 3.0),
-        g: channel(h),
-        b: channel(h - 1.0 / 3.0),
-        a: 255,
-    }
+    let a = u32::from(fg.a);
+    let mix = |f: u8, b: u8| (u32::from(f) * a + u32::from(b) * (255 - a) + 127) / 255;
+    let hex = |r: u32, g: u32, b: u32| sash_theme::Color::hex(r << 16 | g << 8 | b);
+    let top = hex(mix(fg.r, bg.r), mix(fg.g, bg.g), mix(fg.b, bg.b));
+    sash_theme::contrast(top, hex(bg.r.into(), bg.g.into(), bg.b.into()))
 }
 
 /// A token pair with its threshold, for the contrast test and the report.
@@ -242,157 +133,101 @@ fn from_hsl(h: f64, s: f64, l: f64) -> Color {
 pub struct Pair {
     pub what: String,
     pub ratio: f64,
-    /// None: exempt (disabled or decorative).
-    pub threshold: Option<f64>,
+    pub threshold: f64,
 }
 
-/// Every pair the widgets draw, in both appearances.
-pub fn pairs() -> Vec<Pair> {
+/// Every pair sash-ui's widgets draw that sash-theme's own list does not hold: text and
+/// glyphs on the hover and pressed fills over each surface (a disabled control never
+/// shows them, so secondary text is never on them); the focus ring and an accent
+/// button's outline on each surface.
+pub fn widget_pairs() -> Vec<Pair> {
+    use sash_theme::{contrast, over};
     let mut out = Vec::new();
     for theme in [Theme::dark(), Theme::light()] {
-        let mode = match theme.appearance {
-            Appearance::Dark => "dark",
-            Appearance::Light => "light",
+        let t = theme.tokens;
+        let mode = match t.mode {
+            sash_theme::Mode::Dark => "dark",
+            sash_theme::Mode::Light => "light",
         };
         for surface in SURFACES {
-            let bg = theme.surface_color(surface);
-            let hex = hex_of(bg);
-            for (level, name, threshold) in [
-                (TextLevel::Primary, "primary text", Some(TEXT_CONTRAST)),
-                (TextLevel::Secondary, "secondary text", Some(TEXT_CONTRAST)),
-                (TextLevel::Disabled, "disabled text (exempt)", None),
-            ] {
-                out.push(Pair {
-                    what: format!("{mode}: {name} on {hex}"),
-                    ratio: contrast(theme.text(level), bg),
-                    threshold,
-                });
+            let bg = theme.surface_token(surface);
+            let name = format!("{surface:?}").to_lowercase();
+            for (fill, state) in [(Overlay::Hover, "hover"), (Overlay::Pressed, "pressed")] {
+                let under = over(t.overlay(fill), bg);
+                for (level, what, threshold) in [
+                    (TextLevel::Primary, "text", TEXT_CONTRAST),
+                    (TextLevel::Primary, "glyph", NON_TEXT_CONTRAST),
+                ] {
+                    let fg = theme.text_token(level);
+                    out.push(Pair {
+                        what: format!(
+                            "{mode}: {what} on the {state} fill over {name} ({})",
+                            under.hex_string()
+                        ),
+                        ratio: contrast(fg, under),
+                        threshold,
+                    });
+                }
             }
             out.push(Pair {
-                what: format!("{mode}: icon glyph (primary) on {hex}"),
-                ratio: contrast(theme.text(TextLevel::Primary), bg),
-                threshold: Some(NON_TEXT_CONTRAST),
-            });
-            out.push(Pair {
-                what: format!("{mode}: focus ring {} on {hex}", hex_of(theme.accent)),
-                ratio: contrast(theme.accent, bg),
-                threshold: Some(NON_TEXT_CONTRAST),
-            });
-            // A hovered button's content sits on the hover fill.
-            let hover = theme.hover(surface);
-            out.push(Pair {
                 what: format!(
-                    "{mode}: primary text on the hover fill {} (over {hex})",
-                    hex_of(hover)
+                    "{mode}: focus ring and accent outline {} on {name} {}",
+                    t.accent.hex_string(),
+                    bg.hex_string()
                 ),
-                ratio: contrast(theme.text(TextLevel::Primary), hover),
-                threshold: Some(TEXT_CONTRAST),
+                ratio: contrast(t.accent, bg),
+                threshold: NON_TEXT_CONTRAST,
             });
         }
-        for surface in SURFACES {
-            out.push(Pair {
-                what: format!(
-                    "{mode}: accent button outline {} on {}",
-                    hex_of(theme.accent),
-                    hex_of(theme.surface_color(surface))
-                ),
-                ratio: contrast(theme.accent, theme.surface_color(surface)),
-                threshold: Some(NON_TEXT_CONTRAST),
-            });
-        }
-        out.push(Pair {
-            what: format!(
-                "{mode}: text on the accent fill {}",
-                hex_of(theme.accent_fill)
-            ),
-            ratio: contrast(theme.on_accent(), theme.accent_fill),
-            threshold: Some(TEXT_CONTRAST),
-        });
     }
     out
-}
-
-pub fn hex_of(c: Color) -> String {
-    format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Every pair the spec uses (sash-theme's list) and every pair the widgets add:
+    /// none under its threshold. Printed: the report.
     #[test]
     fn every_token_pair_meets_its_threshold() {
         let mut failed = Vec::new();
-        for pair in pairs() {
+        let spec = sash_theme::pairs().into_iter().map(|p| Pair {
+            what: p.what,
+            ratio: p.ratio,
+            threshold: p.threshold,
+        });
+        for pair in spec.chain(widget_pairs()) {
             println!(
-                "{:<70} {:>6.2}  {}",
-                pair.what,
-                pair.ratio,
-                pair.threshold
-                    .map_or("exempt".to_string(), |t| format!(">= {t}"))
+                "{:<92} {:>6.2}  >= {}",
+                pair.what, pair.ratio, pair.threshold
             );
-            if pair.threshold.is_some_and(|t| pair.ratio < t) {
+            if pair.ratio < pair.threshold {
                 failed.push(pair.what);
             }
         }
         assert!(failed.is_empty(), "under the threshold: {failed:?}");
     }
 
+    /// The old derived tokens are gone (owner, M18b): the accent fill is the accent and
+    /// the secondary token is the spec's.
     #[test]
-    fn the_derived_accent_fills_are_the_lightest_that_pass() {
+    fn no_derived_tokens() {
         for theme in [Theme::dark(), Theme::light()] {
-            let derived = derive_accent_fill(theme.accent, theme.on_accent());
-            assert_eq!(derived, theme.accent_fill, "{}", hex_of(derived));
-            // Same hue and saturation, darker.
-            let (h0, s0, l0) = hsl(theme.accent);
-            let (h1, s1, l1) = hsl(derived);
-            assert!((h0 - h1).abs() < 0.01 && (s0 - s1).abs() < 0.01 && l1 < l0);
-            // One step lighter fails.
-            let lighter = from_hsl(h0, s0, l1 + 0.002);
-            assert!(contrast(theme.on_accent(), lighter) < TEXT_CONTRAST);
+            assert_eq!(theme.accent_fill(), theme.accent());
+            assert_eq!(theme.on_accent(), color(theme.tokens.on_accent));
         }
-    }
-
-    #[test]
-    fn the_derived_accent_fills_are_a_floor() {
-        // Owner, after E2: never lighter than these (by luminance and by lightness).
-        for (theme, floor) in [
-            (Theme::dark(), DARK_ACCENT_FILL),
-            (Theme::light(), LIGHT_ACCENT_FILL),
-        ] {
-            let floor = Color::rgb(floor);
-            assert!(luminance(theme.accent_fill) <= luminance(floor));
-            assert!(hsl(theme.accent_fill).2 <= hsl(floor).2);
-        }
-        assert_eq!(DARK_ACCENT_FILL, 0x006CDA);
-        assert_eq!(LIGHT_ACCENT_FILL, 0x006ADE);
-    }
-
-    #[test]
-    fn light_secondary_alpha_is_the_smallest_passing_percent() {
-        let theme = Theme::light();
-        let passes = |alpha: f32| {
-            SURFACES.iter().all(|&s| {
-                contrast(theme.ink.with_alpha(alpha), theme.surface_color(s)) >= TEXT_CONTRAST
-            })
-        };
-        assert!(!passes(0.55), "55% would pass; no change needed");
-        let smallest = (55..=60)
-            .map(|p| p as f32 / 100.0)
-            .find(|&a| passes(a))
-            .expect("a change of up to 5 points passes");
-        assert_eq!(smallest, LIGHT_SECONDARY_ALPHA);
-    }
-
-    #[test]
-    fn the_accent_alone_is_never_text_on_dark_surfaces() {
-        // The rule holds by construction (TextLevel has no accent); this records why:
-        // the accent as 13 px text fails 4.5:1 on dark surfaces.
-        let theme = Theme::dark();
-        assert!(
-            SURFACES
-                .iter()
-                .any(|&s| contrast(theme.accent, theme.surface_color(s)) < TEXT_CONTRAST)
+        assert_eq!(
+            Theme::light().text(TextLevel::Secondary),
+            color(sash_theme::Color::hex(0x5A636A))
+        );
+        assert_eq!(
+            Theme::dark().on_accent(),
+            color(sash_theme::Color::hex(0x14181B))
+        );
+        assert_eq!(
+            Theme::light().on_accent(),
+            color(sash_theme::Color::hex(0xFFFFFF))
         );
     }
 }

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sash-theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The theme tokens of docs/design.md, the appearance choice and the contrast maths (no dependencies)"
+
+[dependencies]

@@ -21,8 +21,10 @@ use smithay::{
         utils::CommitCounter,
     },
     input::pointer::CursorImageStatus,
-    utils::{Physical, Rectangle, Scale, Transform},
+    utils::{Physical, Point, Rectangle, Scale, Transform},
 };
+
+use std::cell::RefCell;
 
 use crate::{
     layout::{Layer, Rect, gaps::Gapped, layers::Level},
@@ -33,13 +35,17 @@ use crate::{
 };
 
 /// Background where no window is.
-pub const CLEAR_COLOR: [f32; 4] = [0.1, 0.1, 0.1, 1.0];
-/// The accent blue #0A84FF.
-const ACCENT: [f32; 4] = [10.0 / 255.0, 132.0 / 255.0, 1.0, 1.0];
-const PREVIEW_FILL_ALPHA: f32 = 0.3;
-const PREVIEW_BORDER_ALPHA: f32 = 0.8;
-const PREVIEW_BORDER: i32 = 2;
-const BACKDROP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+/// Background where no window is: the theme's page (until a wallpaper exists).
+pub fn clear_color(state: &Sash) -> [f32; 4] {
+    state.theme().page.rgba_f32()
+}
+
+/// The snap preview (owner, M18b): the accent at 12% with a 1 px edge at 60%.
+const PREVIEW_FILL: u8 = 12;
+const PREVIEW_EDGE: u8 = 60;
+const PREVIEW_EDGE_PX: i32 = 1;
+/// Behind a fixed-size fullscreen window: opaque black.
+const BACKDROP: sash_theme::Color = sash_theme::BLACK;
 
 render_elements! {
     pub OutputElement<=GlesRenderer>;
@@ -53,6 +59,98 @@ render_elements! {
     Memory=MemoryRenderBufferRenderElement<GlesRenderer>,
     /// Shape-clipped fills and the border ring (rounded.rs).
     Shader=PixelShaderElement,
+    /// Glyphs and titles, pixel for pixel.
+    Exact=Exact,
+}
+
+/// A buffer drawn pixel for pixel at a physical rectangle (glyphs and titles, drawn at
+/// the output scale): Smithay's memory element would size it from its logical size,
+/// rounded apart from its position.
+pub struct Exact {
+    inner: MemoryRenderBufferRenderElement<GlesRenderer>,
+    at: Rectangle<i32, Physical>,
+}
+
+impl Exact {
+    /// `buffer` (scale 1, as many pixels as `at`) at `at`.
+    pub fn new(
+        renderer: &mut GlesRenderer,
+        buffer: &MemoryRenderBuffer,
+        at: Rectangle<i32, Physical>,
+    ) -> Option<Self> {
+        let inner = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            at.loc.to_f64(),
+            buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        )
+        .ok()?;
+        Some(Self { inner, at })
+    }
+}
+
+impl smithay::backend::renderer::element::Element for Exact {
+    fn id(&self) -> &Id {
+        self.inner.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+
+    fn location(&self, _scale: Scale<f64>) -> Point<i32, Physical> {
+        self.at.loc
+    }
+
+    fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> {
+        self.inner.src()
+    }
+
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.at
+    }
+
+    fn damage_since(
+        &self,
+        _scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> smithay::backend::renderer::utils::DamageSet<i32, Physical> {
+        if commit == Some(self.current_commit()) {
+            Default::default()
+        } else {
+            smithay::backend::renderer::utils::DamageSet::from_slice(&[Rectangle::from_size(
+                self.at.size,
+            )])
+        }
+    }
+
+    fn alpha(&self) -> f32 {
+        1.0
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+}
+
+impl smithay::backend::renderer::element::RenderElement<GlesRenderer> for Exact {
+    fn draw(
+        &self,
+        frame: &mut smithay::backend::renderer::gles::GlesFrame<'_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), smithay::backend::renderer::gles::GlesError> {
+        self.inner.draw(frame, src, dst, damage, opaque_regions)
+    }
 }
 
 /// Size of the built-in arrow cursor (drawn by the DRM backend for named shapes until
@@ -78,12 +176,12 @@ pub fn arrow_pixels() -> Vec<u8> {
                 && [(-1, 0), (1, 0), (0, -1), (0, 1)]
                     .iter()
                     .any(|(dx, dy)| !inside(x + dx, y + dy));
-            let argb: u32 = match (inside(x, y), edge) {
-                (true, true) => 0xff00_0000,
-                (true, false) => 0xffff_ffff,
-                _ => 0,
+            let [r, g, b, a] = match (inside(x, y), edge) {
+                (true, true) => sash_theme::BLACK.rgba8(),
+                (true, false) => sash_theme::WHITE.rgba8(),
+                _ => [0; 4],
             };
-            pixels.extend_from_slice(&argb.to_le_bytes());
+            pixels.extend_from_slice(&[b, g, r, a]);
         }
     }
     pixels
@@ -181,57 +279,57 @@ impl Solid {
         self.element_at(frame.map(self.rect), alpha)
     }
 
-    fn element_at(&self, rect: Rectangle<i32, Physical>, alpha: f32) -> SolidColorRenderElement {
+    /// At a physical rectangle.
+    pub fn element_at(
+        &self,
+        rect: Rectangle<i32, Physical>,
+        alpha: f32,
+    ) -> SolidColorRenderElement {
         let c = self.color;
         SolidColorRenderElement::new(
             self.id.clone(),
             rect,
             self.commit,
-            [c[0] * alpha, c[1] * alpha, c[2] * alpha, c[3] * alpha],
+            // Straight to premultiplied.
+            [
+                c[0] * c[3] * alpha,
+                c[1] * c[3] * alpha,
+                c[2] * c[3] * alpha,
+                c[3] * alpha,
+            ],
             Kind::Unspecified,
         )
     }
 }
 
+/// What a cached preview element was made for.
+type PreviewKey = ([i32; 4], [u32; 4], u64, i32);
+
 /// Compositor-drawn rectangles, kept from frame to frame.
 pub struct Overlay {
     preview: Option<Gapped>,
-    /// Fill (inside the border), then the top, bottom, left and right border strips.
-    pieces: [Solid; 5],
+    /// Without the shaders: the fill inside the edge, then the top, bottom, left and
+    /// right edge strips.
+    pieces: RefCell<[Solid; 5]>,
+    /// With them: the rounded fill and the edge ring.
+    shaders: RefCell<[Option<(PixelShaderElement, PreviewKey)>; 2]>,
     backdrop: Option<Solid>,
 }
 
 impl Overlay {
     pub fn new() -> Self {
-        let piece = || Solid::new(Rect::default(), ACCENT);
+        let piece = || Solid::new(Rect::default(), BACKDROP.rgba_f32());
         Self {
             preview: None,
-            pieces: [piece(), piece(), piece(), piece(), piece()],
+            pieces: RefCell::new([piece(), piece(), piece(), piece(), piece()]),
+            shaders: RefCell::new([None, None]),
             backdrop: None,
         }
     }
 
     /// Shows the snap preview over what `zone` shows, or hides it.
     pub fn set_preview(&mut self, zone: Option<Gapped>) {
-        if self.preview == zone {
-            return;
-        }
         self.preview = zone;
-        let Some(r) = zone.map(|z| z.logical()) else {
-            return;
-        };
-        let b = PREVIEW_BORDER.min(r.w / 2).min(r.h / 2).max(0);
-        let inner_h = (r.h - 2 * b).max(0);
-        let rects = [
-            Rect::new(r.x + b, r.y + b, (r.w - 2 * b).max(0), inner_h),
-            Rect::new(r.x, r.y, r.w, b),
-            Rect::new(r.x, r.bottom() - b, r.w, b),
-            Rect::new(r.x, r.y + b, b, inner_h),
-            Rect::new(r.right() - b, r.y + b, b, inner_h),
-        ];
-        for (piece, rect) in self.pieces.iter_mut().zip(rects) {
-            piece.update(rect, ACCENT);
-        }
     }
 
     #[cfg(test)]
@@ -241,28 +339,94 @@ impl Overlay {
 
     /// Shows the opaque backdrop over `rect`, or hides it.
     pub fn set_backdrop(&mut self, rect: Option<Rect>) {
+        let color = BACKDROP.rgba_f32();
         match (rect, &mut self.backdrop) {
             (None, backdrop) => *backdrop = None,
-            (Some(r), Some(solid)) => solid.update(r, BACKDROP),
-            (Some(r), backdrop @ None) => *backdrop = Some(Solid::new(r, BACKDROP)),
+            (Some(r), Some(solid)) => solid.update(r, color),
+            (Some(r), backdrop @ None) => *backdrop = Some(Solid::new(r, color)),
         }
     }
 
+    /// The preview, front to back: the same rounded shape (`radius`) and gaps as the
+    /// window it previews, its frame at this scale.
     fn preview_elements(
         &self,
+        renderer: &mut GlesRenderer,
         scale: Scale<f64>,
-    ) -> impl Iterator<Item = SolidColorRenderElement> + '_ {
-        self.preview.into_iter().flat_map(move |zone| {
-            let frame = zone.frame(scale.x);
-            self.pieces.iter().enumerate().map(move |(i, piece)| {
-                let alpha = if i == 0 {
-                    PREVIEW_FILL_ALPHA
-                } else {
-                    PREVIEW_BORDER_ALPHA
-                };
-                piece.element_in(&frame, alpha)
+        theme: &sash_theme::Theme,
+        radius: i32,
+    ) -> Vec<OutputElement> {
+        let Some(zone) = self.preview else {
+            return Vec::new();
+        };
+        let frame = zone.frame(scale.x);
+        let fill = theme.accent.at(PREVIEW_FILL).rgba_f32();
+        let edge = theme.accent.at(PREVIEW_EDGE).rgba_f32();
+        if let Some(programs) = crate::rounded::programs(renderer) {
+            let shape =
+                crate::layout::shape::Shape::from_physical(frame.physical, radius, scale.x as f32);
+            let paints = [
+                (
+                    crate::rounded::Paint::Ring {
+                        width: PREVIEW_EDGE_PX,
+                        edges: crate::layout::Edges::ALL,
+                    },
+                    edge,
+                ),
+                (crate::rounded::Paint::Fill, fill),
+            ];
+            let p = frame.physical;
+            let mut shaders = self.shaders.borrow_mut();
+            return paints
+                .into_iter()
+                .zip(shaders.iter_mut())
+                .map(|((paint, color), cached)| {
+                    let key = (
+                        [p.loc.x, p.loc.y, p.size.w, p.size.h],
+                        color.map(f32::to_bits),
+                        scale.x.to_bits(),
+                        radius,
+                    );
+                    let element = match cached.take() {
+                        Some((element, was)) if was == key => element,
+                        old => crate::rounded::shape_element(
+                            &programs.shape,
+                            old.map(|(e, _)| e),
+                            frame.logical,
+                            p,
+                            &shape,
+                            scale.x,
+                            paint,
+                            color,
+                        ),
+                    };
+                    *cached = Some((element.clone(), key));
+                    OutputElement::Shader(element)
+                })
+                .collect();
+        }
+        let r = frame.logical;
+        let b = PREVIEW_EDGE_PX.min(r.w / 2).min(r.h / 2).max(0);
+        let inner_h = (r.h - 2 * b).max(0);
+        let rects = [
+            (
+                Rect::new(r.x + b, r.y + b, (r.w - 2 * b).max(0), inner_h),
+                fill,
+            ),
+            (Rect::new(r.x, r.y, r.w, b), edge),
+            (Rect::new(r.x, r.bottom() - b, r.w, b), edge),
+            (Rect::new(r.x, r.y + b, b, inner_h), edge),
+            (Rect::new(r.right() - b, r.y + b, b, inner_h), edge),
+        ];
+        let mut pieces = self.pieces.borrow_mut();
+        pieces
+            .iter_mut()
+            .zip(rects)
+            .map(|(piece, (rect, color))| {
+                piece.update(rect, color);
+                OutputElement::Solid(piece.element_in(&frame, 1.0))
             })
-        })
+            .collect()
     }
 
     fn backdrop_element(&self, scale: Scale<f64>) -> Option<SolidColorRenderElement> {
@@ -450,11 +614,12 @@ pub fn output_elements(
         }
         // The preview goes just below the dragged window, above everything else.
         if Some(visible.id) == dragged {
+            let theme = state.theme();
+            let radius = state.windows.layout.radius();
             elements.extend(
                 state
                     .overlay
-                    .preview_elements(scale)
-                    .map(OutputElement::Solid),
+                    .preview_elements(renderer, scale, theme, radius),
             );
             preview_drawn = true;
         }
@@ -465,11 +630,11 @@ pub fn output_elements(
     }
     if !preview_drawn {
         // Above the windows, below the top layer.
-        let preview: Vec<_> = state
+        let theme = state.theme();
+        let radius = state.windows.layout.radius();
+        let preview = state
             .overlay
-            .preview_elements(scale)
-            .map(OutputElement::Solid)
-            .collect();
+            .preview_elements(renderer, scale, theme, radius);
         elements.splice(windows_start..windows_start, preview);
     }
     elements.extend(layer_elements(state, renderer, Level::Bottom, scale));

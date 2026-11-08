@@ -14,10 +14,12 @@ mod gpu;
 mod harness;
 mod layer_shell;
 mod limits;
+mod look;
 mod panel;
 mod popups;
 #[cfg(feature = "debug-record")]
 mod record;
+mod reference;
 #[cfg(feature = "debug-record")]
 mod replay;
 mod snapping;

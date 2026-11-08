@@ -2,7 +2,7 @@
 
 //! Server-side decorations end to end (M11b): real clients on the headless harness
 //! (output 800x600, default mode tiled, modifier Alt). A floating window with a bar has
-//! a 32 px bar and a 1 px border; its buttons (close, maximize) are on the left.
+//! a 34 px bar and a 1 px border; its buttons (close, maximize) are on the left.
 
 use smithay::{
     backend::input::ButtonState,
@@ -91,7 +91,7 @@ fn a_negotiating_client_is_answered_server_side_also_when_it_asks_for_client_sid
         server.on_server(|h| h.chord(&[ALT, F]));
         c.roundtrip();
         assert_eq!(c.events.configures, before + 1, "one configure");
-        assert_eq!(size(&c, &w), (798, 566));
+        assert_eq!(size(&c, &w), (798, 564));
         server.on_server(|h| assert_eq!(h.rect_of(1), Some(AREA), "the outer rectangle"));
         // Asking again, for either mode: still server-side.
         decoration.set_mode(DecorationMode::ClientSide);
@@ -146,12 +146,12 @@ fn mode_changes_send_one_configure_each() {
             (
                 "float",
                 Box::new(|_, s| s.on_server(|h| h.chord(&[ALT, F]))),
-                (798, 566),
+                (798, 564),
             ),
             (
                 "snap left",
                 Box::new(|_, s| s.on_server(|h| h.chord(&[ALT, LEFT]))),
-                (398, 566),
+                (398, 564),
             ),
             (
                 "fullscreen",
@@ -161,7 +161,7 @@ fn mode_changes_send_one_configure_each() {
             (
                 "unfullscreen",
                 Box::new(|w, _| w.toplevel.unset_fullscreen()),
-                (398, 566),
+                (398, 564),
             ),
             (
                 "tile",
@@ -268,12 +268,12 @@ fn the_maximize_button_toggles_the_top_zone_and_restores() {
         floating(&server, 1);
         c.roundtrip();
         c.ack_and_commit(&w);
-        // Maximize: the second button, at (133, 101) + 32x32 from the outer corner.
+        // Maximize: the second button, at (135, 101) + 34x34 from the outer corner.
         click(&server, 150.0, 116.0);
         c.roundtrip();
         let config = c.config(&w).expect("configured");
         // The whole output: the bar, no border (all edges on the output boundary).
-        assert_eq!((config.size, config.maximized), ((798, 566), true));
+        assert_eq!((config.size, config.maximized), ((798, 564), true));
         server.on_server(|h| {
             assert_eq!(h.rect_of(1), Some(AREA));
             assert_eq!(
@@ -281,7 +281,7 @@ fn the_maximize_button_toggles_the_top_zone_and_restores() {
                 Some(ZoneId::FULL)
             );
         });
-        // Again (the button is now at (33, 1)): restored.
+        // Again (the button is now at (35, 1)): restored.
         click(&server, 50.0, 16.0);
         c.roundtrip();
         assert!(!c.config(&w).expect("configured").maximized);
@@ -295,6 +295,49 @@ fn the_maximize_button_toggles_the_top_zone_and_restores() {
         server.on_server(|h| assert_eq!(h.rect_of(1), Some(AREA)));
         click(&server, 50.0, 16.0);
         server.on_server(|h| assert_eq!(h.rect_of(1), Some(FLOAT), "the pre-snap rectangle"));
+    });
+}
+
+/// The slot reserved for minimize (E5, owner M18b): no button, no hover square and no
+/// action of its own; it is bar: a click focuses and raises, a drag moves the window.
+#[test]
+fn the_reserved_slot_is_bar() {
+    let mut harness = Harness::new();
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let (mut c, w, _d) = decorated(&socket, None);
+        floating(&server, 1);
+        c.roundtrip();
+        c.ack_and_commit(&w);
+        // The third slot: x 169..203 (bar from 101, 34 px slots), below the top zone.
+        let (x, y) = (186.0, 120.0);
+        server.on_server(move |h| {
+            let at = (x, y).into();
+            assert_eq!(
+                h.server.state.decoration_at(at),
+                Some((WindowId(1), crate::layout::decor::Part::Bar))
+            );
+            h.pointer_to(x, y);
+            let look = h.server.state.decoration_look(WindowId(1), true);
+            assert_eq!(look.hover, None, "no hover square");
+        });
+        click(&server, x, y);
+        c.roundtrip();
+        assert!(!c.events.close_requested, "not close");
+        server.on_server(move |h| {
+            assert_eq!(h.rect_of(1), Some(FLOAT), "not maximize, not moved");
+            assert!(!h.server.state.windows.layout.is_maximized(WindowId(1)));
+            assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(1)));
+            // A drag from it moves the window.
+            h.pointer_to(x, y);
+            h.button(BTN_LEFT, ButtonState::Pressed);
+            assert!(h.pointer_grabbed(), "a move grab");
+            h.pointer_to(x + 30.0, y + 20.0);
+            h.button(BTN_LEFT, ButtonState::Released);
+            assert_eq!(h.rect_of(1), Some(Rect::new(130, 120, 400, 300)));
+        });
+        c.roundtrip();
+        assert_eq!(c.events.buttons_pressed, Vec::<u32>::new());
     });
 }
 
@@ -374,13 +417,13 @@ fn resize_from_each_zone_with_min_and_max() {
                 h.server.state.arrange();
             });
         }
-        // Max width 500 (outer 502) and min height 100 (outer 134 with the bar).
+        // Max width 500 (outer 502) and min height 100 (outer 136 with the bar).
         server.on_server(move |h| {
             h.pointer_to(r as f64, b as f64);
             h.button(BTN_LEFT, ButtonState::Pressed);
             h.pointer_to(r as f64 + 250.0, b as f64 - 280.0);
             h.button(BTN_LEFT, ButtonState::Released);
-            assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 502, 134)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(100, 100, 502, 136)));
         });
         // Leaving the zone for the client area: the client's cursor rules again
         // (the arrow until it sets one).
@@ -489,7 +532,7 @@ fn popups_over_the_bar_and_client_requests() {
         floating(&server, 1);
         c.roundtrip();
         c.ack_and_commit(&w);
-        // The client area starts at (101, 133); a 50x40 popup 30 px above it reaches
+        // The client area starts at (101, 135); a 50x40 popup 30 px above it reaches
         // over the bar and the close button.
         let spec = PopupSpec {
             anchor_rect: (10, -40, 10, 10),
@@ -562,7 +605,7 @@ fn snap_bands_trigger_at_the_true_output_edge() {
         c.roundtrip();
         c.ack_and_commit(&w);
         // The client area starts inside the border on the output edge (owner, M18a).
-        assert_eq!(size(&c, &w), (398, 566));
+        assert_eq!(size(&c, &w), (398, 564));
         server.on_server(|h| h.pointer_to(1.0, 300.0));
         c.roundtrip();
         assert_eq!(

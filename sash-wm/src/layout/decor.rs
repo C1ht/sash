@@ -10,20 +10,27 @@
 
 use super::{Edges, Rect, SizeLimits};
 
-/// Height of the bar.
-pub const BAR: i32 = 32;
-/// Width of the border on every side.
+/// Height of the bar (owner, M18b: 34).
+pub const BAR: i32 = 34;
+/// Width of the border (the outline) on every side.
 pub const BORDER: i32 = 1;
-/// A button's hit area is BUTTON x BUTTON, starting at the bar's corner.
-pub const BUTTON: i32 = 32;
-/// Size of the glyph drawn in a button.
-pub const GLYPH: i32 = 12;
+/// A button's hit area is BUTTON x BUTTON, starting at the bar's corner (34).
+pub const BUTTON: i32 = 34;
+/// Size of the glyph drawn in a button (15), and its stroke (2).
+pub const GLYPH: i32 = 15;
+pub const GLYPH_STROKE: i32 = 2;
+/// The square a hovered button shows behind its glyph: 21 px, radius 5.
+pub const HOVER_SQUARE: i32 = 21;
+pub const HOVER_RADIUS: i32 = 5;
+/// Button slots: close, maximize, and the one reserved for minimize (E5), which has
+/// no button yet and is bar.
+pub const SLOTS: i32 = 3;
+/// Between the slots and the title's area.
+pub const TITLE_MARGIN: i32 = 8;
 /// A resize zone reaches this far inside the border.
 pub const ZONE: i32 = 6;
 /// A corner zone is CORNER x CORNER from the outer corner.
 pub const CORNER: i32 = 16;
-/// Space before and after the title (owner, M15).
-pub const TITLE_PADDING: i32 = 12;
 
 /// Which end of the bar holds the buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,17 +148,21 @@ impl Decoration {
         ))
     }
 
-    /// Where the title goes: the bar after the buttons, less TITLE_PADDING on both
-    /// sides (the right one is where the title's ellipsis stops). None without a bar
-    /// or when no width is left. Part of the bar for hit-testing (the drag handle).
+    /// Where the title goes (owner, M18b): the bar less SLOTS x BUTTON + TITLE_MARGIN
+    /// on BOTH sides, so a short title is centred on the bar and adding a button to
+    /// the reserved slot moves nothing. None without a bar or when no width is left.
+    /// Part of the bar for hit-testing (the drag handle).
     pub fn title_rect(self, outer: Rect) -> Option<Rect> {
         let bar = self.bar_rect(outer)?;
-        let buttons = BUTTONS.len() as i32 * BUTTON;
-        let (left, right) = match BUTTON_SIDE {
-            Side::Left => (bar.x + buttons + TITLE_PADDING, bar.right() - TITLE_PADDING),
-            Side::Right => (bar.x + TITLE_PADDING, bar.right() - buttons - TITLE_PADDING),
-        };
+        let reserve = SLOTS * BUTTON + TITLE_MARGIN;
+        let (left, right) = (bar.x + reserve, bar.right() - reserve);
         (right > left).then(|| Rect::new(left, bar.y, right - left, bar.h))
+    }
+
+    /// The slot reserved for minimize (E5): no button, no glyph; it is bar.
+    #[cfg(test)]
+    pub fn reserved_rect(self, outer: Rect) -> Option<Rect> {
+        self.slot_rect(outer, BUTTONS.len() as i32, BUTTON_SIDE)
     }
 
     /// A button's hit area, clipped to the bar.
@@ -160,8 +171,12 @@ impl Decoration {
     }
 
     fn button_rect_on(self, outer: Rect, button: Button, side: Side) -> Option<Rect> {
-        let bar = self.bar_rect(outer)?;
         let index = BUTTONS.iter().position(|b| *b == button)? as i32;
+        self.slot_rect(outer, index, side)
+    }
+
+    fn slot_rect(self, outer: Rect, index: i32, side: Side) -> Option<Rect> {
+        let bar = self.bar_rect(outer)?;
         let x = match side {
             Side::Left => bar.x + index * BUTTON,
             Side::Right => bar.right() - (index + 1) * BUTTON,
@@ -258,17 +273,17 @@ mod tests {
 
     #[test]
     fn inner_rect_and_sizes() {
-        assert_eq!(Decoration::FULL.inner(OUTER), Rect::new(101, 133, 398, 266));
+        assert_eq!(Decoration::FULL.inner(OUTER), Rect::new(101, 135, 398, 264));
         assert_eq!(
             Decoration::BORDER.inner(OUTER),
             Rect::new(101, 101, 398, 298)
         );
         assert_eq!(Decoration::NONE.inner(OUTER), OUTER);
-        assert_eq!(Decoration::FULL.outer_size((398, 266)), (400, 300));
-        assert_eq!(Decoration::FULL.client_size((400, 300)), (398, 266));
+        assert_eq!(Decoration::FULL.outer_size((398, 264)), (400, 300));
+        assert_eq!(Decoration::FULL.client_size((400, 300)), (398, 264));
         // Barely larger than bar plus borders, and smaller: the client gets 1x1 at least.
-        assert_eq!(Decoration::FULL.client_size((3, 35)), (1, 1));
-        assert_eq!(Decoration::FULL.client_size((2, 34)), (1, 1));
+        assert_eq!(Decoration::FULL.client_size((3, 37)), (1, 1));
+        assert_eq!(Decoration::FULL.client_size((2, 36)), (1, 1));
         assert_eq!(Decoration::FULL.inner(Rect::new(0, 0, 2, 20)).w, 0);
         let limits = SizeLimits {
             min: (0, 100),
@@ -277,7 +292,7 @@ mod tests {
         assert_eq!(
             Decoration::FULL.outer_limits(limits),
             SizeLimits {
-                min: (3, 134),
+                min: (3, 136),
                 max: (502, 0)
             }
         );
@@ -294,27 +309,29 @@ mod tests {
         let d = Decoration::FULL;
         assert_eq!(
             d.button_rect(OUTER, Button::Close),
-            Some(Rect::new(101, 101, 32, 32))
+            Some(Rect::new(101, 101, 34, 34))
         );
         assert_eq!(
             d.button_rect(OUTER, Button::Maximize),
-            Some(Rect::new(133, 101, 32, 32))
+            Some(Rect::new(135, 101, 34, 34))
         );
+        // The reserved third slot (minimize, E5) follows.
+        assert_eq!(d.reserved_rect(OUTER), Some(Rect::new(169, 101, 34, 34)));
         assert_eq!(Decoration::BORDER.button_rect(OUTER, Button::Close), None);
         // With the side constant set to Right: close in the right corner, then maximize.
         assert_eq!(
             d.button_rect_on(OUTER, Button::Close, Side::Right),
-            Some(Rect::new(467, 101, 32, 32))
+            Some(Rect::new(465, 101, 34, 34))
         );
         assert_eq!(
             d.button_rect_on(OUTER, Button::Maximize, Side::Right),
-            Some(Rect::new(435, 101, 32, 32))
+            Some(Rect::new(431, 101, 34, 34))
         );
         // A window narrower than two buttons clips the second.
         let narrow = Rect::new(0, 0, 50, 100);
         assert_eq!(
             d.button_rect(narrow, Button::Maximize),
-            Some(Rect::new(33, 1, 16, 32))
+            Some(Rect::new(35, 1, 14, 34))
         );
     }
 
@@ -327,9 +344,12 @@ mod tests {
         // Buttons win over the top-left corner and the top zone.
         assert_eq!(hit(101, 101), Some(Part::Button(Button::Close)));
         assert_eq!(hit(110, 105), Some(Part::Button(Button::Close)));
-        assert_eq!(hit(132, 132), Some(Part::Button(Button::Close)));
-        assert_eq!(hit(133, 101), Some(Part::Button(Button::Maximize)));
-        assert_eq!(hit(164, 132), Some(Part::Button(Button::Maximize)));
+        assert_eq!(hit(134, 134), Some(Part::Button(Button::Close)));
+        assert_eq!(hit(135, 101), Some(Part::Button(Button::Maximize)));
+        assert_eq!(hit(168, 134), Some(Part::Button(Button::Maximize)));
+        // The reserved slot is bar (below the top zone): no button, no action.
+        assert_eq!(hit(169, 120), Some(Part::Bar));
+        assert_eq!(hit(202, 134), Some(Part::Bar));
         // The outer border pixel at the top-left is not a button: it is the corner.
         assert_eq!(
             hit(100, 100),
@@ -359,8 +379,8 @@ mod tests {
             Some(Part::Resize(edges(false, true, false, false)))
         );
         assert_eq!(hit(300, 107), Some(Part::Bar));
-        assert_eq!(hit(300, 132), Some(Part::Bar));
-        assert_eq!(hit(300, 133), None, "client area under the bar");
+        assert_eq!(hit(300, 134), Some(Part::Bar));
+        assert_eq!(hit(300, 135), None, "client area under the bar");
         // The other three corners and edges.
         assert_eq!(
             hit(499, 100),
@@ -473,8 +493,8 @@ mod tests {
         for (w, h) in [
             (0, 0),
             (1, 1),
-            (2, 34),
-            (3, 35),
+            (2, 36),
+            (3, 37),
             (10, 10),
             (40, 40),
             (70, 34),
@@ -487,31 +507,34 @@ mod tests {
             }
         }
         assert_eq!(
-            d.hit(Rect::new(0, 0, 3, 35), Edges::ALL, AREA, 1, 20),
+            d.hit(Rect::new(0, 0, 3, 37), Edges::ALL, AREA, 1, 20),
             Some(Part::Button(Button::Close))
         );
     }
 
     #[test]
-    fn the_title_follows_the_buttons_with_padding_and_is_part_of_the_bar() {
+    fn the_title_area_reserves_three_slots_and_8_px_on_both_sides() {
         let d = Decoration::FULL;
-        // Bar inside the 1 px border: x 101..499; buttons 101..165; title 177..487.
-        assert_eq!(d.title_rect(OUTER), Some(Rect::new(177, 101, 310, BAR)));
-        for x in [177, 300, 486] {
+        // Bar inside the 1 px outline: x 101..499; 3 x 34 + 8 = 110 off both ends.
+        assert_eq!(d.title_rect(OUTER), Some(Rect::new(211, 101, 178, BAR)));
+        for x in [211, 300, 388] {
             assert_eq!(d.hit(OUTER, Edges::NONE, AREA, x, 120), Some(Part::Bar));
         }
-        // Narrow windows: the title shrinks to nothing, never negative.
-        for w in [0, 1, 10, 66, 89, 90, 91, 200] {
+        // Narrow windows: the title shrinks to nothing, never negative; its centre is
+        // always the bar's.
+        for w in [0, 1, 10, 66, 221, 222, 223, 224, 225, 400, 1001] {
             let outer = Rect::new(0, 0, w, 100);
             if let Some(t) = d.title_rect(outer) {
                 assert!(
-                    t.w > 0 && t.x >= 1 + 2 * BUTTON + TITLE_PADDING,
+                    t.w > 0 && t.x == 1 + 3 * BUTTON + TITLE_MARGIN,
                     "{w}: {t:?}"
                 );
-                assert_eq!(t.right(), outer.right() - 1 - TITLE_PADDING, "{w}");
+                assert_eq!(t.right(), outer.right() - 1 - 3 * BUTTON - TITLE_MARGIN);
+                let bar = d.bar_rect(outer).unwrap();
+                assert_eq!(t.x - bar.x, bar.right() - t.right(), "{w}: centred");
             }
         }
-        assert_eq!(d.title_rect(Rect::new(0, 0, 90, 100)), None);
+        assert_eq!(d.title_rect(Rect::new(0, 0, 222, 100)), None);
         assert_eq!(
             Decoration::BORDER.title_rect(OUTER),
             None,

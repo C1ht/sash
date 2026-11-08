@@ -39,6 +39,7 @@ mod cursor_theme;
 mod data_device;
 mod decorations;
 mod dmabuf;
+mod glyphs;
 mod grab;
 mod keybinds;
 mod layer_shell;

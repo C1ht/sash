@@ -112,6 +112,11 @@ pub struct Sash {
     pub decorations: crate::decorations::Decorations,
     /// Window titles for the bars (titles.rs).
     pub titles: crate::titles::Titles,
+    /// The appearance setting (owner, M18b); until the settings protocol exists, a value
+    /// here. Every colour comes from its theme.
+    pub appearance: sash_theme::Appearance,
+    /// The inactive dim, one of the effect toggles (owner, M18b: default on).
+    pub dim: bool,
     /// Privileged connections (trust.rs).
     pub trust: crate::trust::Trust,
     pub keybinds: Keybinds,
@@ -140,6 +145,11 @@ pub struct Sash {
 }
 
 impl Sash {
+    /// The theme of the current appearance.
+    pub fn theme(&self) -> &'static sash_theme::Theme {
+        sash_theme::Theme::of(self.appearance.mode())
+    }
+
     pub fn new(
         display_handle: DisplayHandle,
         loop_signal: LoopSignal,
@@ -176,6 +186,8 @@ impl Sash {
             overlay: Overlay::new(),
             decorations: crate::decorations::Decorations::new(),
             titles: Default::default(),
+            appearance: sash_theme::Appearance::default(),
+            dim: true,
             trust: crate::trust::Trust::new(&loop_handle),
             keybinds: Keybinds::new(modifier, socket_name),
             started,

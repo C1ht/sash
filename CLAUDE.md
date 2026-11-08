@@ -196,7 +196,9 @@ change this file without the owner's approval.
   the rest of the bar), so the title does not move when E5 adds it.
 - Glyphs and the title: the text token when the window is focused, the
   secondary token when not (white 92% / 62% dark; #1B2126 / #5A636A
-  light), also on a hovered button.
+  light). A hovered button's glyph is the text token in both states (the
+  secondary token on the close square is 2.07:1 dark and 1.80:1 light,
+  under 3:1; found by the contrast test, for the owner to confirm).
 - The title is untrusted text (sash-text's client text): Manrope 13 px,
   weight 500 focused and 400 not, centred in the width left after
   reserving 3 x 34 + 8 px on BOTH sides of the bar, cut with an ellipsis,
