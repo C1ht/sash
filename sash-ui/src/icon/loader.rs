@@ -2,7 +2,7 @@
 
 //! Loading icons: first-party symbols, theme icons by name, checked absolute paths.
 //! Every result is cached by source and size; every failure (no file, a file too
-//! large, hostile or over its time budget) gives the fallback icon and is remembered,
+//! large, hostile or over its work budget) gives the fallback icon and is remembered,
 //! so it is not tried again in the session.
 //!
 //! The system loader reads /usr/share/icons and /usr/share/pixmaps only (owner, M17
@@ -25,7 +25,7 @@ use super::{
     lookup::{Themes, read_capped},
     name::{IconName, IconPath},
     png::{self, MAX_PNG_BYTES},
-    svg::{self, BUDGET, MAX_SVG_BYTES},
+    svg::{self, GUARD, MAX_SVG_BYTES},
     symbols::Symbol,
 };
 
@@ -82,14 +82,15 @@ impl IconLoader {
             themes: Themes::new(icons, pixmaps),
             theme: theme.to_string(),
             require_root,
-            budget: BUDGET,
+            budget: GUARD,
             cache: IconCache::new(CACHE_BYTES),
             failed: HashSet::new(),
             stats: Stats::default(),
         }
     }
 
-    /// The time budget for parsing and for drawing one SVG (tests lower it).
+    /// The wall-clock guard for parsing and for drawing one SVG (tests lower it); the
+    /// work budget is in `svg`.
     pub fn set_budget(&mut self, budget: Duration) {
         self.budget = budget;
     }

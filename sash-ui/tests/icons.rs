@@ -427,7 +427,7 @@ fn names_and_paths_never_print() {
 // ---- SVG ----
 
 fn svg_err(text: &str) -> SvgError {
-    svg::render(text.as_bytes(), 24, svg::BUDGET).expect_err("refused")
+    svg::render(text.as_bytes(), 24, svg::GUARD).expect_err("refused")
 }
 
 const HEAD: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">"#;
@@ -509,16 +509,62 @@ fn hostile_svg_files_are_refused() {
     assert_eq!(svg_err(&too_many_uses), SvgError::UseExpansion);
     assert_eq!(svg_err("not svg at all"), SvgError::Xml);
     assert_eq!(
-        svg::render(&[0xff, 0xfe, 0x00], 24, svg::BUDGET).unwrap_err(),
+        svg::render(&[0xff, 0xfe, 0x00], 24, svg::GUARD).unwrap_err(),
         SvgError::NotUtf8
     );
-    // Over the time budget.
+    // Over the wall-clock guard (a zero guard; the real one is a generous backstop).
     let ok = format!("{HEAD}<circle cx=\"12\" cy=\"12\" r=\"9\"/></svg>");
     assert_eq!(
         svg::render(ok.as_bytes(), 24, Duration::ZERO).unwrap_err(),
         SvgError::OverBudget
     );
-    assert!(svg::render(ok.as_bytes(), 24, svg::BUDGET).is_ok());
+    assert!(svg::render(ok.as_bytes(), 24, svg::GUARD).is_ok());
+}
+
+/// The work budget (owner, M18c) is deterministic: past a cap a file is refused as over
+/// budget whatever the machine's load, even with no wall-clock guard at all, and a file
+/// just inside the caps draws.
+#[test]
+fn the_work_budget_is_deterministic() {
+    let unlimited = Duration::from_secs(3600);
+    let over = [
+        (
+            "path segments",
+            format!(
+                "{HEAD}<path d=\"M0 0{}\"/></svg>",
+                "L1 1".repeat(svg::MAX_PATH_SEGMENTS)
+            ),
+        ),
+        (
+            "layers",
+            format!(
+                "{HEAD}{}</svg>",
+                "<g opacity=\"0.5\"><rect width=\"1\" height=\"1\"/></g>"
+                    .repeat(svg::MAX_LAYERS + 1)
+            ),
+        ),
+        (
+            "filter primitives",
+            format!(
+                "{HEAD}<filter id=\"f\">{}</filter><rect width=\"9\" height=\"9\" filter=\"url(#f)\"/></svg>",
+                "<feFlood flood-color=\"red\"/>".repeat(svg::MAX_FILTER_PRIMITIVES + 1)
+            ),
+        ),
+    ];
+    for (what, text) in &over {
+        for guard in [svg::GUARD, unlimited] {
+            assert_eq!(
+                svg::render(text.as_bytes(), 24, guard).err(),
+                Some(SvgError::OverBudget),
+                "{what}"
+            );
+        }
+    }
+    let inside = format!(
+        "{HEAD}<path d=\"M0 0{}\"/></svg>",
+        "L1 1".repeat(svg::MAX_PATH_SEGMENTS - 1)
+    );
+    assert!(svg::render(inside.as_bytes(), 24, svg::GUARD).is_ok());
 }
 
 #[test]
@@ -531,7 +577,7 @@ fn extreme_geometry_never_crashes() {
         r#"<rect width="1e30" height="1e30" transform="rotate(45)"/>"#,
         r#"<g transform="translate(1e9 0)"><rect width="1" height="1"/></g>"#,
     ] {
-        let result = svg::render(format!("{HEAD}{body}</svg>").as_bytes(), 24, svg::BUDGET);
+        let result = svg::render(format!("{HEAD}{body}</svg>").as_bytes(), 24, svg::GUARD);
         assert_eq!(result.err(), Some(SvgError::BadSize), "{body}");
     }
 }
@@ -542,7 +588,7 @@ fn text_in_an_svg_reads_no_font() {
     let text = format!(
         "{HEAD}<text x=\"2\" y=\"20\" font-family=\"url(#x)\" font-size=\"20\">Hi</text></svg>"
     );
-    let pixmap = svg::render(text.as_bytes(), 24, svg::BUDGET).expect("renders");
+    let pixmap = svg::render(text.as_bytes(), 24, svg::GUARD).expect("renders");
     assert!(pixmap.data().iter().all(|&b| b == 0));
 }
 
@@ -817,7 +863,7 @@ fn system_adwaita_icons_load_where_installed() {
 
 fn fuzz_one(bytes: &[u8]) {
     let _ = index::parse(bytes);
-    let _ = svg::render(bytes, 16, svg::BUDGET);
+    let _ = svg::render(bytes, 16, svg::GUARD);
     let _ = png::render(bytes, 16);
     let _ = IconName::parse(bytes);
     let _ = IconPath::check(bytes, &[PathBuf::from("/nonexistent")], true);
@@ -851,7 +897,7 @@ proptest! {
 
     #[test]
     fn no_svgish_input_panics(text in svgish()) {
-        let _ = svg::render(text.as_bytes(), 24, svg::BUDGET);
+        let _ = svg::render(text.as_bytes(), 24, svg::GUARD);
     }
 }
 
@@ -878,7 +924,7 @@ fn long_fuzz() {
     });
     runner
         .run(&svgish(), |t| {
-            let _ = svg::render(t.as_bytes(), 24, svg::BUDGET);
+            let _ = svg::render(t.as_bytes(), 24, svg::GUARD);
             Ok(())
         })
         .expect("svg");
@@ -905,7 +951,7 @@ fn measure_icon_costs() {
         for _ in 0..20 {
             for symbol in Symbol::ALL {
                 let t = Instant::now();
-                svg::render(symbol.svg(), px, svg::BUDGET).expect("renders");
+                svg::render(symbol.svg(), px, svg::GUARD).expect("renders");
                 times.push(t.elapsed());
             }
         }
@@ -1000,7 +1046,7 @@ fn survey_system_svgs() {
     for f in &files {
         let Ok(bytes) = fs::read(f) else { continue };
         let t = Instant::now();
-        let result = svg::render(&bytes, 48, svg::BUDGET);
+        let result = svg::render(&bytes, 48, svg::GUARD);
         slowest = slowest.max(t.elapsed());
         let theme = f
             .strip_prefix("/usr/share/icons")

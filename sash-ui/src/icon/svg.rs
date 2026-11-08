@@ -14,8 +14,13 @@
 //!
 //! usvg then gets resolvers that load nothing and no resource directory; sash-ui
 //! builds it without text, so no font is ever read. A canvas with a side beyond
-//! [`MAX_SVG_SIDE`] (or none) is refused. Parsing and drawing are each timed against a
-//! budget (owner, M17 E3): the caps bound the work, the budget catches what they miss.
+//! [`MAX_SVG_SIDE`] (or none) is refused. The work is budgeted deterministically (owner,
+//! M18c): the converted tree may hold at most [`MAX_TREE_NODES`] nodes,
+//! [`MAX_PATH_SEGMENTS`] path segments, [`MAX_LAYERS`] isolated layers and
+//! [`MAX_FILTER_PRIMITIVES`] filter primitives (clip paths and masks counted too), so
+//! the same file gives the same answer on any machine under any load. Parsing and
+//! drawing are also timed, against [`GUARD`] only: a generous backstop that a loaded
+//! machine never reaches for anything the work budget lets through.
 //! Drawn geometry beyond [`MAX_GEOMETRY`] is refused (tiny-skia indexes past its
 //! buffer on a circle of radius 1e30, found by the fuzz-style tests), and a panic
 //! inside usvg or resvg is still caught and becomes an error.
@@ -37,8 +42,13 @@ pub const MAX_USES: usize = 16;
 pub const MAX_SVG_SIDE: f32 = 16_384.0;
 /// Drawn geometry stays within this many units of the origin.
 pub const MAX_GEOMETRY: f32 = 65_536.0;
-/// For parsing, and again for drawing.
-pub const BUDGET: Duration = Duration::from_millis(50);
+/// The work budget of the converted tree (owner, M18c).
+pub const MAX_TREE_NODES: usize = 20_000;
+pub const MAX_PATH_SEGMENTS: usize = 50_000;
+pub const MAX_LAYERS: usize = 64;
+pub const MAX_FILTER_PRIMITIVES: usize = 16;
+/// The wall-clock guard, for parsing and again for drawing: generous, a backstop only.
+pub const GUARD: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SvgError {
@@ -70,8 +80,67 @@ const FORBIDDEN: [&str; 8] = [
     "iframe",
 ];
 
+/// What drawing a tree costs, counted (the work budget).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Work {
+    pub nodes: usize,
+    pub segments: usize,
+    pub layers: usize,
+    pub filter_primitives: usize,
+}
+
+impl Work {
+    /// Counts `root` and everything under it, clip paths and masks included.
+    pub fn of(root: &usvg::Group) -> Self {
+        let mut work = Work::default();
+        let mut groups = vec![root];
+        while let Some(group) = groups.pop() {
+            work.nodes += 1;
+            if group.should_isolate() {
+                work.layers += 1;
+            }
+            work.filter_primitives += group
+                .filters()
+                .iter()
+                .map(|f| f.primitives().len())
+                .sum::<usize>();
+            if let Some(clip) = group.clip_path() {
+                groups.push(clip.root());
+            }
+            let mut mask = group.mask();
+            while let Some(m) = mask {
+                groups.push(m.root());
+                mask = m.mask();
+            }
+            for child in group.children() {
+                match child {
+                    usvg::Node::Group(g) => groups.push(g),
+                    usvg::Node::Path(path) => {
+                        work.nodes += 1;
+                        work.segments += path.data().verbs().len();
+                    }
+                    _ => work.nodes += 1,
+                }
+            }
+            // Never count past what is refused anyway.
+            if !work.within_budget() {
+                break;
+            }
+        }
+        work
+    }
+
+    pub fn within_budget(&self) -> bool {
+        self.nodes <= MAX_TREE_NODES
+            && self.segments <= MAX_PATH_SEGMENTS
+            && self.layers <= MAX_LAYERS
+            && self.filter_primitives <= MAX_FILTER_PRIMITIVES
+    }
+}
+
 /// Draws `bytes` into a `px` x `px` pixmap (premultiplied RGBA), fitted and centred.
-pub fn render(bytes: &[u8], px: u32, budget: Duration) -> Result<Pixmap, SvgError> {
+/// `guard` is the wall-clock backstop ([`GUARD`]); the work budget decides.
+pub fn render(bytes: &[u8], px: u32, guard: Duration) -> Result<Pixmap, SvgError> {
     if bytes.len() > MAX_SVG_BYTES {
         return Err(SvgError::TooLarge);
     }
@@ -100,9 +169,6 @@ pub fn render(bytes: &[u8], px: u32, budget: Duration) -> Result<Pixmap, SvgErro
     let tree = catch_unwind(AssertUnwindSafe(|| usvg::Tree::from_xmltree(&doc, &opt)))
         .map_err(|_| SvgError::Panicked)?
         .map_err(|_| SvgError::Convert)?;
-    if started.elapsed() > budget {
-        return Err(SvgError::OverBudget);
-    }
     let size = tree.size();
     let (w, h) = (size.width(), size.height());
     let ok = |v: f32| v.is_finite() && v > 0.0 && v <= MAX_SVG_SIDE;
@@ -116,6 +182,13 @@ pub fn render(bytes: &[u8], px: u32, budget: Duration) -> Result<Pixmap, SvgErro
     let near = |v: f32| v.is_finite() && v.abs() <= MAX_GEOMETRY;
     if !(near(b.left()) && near(b.top()) && near(b.right()) && near(b.bottom())) {
         return Err(SvgError::BadSize);
+    }
+    // The deterministic checks first, then the guard.
+    if !Work::of(tree.root()).within_budget() {
+        return Err(SvgError::OverBudget);
+    }
+    if started.elapsed() > guard {
+        return Err(SvgError::OverBudget);
     }
     let px = px.clamp(1, super::MAX_ICON_PX);
     let mut pixmap = Pixmap::new(px, px).ok_or(SvgError::BadSize)?;
@@ -133,7 +206,7 @@ pub fn render(bytes: &[u8], px: u32, budget: Duration) -> Result<Pixmap, SvgErro
         resvg::render(&tree, transform, &mut pixmap.as_mut());
     }))
     .map_err(|_| SvgError::Panicked)?;
-    if drawing.elapsed() > budget {
+    if drawing.elapsed() > guard {
         return Err(SvgError::OverBudget);
     }
     Ok(pixmap)
