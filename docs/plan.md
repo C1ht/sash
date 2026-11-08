@@ -637,6 +637,16 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
   - **Placement:** a pure `drop_side` (diagonals plus a 23.6% centre zone, 50:50, the new window first on the left and top); the minimum of 233 x 144 on the visible rectangle through `gaps::visible`, trying the other axis, else floating. MIN_TILE (64) is replaced by MIN_TILE_SIZE plus the client's own minimum for tiled resizes.
   - **Drop into tiling:** a new interaction (today a dragged tile floats), its trigger for the owner.
 - **Steps:** M19a focus, M19b placement, M19c drop. Each with the standard checks, a report and a STOP.
+- **Owner answers (M19a brief):**
+  1. The centre zone is a box 23.6% wide by 23.6% tall, centred in the tile.
+  2. Focus moves on a real motion that ENTERS a window other than the focused one, from a window or from a gap. Re-entering a window after a keyboard focus move refocuses it.
+  3. Layer surfaces inside the usable area count as outside (the focused tile is used).
+  4. When the area shrinks below the minimum, the newest tiles float. They return only if untouched (not moved, resized or clicked while floating), and are never closed.
+  5. A drag that starts on a tile in a tiled-mode area re-tiles at the pointer, with a preview. Shift at release, or mod+F, floats instead (M19c).
+  6. The minimum is measured on the visible rectangle.
+  7. Send the xdg activated state with focus, in M19a.
+  8. A mod+Tab cycle holds focus against the pointer until mod is released and the first real motion after it.
+  - Also: pointer focus never raises and never ends fullscreen; raising happens on click only.
 - **Interim state (owner, M19 brief), until E5/E6:**
   - The rule that only user-started windows (an xdg-activation token from sash-shell) are placed at the pointer and take focus needs the shell. Until then every new tiled window is placed at the pointer and takes focus when it maps, as focus-at-map does today (M9e).
   - **Known risk, focus stealing:** a window the user did not start takes the keyboard when it maps. Examples: a client opening a second window by itself, a slow app mapping long after its launch, or anything that maps while the user types. Keys meant for the old window, passwords included, go to the new one, and the user's tile is split under the pointer without their asking.
