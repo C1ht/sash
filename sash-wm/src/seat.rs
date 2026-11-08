@@ -13,7 +13,7 @@ use smithay::{
         keyboard::{FilterResult, Keycode, Keysym},
         pointer::{AxisFrame, ButtonEvent, CursorImageStatus, GrabStartData, MotionEvent},
     },
-    reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
@@ -70,18 +70,19 @@ impl Sash {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        let mut focus = self.surface_at(location);
         // While a popup chain is grabbed, other clients get no pointer events.
-        if let Some(root) = self.popups.grab_root()
-            && focus
-                .as_ref()
-                .is_some_and(|(surface, _)| !surface.id().same_client_as(&root.id()))
-        {
-            focus = None;
-        }
+        let (after, focus) = self.pointer_hit(location);
         let previous = pointer.current_focus();
-        let moved = pointer.current_location() != location;
+        let from = pointer.current_location();
+        let moved = from != location;
+        // Focus follows the cursor: the window under the old position, at the current
+        // geometry (a window that slid under a still pointer is "before" too). The
+        // startup position is no position (as for rule A): the first motion enters.
+        let before = (moved && self.pointer_has_moved)
+            .then(|| self.window_before(from))
+            .flatten();
         self.pointer_has_moved |= moved;
+        self.note_pointer_target(after, focus.clone(), time_msec);
         let motion = MotionEvent {
             location,
             serial: SERIAL_COUNTER.next_serial(),
@@ -95,6 +96,9 @@ impl Sash {
         // After the focus change, which resets the cursor to the arrow.
         if !pointer.is_grabbed() {
             self.decoration_hover(location);
+        }
+        if moved {
+            self.pointer_crossed(before, after);
         }
         #[cfg(feature = "debug-record")]
         if let Some(recorder) = &self.recorder {
@@ -149,6 +153,7 @@ impl Sash {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        self.focus.note_key();
         let modifier = self.keybinds.modifier;
         let serial = SERIAL_COUNTER.next_serial();
         let focus = keyboard.current_focus();

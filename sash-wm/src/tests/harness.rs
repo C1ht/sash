@@ -109,6 +109,10 @@ impl Harness {
             .set_gaps(crate::layout::gaps::Gaps::NONE);
         // Likewise square corners (M15b step 2); the rounded-corner tests set a radius.
         server.state.windows.layout.set_radius(0);
+        // Likewise click-to-focus and no typing guard (M19a): tests written before move
+        // the pointer and type freely; the focus tests (tests/focus.rs) turn both on.
+        server.state.focus.follows_pointer = false;
+        server.state.focus.typing_guard = std::time::Duration::ZERO;
         let output = output::create(&mut server.state, "headless", (800, 600).into());
         server.state.set_layout_area((800, 600).into());
 

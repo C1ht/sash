@@ -41,6 +41,8 @@ impl CompositorHandler for Sash {
         }
         on_commit_buffer_handler::<Self>(surface);
         self.popups.manager.commit(surface);
+        // Any commit can change what is under the pointer (focus.rs).
+        self.focus.geometry_changed();
 
         let root = root_of(surface);
         if compositor::get_role(&root) == Some(XDG_POPUP_ROLE) {

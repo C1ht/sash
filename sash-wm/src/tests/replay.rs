@@ -170,8 +170,12 @@ fn snapshots(events: &[Json]) -> Vec<(String, Json)> {
             .unwrap_or("?")
             .to_string();
         let empty = matches!(after.get("windows"), Some(Json::Arr(w)) if w.is_empty());
-        // The gap is applied before the replay (see `replay`), not compared.
-        let mut snapshot = without_key(&without_key(&normalized(after, &ids), "gap"), "outer_gap");
+        // The gaps and the focus setting are applied before the replay (see `replay`),
+        // not compared.
+        let mut snapshot = without_key(
+            &without_key(&without_key(&normalized(after, &ids), "gap"), "outer_gap"),
+            "focus_follows_pointer",
+        );
         if op == "open window" {
             snapshot = without_focus(&snapshot);
         }
@@ -188,6 +192,12 @@ fn snapshots(events: &[Json]) -> Vec<(String, Json)> {
 
 /// Replays `bundle` (a directory with events.jsonl and state.json).
 pub fn replay(bundle: &Path) -> Result<Report, String> {
+    replay_with(bundle, None)
+}
+
+/// Replays `bundle`, with focus follows the cursor forced to `follows_pointer` instead
+/// of what the bundle recorded (to show that the setting matters).
+fn replay_with(bundle: &Path, force_follows_pointer: Option<bool>) -> Result<Report, String> {
     let events = events_of(bundle)?;
     let state = fs::read_to_string(bundle.join("state.json"))
         .ok()
@@ -244,6 +254,18 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
             .unwrap_or(0) as i32
     };
     let gaps = crate::layout::gaps::Gaps::new(recorded_gap("outer_gap"), recorded_gap("gap"));
+    // Focus follows the cursor as the session had it (owner, M19a): bundles from
+    // before M19 have no such field and were recorded with click-to-focus (off).
+    let follows_pointer = events
+        .iter()
+        .filter(|e| kind(e) == "layout")
+        .find_map(|e| {
+            e.get("after")
+                .and_then(|a| a.get("focus_follows_pointer"))
+                .and_then(Json::as_bool)
+        })
+        .unwrap_or(false);
+    let follows_pointer = force_follows_pointer.unwrap_or(follows_pointer);
     let before_decorations = !events
         .iter()
         .any(|e| kind(e) == "commit" && e.get("server_side").is_some());
@@ -261,6 +283,7 @@ pub fn replay(bundle: &Path) -> Result<Report, String> {
         let dir = replay_dir.clone();
         server.on_server(move |h| {
             h.server.state.windows.layout.set_gaps(gaps);
+            h.server.state.focus.follows_pointer = follows_pointer;
             h.server.state.set_layout_area((width, height).into());
             let config = Config {
                 dir,
@@ -601,6 +624,30 @@ fn the_owners_nvidia_session_replays() {
     assert!(started.elapsed() < Duration::from_secs(10), "under 10 s");
 }
 
+/// Bundles from before M19 carry no focus setting and replay with focus follows the
+/// cursor off, as they were recorded (owner, M19a). Forced on, the same pointer path
+/// gives other focus: the setting matters, so taking it from the bundle is needed.
+#[test]
+fn a_bundle_from_before_m19_replays_with_the_setting_off() {
+    let bundle = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/tests/fixtures/replay/nvidia-run4-20261103");
+    let events = fs::read_to_string(bundle.join("events.jsonl")).unwrap();
+    assert!(
+        !events.contains("focus_follows_pointer"),
+        "recorded before M19"
+    );
+    let off = replay(&bundle).unwrap();
+    assert!(off.mismatches.is_empty(), "{:#?}", off.mismatches);
+    let on = replay_with(&bundle, Some(true)).unwrap();
+    println!(
+        "forced on: {} of {} snapshots differ; first: {:?}",
+        on.mismatches.len(),
+        on.compared,
+        on.mismatches.first()
+    );
+    assert!(!on.mismatches.is_empty(), "the setting changes the replay");
+}
+
 /// The real-hardware fixtures hold only what the replay needs (owner, M9e): the listed
 /// event kinds, modifier keys only, and no app ids, titles, device names or typed keys,
 /// checked down to every field name.
@@ -614,7 +661,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "pointer_position",
         "key",
     ];
-    const FIELDS: [&str; 35] = [
+    const FIELDS: [&str; 36] = [
         "t_us",
         "kind",
         "op",
@@ -623,6 +670,7 @@ fn real_hardware_fixtures_hold_only_replay_data() {
         "output",
         "gap",
         "outer_gap",
+        "focus_follows_pointer",
         "focus",
         "windows",
         "tree",

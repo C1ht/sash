@@ -4,6 +4,7 @@
 //! default mode tiled, modifier Alt). Window ids are assigned in creation order.
 
 use smithay::backend::input::{ButtonState, KeyState};
+use wayland_client::Proxy;
 use wayland_protocols::xdg::shell::client::xdg_toplevel::ResizeEdge;
 
 use super::{
@@ -166,7 +167,10 @@ fn dialog_with_a_parent_opens_centered_over_it_and_floating() {
         dialog.toplevel.set_parent(Some(&parent.toplevel));
         dialog.preferred = (200, 100);
         dialog.surface.commit();
-        c.dispatch_until("the dialog's configure", |e| e.configures >= 3);
+        // Waits for the dialog's own configure (the parent's count changed with the
+        // activated state, M19a).
+        let id = dialog.toplevel.id();
+        c.dispatch_until("the dialog's configure", |e| e.configs.contains_key(&id));
         assert_eq!(
             c.config(&dialog),
             cfg((0, 0), false),

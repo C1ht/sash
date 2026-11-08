@@ -90,6 +90,7 @@ pub fn layout_json(state: &Sash) -> Json {
         ("output", vec![area.w.into(), area.h.into()].into()),
         ("gap", layout.gaps().inner.into()),
         ("outer_gap", layout.gaps().outer.into()),
+        ("focus_follows_pointer", state.focus.follows_pointer.into()),
         ("focus", layout.focused().into()),
         ("windows", windows(state)),
         ("tree", tree(state)),

@@ -588,6 +588,22 @@ impl MonitorLayout {
         true
     }
 
+    /// Focuses a window because the pointer entered it (owner, M19a): recorded as the
+    /// most recent, never raised, and never in place of a fullscreen window (pointer
+    /// focus never ends fullscreen). Returns whether focus changed.
+    pub fn pointer_focus(&mut self, window: WindowId) -> bool {
+        if !self.contains(window)
+            || self.focused == Some(window)
+            || self.fullscreen.is_some_and(|f| f != window)
+        {
+            return false;
+        }
+        self.focused = Some(window);
+        self.history.retain(|w| *w != window);
+        self.history.push(window);
+        true
+    }
+
     /// Focuses and raises a window without recording it in the history (while
     /// cycling with mod+Tab).
     pub fn preview_focus(&mut self, window: WindowId) -> bool {

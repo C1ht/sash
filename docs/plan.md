@@ -647,6 +647,37 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
   7. Send the xdg activated state with focus, in M19a.
   8. A mod+Tab cycle holds focus against the pointer until mod is released and the first real motion after it.
   - Also: pointer focus never raises and never ends fullscreen; raising happens on click only.
+- **Interim focus-steal guard (owner, M19a; replaced by xdg-activation tokens in E5):**
+  - A window that maps within 377 ms (`focus::TYPING_GUARD`) of keyboard input (any key press or release) maps unfocused and not activated. It keeps its place: the placement is unchanged.
+  - The owner may delete this step.
+- **M19a done, waiting for the owner (no tag).** `sash-wm/src/focus.rs`:
+  - **The rule:** one real motion that enters a window other than the focused one focuses it, from a window or a gap.
+    - The window under the old position is taken at the current geometry: the window found at the last motion, unless a layout change or any surface commit happened since (a generation counter), then a new hit test.
+    - The startup position counts as no position, as for rule A.
+  - **Holds:** a pointer grab (move, resize, drag and drop, a held button), a mod+click still held, a grabbed popup chain, a layer surface holding the keyboard, a mod+Tab cycle until mod is released and the first real motion after it.
+  - **Pointer focus** (`MonitorLayout::pointer_focus`) records history, never raises and never replaces a fullscreen window. It runs no arrange (no geometry changes): the keyboard, the activated state and a redraw follow.
+  - **The xdg activated state** is in every configure (`Sent::activated`): set on the window with keyboard focus (the layout's focus when no layer surface holds the keyboard), cleared on the others. `sync_keyboard_focus` sends it when it changes outside an arrange (a layer surface takes or gives back the keyboard, a mod+Tab step).
+  - **The pointer refresh:** after every arrange and window commit, an idle callback gives wl_pointer to the surface now under a still pointer (leave and enter, or a motion if its surface moved), with the hover and the cursor. It is not a real motion and never moves keyboard focus. It is skipped during grabs and before the pointer first moved.
+    - This fixes the old defect: a click without motion after a swap went to the surface that was there before.
+  - **The setting:** `Focus::follows_pointer`, default on. Debug builds only: SASH_DEBUG_FOCUS_FOLLOWS_POINTER=0 (absent from release, tools/check-release.sh).
+  - **Test harness:** starts with the setting off and no typing guard, as with gaps and radius.
+  - **Recorder and replay:** the recorder's layout snapshot carries `focus_follows_pointer`. A replay applies it, and bundles without it (before M19) replay with it off: the NVIDIA fixture matches 13 of 13; forced on, 11 of 13 differ.
+  - **Real clients** (tools/measure/run-activated.sh: the headless harness, foot showing only `sleep`, Firefox on about:blank through start_firefox with software rendering into wl_shm; the pictures stay in the scratchpad):
+
+| Client | Pointer focus (keyboard and activated) | Activated cleared, keyboard kept | Keyboard taken, activated kept |
+|---|---|---|---|
+| foot 1.28.0 (Arch) | cursor solid when focused, hollow when not (40 px) | nothing changes | cursor hollow (40 px) |
+| Firefox 159.0.1 (Arch, about:blank) | 49 364 px change in the top 80 rows | the inactive look: lighter tab strip, greyed toolbar icons (34 445 px, rows 0-73) | the address bar loses its focus ring (14 942 px, rows 48-79) |
+
+  - **Measured** (release, headless, 5120x1440, gaps 13/8, radius 13, 200 000 motions sweeping the output; `bench_pointer_focus`; target under 10 µs p99):
+
+| Scene | Every motion p50 / p95 / p99 | Motion without a focus change | Motion with a focus change |
+|---|---|---|---|
+| 10 tiled | 5.38 / 6.03 / 9.01 µs | 5.38 / 5.91 / 8.15 µs | 9.54 / 12.11 / 16.93 µs (n 1327) |
+| 10 floating | 3.91 / 4.32 / 6.72 µs | 3.90 / 4.24 / 5.70 µs | 7.05 / 9.16 / 11.32 µs (n 1327) |
+
+  - **Before the fixes:** a first version with two extra hit tests per motion and a full arrange per focus change measured 8.99 / 10.33 / 16.21 µs per motion (10 tiled) and 17.57 / 23.59 / 34.87 µs with a focus change. Today's code before M19a: 5.4 / 5.8 / 8.4 µs per motion.
+  - **Multi-monitor:** sash-wm has one output (hotplug of others is out of scope since M9), so there is no test. The rule uses global coordinates only.
 - **Interim state (owner, M19 brief), until E5/E6:**
   - The rule that only user-started windows (an xdg-activation token from sash-shell) are placed at the pointer and take focus needs the shell. Until then every new tiled window is placed at the pointer and takes focus when it maps, as focus-at-map does today (M9e).
   - **Known risk, focus stealing:** a window the user did not start takes the keyboard when it maps. Examples: a client opening a second window by itself, a slow app mapping long after its launch, or anything that maps while the user types. Keys meant for the old window, passwords included, go to the new one, and the user's tile is split under the pointer without their asking.

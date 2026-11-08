@@ -90,6 +90,8 @@ const FRAME_FALLBACK: Duration = Duration::from_millis(16);
 struct Sent {
     presentation: Presentation,
     resizing: bool,
+    /// The xdg activated state: the window has keyboard focus (owner, M19a).
+    activated: bool,
 }
 
 impl Sent {
@@ -192,6 +194,16 @@ impl Windows {
             .find(|m| is_toplevel_of(&m.window, surface))
     }
 
+    /// The windows whose last configure had the activated state (tests).
+    #[cfg(test)]
+    pub fn activated_for_tests(&self) -> Vec<WindowId> {
+        self.list
+            .iter()
+            .filter(|m| m.sent.is_some_and(|s| s.activated))
+            .map(|m| m.id)
+            .collect()
+    }
+
     pub fn by_id(&self, id: WindowId) -> Option<&Managed> {
         self.list.iter().find(|m| m.id == id)
     }
@@ -265,7 +277,7 @@ fn size_limits(surface: &WlSurface) -> SizeLimits {
 }
 
 /// A surface under the pointer and the global position of its origin.
-type SurfaceHit = (WlSurface, Point<f64, Logical>);
+pub type SurfaceHit = (WlSurface, Point<f64, Logical>);
 
 /// A window drawn on the output.
 pub struct Visible<'a> {
@@ -373,8 +385,15 @@ impl Sash {
                 record_context!(self, "map");
                 let geometry = window.geometry().size;
                 self.windows.layout.place(id, (geometry.w, geometry.h));
-                // A new window gets focus when it maps (the last one to map wins).
-                self.windows.layout.focus(id);
+                // A new window gets focus when it maps (the last one to map wins),
+                // unless keyboard input came in the last TYPING_GUARD (interim, until
+                // xdg-activation tokens, E5): then it maps unfocused in its place.
+                if self.focus.typing() {
+                    record!(self, "map_unfocused", "window" => id, "reason" => "typing");
+                    tracing::debug!(window = id.0, "mapped unfocused: keyboard input just now");
+                } else {
+                    self.windows.layout.focus(id);
+                }
                 changed = true;
             }
         } else if !has_buffer {
@@ -392,6 +411,7 @@ impl Sash {
         } else {
             // The window geometry may have changed with this commit.
             self.position(id);
+            self.schedule_pointer_refresh();
             self.request_redraw();
         }
     }
@@ -546,6 +566,7 @@ impl Sash {
     /// batch), moves mapped windows into place and updates keyboard focus.
     pub fn arrange(&mut self) {
         let ids: Vec<WindowId> = self.windows.list.iter().map(|m| m.id).collect();
+        let active = self.activated_window();
         for id in ids {
             // The size is None (client chooses) for floating windows without a
             // rectangle yet; tiles on tiny outputs can be 0 wide and are sent as 1.
@@ -555,6 +576,7 @@ impl Sash {
             let want = Sent {
                 presentation,
                 resizing: self.windows.resizing(id).is_some(),
+                activated: active == Some(id),
             };
             let managed = self.windows.by_id_mut(id).expect("listed");
             let toplevel = managed
@@ -596,6 +618,11 @@ impl Sash {
                         xdg_toplevel::State::Resizing,
                         want.resizing,
                     );
+                    set_state(
+                        &mut state.states,
+                        xdg_toplevel::State::Activated,
+                        want.activated,
+                    );
                 });
                 #[cfg_attr(not(feature = "debug-record"), expect(unused_variables))]
                 let serial = if toplevel.is_initial_configure_sent() {
@@ -612,6 +639,7 @@ impl Sash {
                     "maximized" => presentation.maximized,
                     "fullscreen" => presentation.fullscreen,
                     "resizing" => want.resizing,
+                    "activated" => want.activated,
                 );
             }
             self.position(id);
@@ -620,6 +648,8 @@ impl Sash {
         self.overlay.set_backdrop(backdrop);
         self.reconstrain_popups(false);
         self.sync_keyboard_focus();
+        // What is under a still pointer may have changed (it never changes focus).
+        self.schedule_pointer_refresh();
         self.request_redraw();
         #[cfg(feature = "debug-record")]
         if self.recorder.is_some() {
@@ -683,6 +713,34 @@ impl Sash {
                 );
             }
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+        }
+        self.sync_activated();
+    }
+
+    /// Sends the activated state where it changed outside `arrange` (a layer surface
+    /// took or gave back the keyboard, a mod+Tab step): set on the window with keyboard
+    /// focus, cleared on every other one.
+    fn sync_activated(&mut self) {
+        let active = self.activated_window();
+        for managed in &mut self.windows.list {
+            let Some(sent) = managed.sent.as_mut() else {
+                continue;
+            };
+            let want = active == Some(managed.id);
+            if sent.activated == want {
+                continue;
+            }
+            sent.activated = want;
+            let Some(toplevel) = managed.window.toplevel() else {
+                continue;
+            };
+            if !toplevel.is_initial_configure_sent() {
+                continue;
+            }
+            toplevel.with_pending_state(|state| {
+                set_state(&mut state.states, xdg_toplevel::State::Activated, want);
+            });
+            toplevel.send_pending_configure();
         }
     }
 
@@ -766,7 +824,7 @@ impl Sash {
     /// directly above it; those of tiled windows above every tiled window), then the
     /// window itself (tiled windows only inside their tile). Returns the window and
     /// the surface under the point with its origin.
-    fn hit(&self, location: Point<f64, Logical>) -> Option<(WindowId, Option<SurfaceHit>)> {
+    pub fn hit(&self, location: Point<f64, Logical>) -> Option<(WindowId, Option<SurfaceHit>)> {
         let (x, y) = (location.x.floor() as i32, location.y.floor() as i32);
         let layout = &self.windows.layout;
         let target = layout.window_at(x, y);
@@ -1229,6 +1287,8 @@ impl Sash {
     /// the most recent.
     pub fn commit_cycle(&mut self) {
         if self.keybinds.cycle.take().is_some() {
+            // The pointer stays held until its first real motion (owner, M19a).
+            self.focus.cycle_ended();
             self.windows.layout.commit_focus();
             self.arrange();
         }

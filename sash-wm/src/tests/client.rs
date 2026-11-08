@@ -106,7 +106,10 @@ pub struct Events {
     pub frames_done: u32,
     pub close_requested: bool,
     /// Per window: last configure (by xdg_toplevel) and its serial (by xdg_surface).
-    configs: HashMap<ObjectId, ToplevelConfig>,
+    pub configs: HashMap<ObjectId, ToplevelConfig>,
+    /// Per window (by xdg_toplevel): the activated state of its last configure, and
+    /// every value it had, in order (M19a).
+    pub activated: HashMap<ObjectId, Vec<bool>>,
     pub serials: HashMap<ObjectId, u32>,
     /// Serial of the last wl_pointer.button press, and all buttons pressed.
     pub button_serial: Option<u32>,
@@ -358,6 +361,15 @@ impl TestClient {
         window.surface.damage_buffer(0, 0, size.0, size.1);
         window.surface.commit();
         self.roundtrip();
+    }
+
+    /// Whether the last configure this window got had the activated state.
+    pub fn activated(&self, window: &TestWindow) -> bool {
+        self.events
+            .activated
+            .get(&window.toplevel.id())
+            .and_then(|v| v.last().copied())
+            .unwrap_or(false)
     }
 
     /// The last configure this window got.
@@ -946,6 +958,12 @@ impl Dispatch<XdgToplevel, ()> for Events {
                     fullscreen: states.contains(&2),
                 };
                 events.configs.insert(toplevel.id(), config);
+                // 4 is activated.
+                events
+                    .activated
+                    .entry(toplevel.id())
+                    .or_default()
+                    .push(states.contains(&4));
             }
             xdg_toplevel::Event::Close => events.close_requested = true,
             _ => {}

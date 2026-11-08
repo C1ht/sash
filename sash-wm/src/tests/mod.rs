@@ -9,6 +9,7 @@ mod decorations;
 mod dmabuf;
 mod dnd;
 mod floating;
+mod focus;
 mod gaps;
 mod gpu;
 mod harness;
@@ -17,6 +18,7 @@ mod limits;
 mod look;
 mod panel;
 mod popups;
+mod real_clients;
 #[cfg(feature = "debug-record")]
 mod record;
 mod reference;

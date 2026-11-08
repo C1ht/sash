@@ -164,12 +164,16 @@ fn drag_configures_are_batched_per_frame() {
         let w1 = c1.map_window();
         let mut c2 = TestClient::connect(&socket);
         let w2 = c2.map_window(); // 1 | 2
-        c1.roundtrip();
-        let configures = (c1.events.configures, c2.events.configures);
         server.on_server(|h| {
             h.key(ALT, KeyState::Pressed);
             h.pointer_to(300.0, 300.0); // center cell of 1: its right edge
             h.button(BTN_RIGHT, ButtonState::Pressed);
+        });
+        // The press focuses window 1: the activated state moves (M19a), at once.
+        c1.roundtrip();
+        c2.roundtrip();
+        let configures = (c1.events.configures, c2.events.configures);
+        server.on_server(|h| {
             // Three motions before the next frame.
             for x in [310.0, 320.0, 330.0] {
                 h.pointer_to(x, 300.0);

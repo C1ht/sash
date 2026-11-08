@@ -136,6 +136,8 @@ pub struct Sash {
     pub cursor_frames: crate::cursor::CursorFrames,
     /// The pointer has moved since startup; until then rule A ignores it.
     pub pointer_has_moved: bool,
+    /// Focus follows the cursor, the activated state, the pointer refresh (focus.rs).
+    pub focus: crate::focus::Focus,
     /// Tests: the display of each terminal the keybind asked for (no foot is started).
     #[cfg(test)]
     pub terminals_spawned: std::cell::RefCell<Vec<std::ffi::OsString>>,
@@ -199,6 +201,7 @@ impl Sash {
             draws_named_cursor: false,
             cursor_frames: Default::default(),
             pointer_has_moved: false,
+            focus: crate::focus::Focus::new(),
             #[cfg(test)]
             terminals_spawned: Default::default(),
             #[cfg(feature = "debug-record")]
