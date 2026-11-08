@@ -40,8 +40,12 @@ pub struct Focus {
     cycle_hold: bool,
     /// The typing guard's window (TYPING_GUARD; the test harness sets zero).
     pub typing_guard: Duration,
-    /// The last keyboard input (press or release, delivered or not).
+    /// The last keystroke delivered to a client (press or release; modifier keys
+    /// alone and compositor keybinds are not typing).
     last_key: Option<Instant>,
+    /// A keybind ran and no window has mapped since (nor was a key typed since): the
+    /// next window to map is exempt from the guard.
+    after_keybind: bool,
     /// The surface the pointer was last given and its origin, to find out whether a
     /// layout change moved what is under a still pointer.
     target: Option<SurfaceHit>,
@@ -64,6 +68,7 @@ impl Focus {
             cycle_hold: false,
             typing_guard: TYPING_GUARD,
             last_key: None,
+            after_keybind: false,
             target: None,
             last_time: 0,
             refresh_armed: false,
@@ -77,12 +82,27 @@ impl Focus {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    pub fn note_key(&mut self) {
-        self.last_key = Some(Instant::now());
+    /// A key event was delivered to a client: typing, unless it is a modifier key
+    /// (Alt and Super are delivered around every chord).
+    pub fn note_delivered(&mut self, sym: smithay::input::keyboard::Keysym) {
+        if !sym.is_modifier_key() {
+            self.last_key = Some(Instant::now());
+            self.after_keybind = false;
+        }
     }
 
-    /// Keyboard input arrived within the guard's window.
-    pub fn typing(&self) -> bool {
+    /// A compositor keybind ran (it launches or controls something; never typing).
+    pub fn note_keybind(&mut self) {
+        self.after_keybind = true;
+    }
+
+    /// A window maps: whether the guard keeps it unfocused. Keystrokes delivered to
+    /// clients within the guard's window count, except for the first window to map
+    /// after a keybind (with nothing typed since).
+    pub fn guard_on_map(&mut self) -> bool {
+        if std::mem::take(&mut self.after_keybind) {
+            return false;
+        }
         self.last_key
             .is_some_and(|at| at.elapsed() < self.typing_guard)
     }

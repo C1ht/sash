@@ -388,7 +388,7 @@ impl Sash {
                 // A new window gets focus when it maps (the last one to map wins),
                 // unless keyboard input came in the last TYPING_GUARD (interim, until
                 // xdg-activation tokens, E5): then it maps unfocused in its place.
-                if self.focus.typing() {
+                if self.focus.guard_on_map() {
                     record!(self, "map_unfocused", "window" => id, "reason" => "typing");
                     tracing::debug!(window = id.0, "mapped unfocused: keyboard input just now");
                 } else {

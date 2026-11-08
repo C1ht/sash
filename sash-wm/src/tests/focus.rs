@@ -480,6 +480,73 @@ fn the_typing_guard_maps_unfocused_right_after_keyboard_input() {
     });
 }
 
+/// The chord that launches a client: mod+Return (start foot; debug builds only, the
+/// test build records it instead of starting foot). Release builds have no launching
+/// keybind yet (the recovery terminal comes with E6), so there a focus chord stands in:
+/// every keybind is handled the same way by the guard.
+fn launch_chord(h: &mut Harness) {
+    #[cfg(debug_assertions)]
+    {
+        use super::harness::keys::ENTER;
+        let before = h.server.state.terminals_spawned.borrow().len();
+        h.chord(&[ALT, ENTER]);
+        assert_eq!(
+            h.server.state.terminals_spawned.borrow().len(),
+            before + 1,
+            "spawned"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    h.chord(&[ALT, H]);
+}
+
+/// Keybinds are not typing (owner, after M19a): a chord that spawns a client, even
+/// right after text was typed, lets the client that maps within 377 ms take focus; only
+/// keystrokes delivered to clients count, and modifier keys alone do not.
+#[test]
+fn a_chord_that_spawns_a_client_lets_it_take_focus_within_the_guard() {
+    let mut harness = following();
+    harness.server.state.focus.typing_guard = crate::focus::TYPING_GUARD;
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        // The chord alone (Alt is delivered to the client, but a modifier is not typing).
+        server.on_server(launch_chord);
+        let mut c2 = TestClient::connect(&socket);
+        let w2 = c2.map_window();
+        c2.roundtrip();
+        assert_eq!(focus(&server), Some(2), "the spawned window takes focus");
+        assert!(c2.activated(&w2));
+        // Text typed into the window, then at once the chord: the first window to map
+        // after the chord takes focus.
+        server.on_server(|h| {
+            h.key(KEY_A, KeyState::Pressed);
+            h.key(KEY_A, KeyState::Released);
+            launch_chord(h);
+        });
+        let mut c3 = TestClient::connect(&socket);
+        let w3 = c3.map_window();
+        c3.roundtrip();
+        assert_eq!(
+            focus(&server),
+            Some(3),
+            "typing before the chord does not count"
+        );
+        assert!(c3.activated(&w3));
+        // Only the first: a second window right after typing maps unfocused.
+        server.on_server(|h| {
+            h.key(KEY_A, KeyState::Pressed);
+            h.key(KEY_A, KeyState::Released);
+        });
+        let mut c4 = TestClient::connect(&socket);
+        let w4 = c4.map_window();
+        c4.roundtrip();
+        assert_eq!(focus(&server), Some(3), "plain typing still guards");
+        assert!(!c4.activated(&w4));
+    });
+}
+
 /// The activated state: set on the window that gains focus (map, pointer, keyboard,
 /// click), cleared on the one that loses it; never two at once.
 #[test]

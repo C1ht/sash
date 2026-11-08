@@ -153,7 +153,6 @@ impl Sash {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
-        self.focus.note_key();
         let modifier = self.keybinds.modifier;
         let serial = SERIAL_COUNTER.next_serial();
         let focus = keyboard.current_focus();
@@ -225,6 +224,7 @@ impl Sash {
                                 if let Some(focus) = &focus {
                                     state.popups.note_key_press(serial, focus.clone());
                                 }
+                                state.focus.note_delivered(key.modified_sym());
                                 FilterResult::Forward
                             }
                         }
@@ -236,7 +236,10 @@ impl Sash {
                                 swallowed.swap_remove(index);
                                 FilterResult::Intercept(None)
                             }
-                            None => FilterResult::Forward,
+                            None => {
+                                state.focus.note_delivered(key.modified_sym());
+                                FilterResult::Forward
+                            }
                         }
                     }
                 }
@@ -245,6 +248,8 @@ impl Sash {
         match action.flatten() {
             Some(Intercepted::Action(action)) => {
                 record!(self, "keybind", "action" => format!("{action:?}"));
+                // Not typing: the first window to map after a keybind may take focus.
+                self.focus.note_keybind();
                 // A keybind that changes focus cancels a drag and drop first.
                 if action.changes_focus() {
                     self.cancel_drag("focus keybind");

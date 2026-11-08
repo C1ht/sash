@@ -648,7 +648,12 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
   8. A mod+Tab cycle holds focus against the pointer until mod is released and the first real motion after it.
   - Also: pointer focus never raises and never ends fullscreen; raising happens on click only.
 - **Interim focus-steal guard (owner, M19a; replaced by xdg-activation tokens in E5):**
-  - A window that maps within 377 ms (`focus::TYPING_GUARD`) of keyboard input (any key press or release) maps unfocused and not activated. It keeps its place: the placement is unchanged.
+  - A window that maps within 377 ms (`focus::TYPING_GUARD`) of a keystroke delivered to a client maps unfocused and not activated. It keeps its place: the placement is unchanged.
+  - **What counts (owner, after M19a):**
+    - Only keystrokes delivered to clients count: compositor keybinds never do, and modifier keys alone do not either (Alt and Super are delivered around every chord).
+    - The first window to map after a keybind is exempt, even right after typing.
+    - A keystroke typed after the keybind, before anything maps, cancels the exemption (Claude's call, for the owner). Otherwise a focus-move chord would leave an exemption that a background window could use much later.
+    - Found by the new test `a_chord_that_spawns_a_client_lets_it_take_focus_within_the_guard`: the first version counted every key event, so a window started by mod+Return mapped unfocused.
   - The owner may delete this step.
 - **M19a done, waiting for the owner (no tag).** `sash-wm/src/focus.rs`:
   - **The rule:** one real motion that enters a window other than the focused one focuses it, from a window or a gap.
@@ -669,7 +674,8 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
 | foot 1.28.0 (Arch) | cursor solid when focused, hollow when not (40 px) | nothing changes | cursor hollow (40 px) |
 | Firefox 159.0.1 (Arch, about:blank) | 49 364 px change in the top 80 rows | the inactive look: lighter tab strip, greyed toolbar icons (34 445 px, rows 0-73) | the address bar loses its focus ring (14 942 px, rows 48-79) |
 
-  - **Measured** (release, headless, 5120x1440, gaps 13/8, radius 13, 200 000 motions sweeping the output; `bench_pointer_focus`; target under 10 µs p99):
+  - **Targets (owner, after M19a):** under 10 µs p99 per motion, and under 55 µs p99 per focus change. Both are met below: 9.01 µs per motion and 16.93 µs for a motion that changes focus (10 tiled).
+  - **Measured** (release, headless, 5120x1440, gaps 13/8, radius 13, 200 000 motions sweeping the output; `bench_pointer_focus`):
 
 | Scene | Every motion p50 / p95 / p99 | Motion without a focus change | Motion with a focus change |
 |---|---|---|---|
@@ -677,7 +683,7 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
 | 10 floating | 3.91 / 4.32 / 6.72 µs | 3.90 / 4.24 / 5.70 µs | 7.05 / 9.16 / 11.32 µs (n 1327) |
 
   - **Before the fixes:** a first version with two extra hit tests per motion and a full arrange per focus change measured 8.99 / 10.33 / 16.21 µs per motion (10 tiled) and 17.57 / 23.59 / 34.87 µs with a focus change. Today's code before M19a: 5.4 / 5.8 / 8.4 µs per motion.
-  - **Multi-monitor:** sash-wm has one output (hotplug of others is out of scope since M9), so there is no test. The rule uses global coordinates only.
+  - **Multi-monitor focus has no test yet:** sash-wm has one output (hotplug of others is out of scope since M9). The rule uses global coordinates only; a test comes with a second output.
 - **Interim state (owner, M19 brief), until E5/E6:**
   - The rule that only user-started windows (an xdg-activation token from sash-shell) are placed at the pointer and take focus needs the shell. Until then every new tiled window is placed at the pointer and takes focus when it maps, as focus-at-map does today (M9e).
   - **Known risk, focus stealing:** a window the user did not start takes the keyboard when it maps. Examples: a client opening a second window by itself, a slow app mapping long after its launch, or anything that maps while the user types. Keys meant for the old window, passwords included, go to the new one, and the user's tile is split under the pointer without their asking.
