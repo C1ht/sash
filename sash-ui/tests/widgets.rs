@@ -479,7 +479,7 @@ fn the_focus_ring_adds_a_shape_outside_the_widget() {
         let ring = to_device(ringed.ui.ring_target().expect("ring"), scale);
         // The widget's corners are rounded: outside its arcs is background, which the
         // ring's inner arc may cover (it keeps the 1 px gap to the arc).
-        let r = (widget.w.min(widget.h) as f32 * sash_ui::ui::RADIUS_FRACTION).ceil() as i32;
+        let r = sash_ui::ui::radius(widget, scale).ceil() as i32;
         let in_corner = |x: i32, y: i32| {
             (x < widget.x + r || x >= widget.right() - r)
                 && (y < widget.y + r || y >= widget.bottom() - r)
@@ -538,12 +538,7 @@ fn goldens_at_scales_1_1_5_and_2() {
         d.ui.pointer(Pointer::Motion { x, y }, ms(0));
         d.ui.advance(ANIMATION);
         assert_named(&d.ui);
-        let scales: &[f32] = if name == "dark" {
-            &[1.0, 1.5, 2.0]
-        } else {
-            &[1.0]
-        };
-        for &scale in scales {
+        for scale in [1.0, 1.5, 2.0] {
             let (pixels, w, h) = render(&mut d.ui, scale);
             let tag = format!("{scale}").replace('.', "_");
             common::golden(&format!("widgets-{name}-x{tag}"), &pixels, w, h);

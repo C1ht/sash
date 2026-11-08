@@ -715,7 +715,11 @@ fn every_tabler_glyph_renders_on_its_grid() {
 /// The contact sheet: every glyph as a 32 px icon button, two rows.
 fn sheet(theme: Theme, loader: &Rc<RefCell<IconLoader>>) -> (Ui, i32, i32) {
     let per_row = 10;
-    let (w, h) = (per_row * 40 + 8, 2 * 40 + 8);
+    // Square icon buttons BUTTON_HEIGHT on a side, 8 px apart; rows padded by 4 inside
+    // a column padded by 4.
+    let item = sash_ui::tree::BUTTON_HEIGHT;
+    let w = per_row * item + (per_row - 1) * 8 + 2 * 4 + 2 * 4;
+    let h = 2 * (item + 2 * 4) + 2 * 4;
     let mut ui = Ui::new(
         Node::column()
             .padding(Insets::all(4))

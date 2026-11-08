@@ -33,9 +33,16 @@ use crate::{
 /// widget (logical pixels).
 pub const RING_WIDTH: i32 = crate::theme::FOCUS_RING_WIDTH;
 pub const RING_GAP: i32 = crate::theme::FOCUS_RING_OFFSET;
-/// Chrome radius proportional to the element's size (owner, M16): a quarter of the
-/// shorter side.
-pub const RADIUS_FRACTION: f32 = 0.25;
+/// Chrome radius (docs/design.md): min(shorter side x RADIUS_FACTOR, MAX_RADIUS).
+pub const RADIUS_FACTOR: f32 = 0.236;
+pub const MAX_RADIUS: f32 = 21.0;
+/// The spec's hand-set exception: the dock and the launcher panel.
+pub const PANEL_RADIUS: f32 = 34.0;
+
+/// The radius of a widget at `rect` (device pixels) at `scale`.
+pub fn radius(rect: Rect, scale: f32) -> f32 {
+    (rect.w.min(rect.h) as f32 * RADIUS_FACTOR).min(MAX_RADIUS * scale)
+}
 
 /// What happened, for the app to act on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -595,7 +602,10 @@ impl Ui {
             let r = to_device(self.ring.value(self.now), s);
             let width = ((RING_WIDTH as f32 * s).round() as i32).max(1);
             let outset = ((RING_GAP + RING_WIDTH) as f32 * s).round();
-            let radius = (r.w.min(r.h) as f32 - 2.0 * outset) * RADIUS_FRACTION + outset;
+            // Concentric with the widget's corners: its radius plus the outset.
+            let o = outset as i32;
+            let widget = Rect::new(r.x + o, r.y + o, r.w - 2 * o, r.h - 2 * o);
+            let radius = radius(widget, s) + outset;
             canvas.ring(r, radius, width, self.theme.accent());
         }
     }
@@ -603,7 +613,7 @@ impl Ui {
     fn draw_button(&mut self, canvas: &mut Canvas, id: NodeId, b: &Button, rect: Rect, off: bool) {
         let s = canvas.scale();
         let r = to_device(rect, s);
-        let radius = r.w.min(r.h) as f32 * RADIUS_FRACTION;
+        let radius = radius(r, s);
         let px = |v: i32| ((v as f32 * s).round() as i32).max(1);
         let inset = |r: Rect, d: i32| Rect::new(r.x + d, r.y + d, r.w - 2 * d, r.h - 2 * d);
         let hover = self.drawn_hover(id);

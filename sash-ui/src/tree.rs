@@ -203,10 +203,19 @@ pub struct Node {
     pub(crate) rect: Rect,
 }
 
-/// Logical metrics of the widgets (constants).
-pub const BUTTON_HEIGHT: i32 = 32;
-pub const BUTTON_PADDING: i32 = 12;
-pub const ICON_SIZE: i32 = 16;
+/// Logical metrics of the widgets (docs/design.md; owner, M18c).
+pub const BUTTON_HEIGHT: i32 = 34;
+pub const BUTTON_PADDING: i32 = 13;
+/// The padding where the spec sets 21 (the dock around its icons, the Recent plate).
+pub const PLATE_PADDING: i32 = 21;
+/// Icon sizes: in a title bar 15, in the search field and the footer 21, in the
+/// tray 24.
+pub const ICON_TITLE_BAR: i32 = 15;
+pub const ICON_SEARCH: i32 = 21;
+pub const ICON_FOOTER: i32 = 21;
+pub const ICON_TRAY: i32 = 24;
+/// An icon's size unless set ([`Node::icon_size`]): the footer's.
+pub const ICON_SIZE: i32 = ICON_FOOTER;
 pub const ICON_GAP: i32 = 8;
 
 impl Node {

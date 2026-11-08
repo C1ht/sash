@@ -585,6 +585,27 @@ Recorded as given by the owner. Nothing here is built yet. The rules are in CLAU
 - Minimum tile 233 x 144 (docs/design.md, "Interaction constants"): defined as `layout::bsp::MIN_TILE_SIZE` and NOT enforced until M19 (where a new tiled window goes: the other axis is tried, else the window floats). The tiled-resize floor `MIN_TILE` (64 px per axis, M6) is a different rule, not in the spec, unchanged.
 - The SVG time budget is deterministic (step 1): the converted tree may hold at most 20 000 nodes, 50 000 path segments, 64 isolated layers and 16 filter primitives (clip paths and masks counted); refused as over budget before drawing. The wall clock is a 5 s guard only. Found: `extreme_geometry_never_crashes` failed once under load in M18b because the parse was timed before the deterministic size check.
 
+- sash-ui metrics (step 3): buttons 34 high, padding 13 (`PLATE_PADDING` 21 for the dock and the Recent plate, not used yet), icon sizes 15 / 21 / 24 (`ICON_TITLE_BAR`, `ICON_SEARCH` and `ICON_FOOTER`, `ICON_TRAY`; a button's icon defaults to 21), radius `min(shorter side x 0.236, 21)` (`ui::radius`), `PANEL_RADIUS` 34 for the dock and the launcher panel (not used yet). The focus ring's corners are concentric with the widget's (its radius plus the ring's outset). The widget goldens now cover dark and light at 1, 1.5 and 2 (light was 1 only); the icon contact sheet's size follows the button metrics. The contrast tests stay green: no pair fails.
+
+| Constant | Old | New | File |
+|---|---|---|---|
+| Resize zone (`ZONE`) | 6 | 8 | sash-wm/src/layout/decor.rs |
+| Corner zone (`CORNER`) | 16 x 16 | 21 x 21 | sash-wm/src/layout/decor.rs |
+| Snap corner trigger (`CORNER_TRIGGER`) | 64 | 55 | sash-wm/src/layout/snap.rs |
+| Snap edge trigger (`EDGE_TRIGGER`) | 8 | 8 (unchanged, now in the spec) | sash-wm/src/layout/snap.rs |
+| Edge snap distance (`EDGE_SNAP`) | 12 | 13 | sash-wm/src/layout/snap.rs |
+| Visibility rule (`MIN_VISIBLE`) | 64 | 55 | sash-wm/src/layout/geometry.rs |
+| Keyboard move and resize step (`STEP`) | 40 | 34 | sash-wm/src/layout/monitor.rs (and the 8 keybind descriptions, docs/keybinds.md) |
+| Cascade (`CASCADE_STEP`) | 32 | 34 | sash-wm/src/layout/floating.rs |
+| Minimum tile (`MIN_TILE_SIZE`) | none | 233 x 144, defined, enforced from M19 | sash-wm/src/layout/bsp.rs |
+| SVG budget | 50 ms wall clock (`BUDGET`) | work caps (`MAX_TREE_NODES` 20 000, `MAX_PATH_SEGMENTS` 50 000, `MAX_LAYERS` 64, `MAX_FILTER_PRIMITIVES` 16) and a 5 s guard (`GUARD`) | sash-ui/src/icon/svg.rs |
+| Button height (`BUTTON_HEIGHT`) | 32 | 34 | sash-ui/src/tree.rs |
+| Button padding (`BUTTON_PADDING`) | 12 | 13 (`PLATE_PADDING` 21 new) | sash-ui/src/tree.rs |
+| Icon size (`ICON_SIZE`) | 16 | 21 default; `ICON_TITLE_BAR` 15, `ICON_SEARCH` / `ICON_FOOTER` 21, `ICON_TRAY` 24 new | sash-ui/src/tree.rs |
+| Radius | 0.25 x the shorter side (`RADIUS_FRACTION`) | min(0.236 x the shorter side, 21) (`RADIUS_FACTOR`, `MAX_RADIUS`); `PANEL_RADIUS` 34 new | sash-ui/src/ui.rs |
+
+- Values still in code that docs/design.md does not have: the tiled-resize floor 64 px per axis (`MIN_TILE`, M6); the cursor size 24 (the spec: 21, 24 or 34, open); the glyph shapes' proportions (Tabler's grid); the fixed-size fullscreen backdrop (opaque black); the page token as the background until a wallpaper exists; the snap preview's 12% / 60% / 1 px and the title reserve 3 x 34 + 8 (from the M18b brief); the sash-ui icon gap 8 is in the spec ("gap 8"); the SVG work caps are limits, not design values.
+
 ### Proposal: input settings on real hardware (owner decides; nothing implemented)
 
 On DRM (M9), sash-wm reads keyboards and pointers through libinput and xkb itself, so it needs values for: keyboard layout (and variant/options), key repeat delay and rate, pointer speed (acceleration), natural scrolling, and tap-to-click on touchpads. The closed settings list has no input entries today.
