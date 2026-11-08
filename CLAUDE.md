@@ -266,6 +266,14 @@ change this file without the owner's approval.
 - Typing guard (interim until E5): a window mapping within 377 ms of a keystroke delivered to a client maps unfocused. Keybinds and modifier keys alone are not typing. Only a keybind that spawns a client exempts the first window to map within 13 s; a keystroke typed before that map cancels it.
 - Details, measurements and targets: docs/plan.md (M19a).
 
+## M19b, placement at the pointer (owner)
+
+- A new tiled window splits the tile under the pointer. `drop_side` on the tile's visible rectangle: the diagonals pick left, right, top or bottom; a centred 23.6% x 23.6% box picks centre; exact diagonal ties go to top or bottom. 50:50; left and top put the new window first, right and bottom second; centre splits the longer side, new window second.
+- Fall-backs: pointer never moved, over a layer surface above the windows, or outside the usable area: the focused tile (else the most recently focused tiled window); in a gap: the cell containing it. Floating windows are never targets; dialogs, parented and fixed-size windows keep the float rules.
+- Minimum tile 233 x 144 on the visible rectangle. A split that does not fit tries the other axis, else the new window floats. Dividers stop at the minimum or the client's minimum; the M6 64 px floor is removed. A client that raises its minimum after mapping stays tiled and clipped (known limit).
+- A shrinking usable area floats the newest tiles until the rest fit (never closed); they return newest-floated first when there is room, only if untouched while floating.
+- Details: docs/plan.md (M19b rules).
+
 ## BSP tiling (M3)
 
 - The BSP tree is plain data in its own module, with no Smithay types,

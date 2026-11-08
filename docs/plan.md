@@ -693,6 +693,37 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
 
   - **Before the fixes:** a first version with two extra hit tests per motion and a full arrange per focus change measured 8.99 / 10.33 / 16.21 µs per motion (10 tiled) and 17.57 / 23.59 / 34.87 µs with a focus change. Today's code before M19a: 5.4 / 5.8 / 8.4 µs per motion.
   - **Multi-monitor focus has no test yet:** sash-wm has one output (hotplug of others is out of scope since M9). The rule uses global coordinates only; a test comes with a second output.
+- **M19b rules (owner, M19b brief; recorded before the code):**
+  1. **The zone function** `drop_side(visible, x, y)` works on the tile's VISIBLE rectangle (its cell through the gap function) and returns left, right, top, bottom or centre.
+     - A centred box 23.6% of the width by 23.6% of the height is centre.
+     - Otherwise the nearest edge, in units of the rectangle's width and height, picks the side: the diagonals divide the rectangle.
+     - Exact ties on a diagonal go to top or bottom.
+     - A tie between top and bottom (the middle row) goes to bottom, and one between left and right (the middle column) to right. Both can only happen inside the centre box, so they do not arise; they are documented so the function is total.
+     - The point is a pixel centre (x + 0.5, y + 0.5). Exact integer arithmetic, no floating point.
+     - A point in a gap lies outside the visible rectangle, and the same comparison gives the side the gap is on.
+  2. **Splits are 50:50** (the first child gets the floor).
+     - Left and top: the new window is the first child.
+     - Right and bottom: it is the second child.
+     - Centre: the longer side is split (width >= height: side by side), with the new window second.
+  3. **The target tile, in order:**
+     - pointer never moved: the focused tile;
+     - pointer over a layer surface drawn above the windows (the dock, the launcher), or outside the usable area: the focused tile;
+     - otherwise the cell containing the pointer. Cells cover the usable area exactly, so a pointer in a gap uses the cell the gap belongs to.
+     - "The focused tile": the focused window if it is tiled; else the most recently focused tiled window (a floating window has focus); else the last tiled leaf; with no tiled window, the new window fills the usable area.
+     - Every fall-back splits as centre.
+     - Floating windows are never targets (the tile beneath is used).
+     - Dialogs, windows with a parent and fixed-size windows keep the float rules and are never placed by this. In the floating default mode, a new window's placeholder goes next to the focused window, as before.
+  4. **The minimum tile** MIN_TILE_SIZE is 233 x 144, measured on the VISIBLE rectangle (the gaps do not count), through the one gap function.
+     - **At insertion,** both new tiles must hold it. The new window must also hold its client minimum plus its 1 px border on each edge, and the split tile its own.
+     - If the chosen split does not fit, the other axis is tried on the same tile: the side comes from the pointer's half on that axis, and a centre or fall-back pick puts the new window second.
+     - If that fails too, the new window floats (client size, cascaded). It does not return by itself; mod+F tiles it when it fits.
+  5. **The M6 64 px tiled-resize floor is removed.** A divider (keyboard or mouse) stops where a tile on the shrinking side would go below 233 x 144, or below its client's minimum plus border where that is larger. A tile already smaller than that (a client that raised its minimum after mapping, which stays tiled and clipped: known limit) may not get smaller.
+  6. **Tiling an existing window** (mod+F, tile-all, a window that stops being forced) happens only if every tile still fits. Otherwise that window stays floating. Tile-all tries the windows oldest first.
+  7. **When the usable area shrinks** (dock moved, output resized, a panel appears) and the tiles no longer hold 233 x 144:
+     - The newest tiles (by when they opened) float, one by one, until the rest fit; none is closed. They float from their visible rectangle and keep their leaf as a placeholder (lossless toggling).
+     - Client minimums are not part of this check: a client whose minimum rose after mapping could otherwise float every tile.
+     - They return when there is room again: after an area change or a close, newest-floated first, each only if every tile then fits. The first that does not fit stops the return.
+     - Only windows untouched while floating return. Touching means a move or resize (mouse, keyboard or client request), a snap, maximize, fullscreen, a click on it, or mod+F. Pointer and keyboard focus do not count, nor does a client changing its own size.
 - **Interim state (owner, M19 brief), until E5/E6:**
   - The rule that only user-started windows (an xdg-activation token from sash-shell) are placed at the pointer and take focus needs the shell. Until then every new tiled window is placed at the pointer and takes focus when it maps, as focus-at-map does today (M9e).
   - **Known risk, focus stealing:** a window the user did not start takes the keyboard when it maps. Examples: a client opening a second window by itself, a slow app mapping long after its launch, or anything that maps while the user types. Keys meant for the old window, passwords included, go to the new one, and the user's tile is split under the pointer without their asking.
