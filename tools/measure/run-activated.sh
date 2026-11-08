@@ -28,10 +28,11 @@ echo "harness socket: $SASH_SOCKET"
 
 start_client foot sleep 120
 sleep 2
-FIREFOX_PREFS='user_pref("gfx.webrender.software", true);
+# Software rendering into wl_shm, so the harness can read the pixels.
+prefs='user_pref("gfx.webrender.software", true);
 user_pref("widget.dmabuf.force-enabled", false);
-user_pref("gfx.webrender.compositor", false);' FFLOG="$out/firefox.log" \
-    start_firefox about:blank
+user_pref("gfx.webrender.compositor", false);'
+FIREFOX_PREFS=$prefs FFLOG="$out/browser.log" start_firefox about:blank
 
 wait "$test_pid"
 status=$?
