@@ -1002,7 +1002,7 @@ impl Sash {
         };
         layout.set_floating_rect(id, rect);
         // The rectangle the window will take: the zone inset by the gap.
-        let preview = drag.zone.and_then(|z| layout.zone_visible_rect(z));
+        let preview = drag.zone.and_then(|z| layout.zone_gapped(z));
         self.overlay.set_preview(preview);
         self.windows.note_input(Instant::now());
         self.schedule_arrange();
@@ -1067,12 +1067,12 @@ impl Sash {
 
     /// The preview rectangle of the zone the current drag targets (benchmarks).
     #[cfg(test)]
-    pub fn overlay_preview_for_bench(&self) -> Option<Rect> {
+    pub fn overlay_preview_for_bench(&self) -> Option<crate::layout::gaps::Gapped> {
         self.windows
             .drag
             .as_ref()
             .and_then(|d| d.zone)
-            .and_then(|z| self.windows.layout.zone_rect(z))
+            .and_then(|z| self.windows.layout.zone_gapped(z))
     }
 
     /// The window being dragged, if any.

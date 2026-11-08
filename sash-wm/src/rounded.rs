@@ -100,8 +100,9 @@ void main() {{
 
 /// The pixel program: a premultiplied colour over the shape (`ring` 0) or over the
 /// ring `ring` pixels wide along the edges whose flag is set in `edges` (left, top,
-/// right, bottom). The shape is relative to the drawn area; `extent` is the area's size
-/// in output pixels (Smithay's `size` is its logical size).
+/// right, bottom), only inside `clip` (left, top, right, bottom). The shape and the clip
+/// are relative to the drawn area; `extent` is the area's size in output pixels
+/// (Smithay's `size` is its logical size).
 fn shape_source() -> String {
     format!(
         r#"{PRECISION}
@@ -115,6 +116,7 @@ uniform vec2 extent;
 uniform vec4 color;
 uniform float ring;
 uniform vec4 edges;
+uniform vec4 clip;
 {SDF}
 float ring_drawn(vec2 p) {{
     float left = p.x - shape.x;
@@ -139,6 +141,7 @@ void main() {{
     if (ring > 0.0) {{
         cov = (cov - clamp(0.5 - (d + ring), 0.0, 1.0)) * ring_drawn(p);
     }}
+    cov = cov * step(clip.x, p.x) * step(p.x, clip.z) * step(clip.y, p.y) * step(p.y, clip.w);
     vec4 c = color * cov * alpha;
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0)
@@ -200,6 +203,7 @@ fn compile(renderer: &mut GlesRenderer) -> Result<Programs, GlesError> {
             UniformName::new("color", UniformType::_4f),
             UniformName::new("ring", UniformType::_1f),
             UniformName::new("edges", UniformType::_4f),
+            UniformName::new("clip", UniformType::_4f),
         ],
     )?;
     Ok(Programs { mask, shape })
@@ -360,8 +364,11 @@ pub enum Paint {
     Ring { width: i32, edges: Edges },
 }
 
-/// The pixel-shader element for a fill or ring over `area` (logical) clipped by
-/// `shape` (output pixels) in `color` (straight RGBA, 0..1), at `scale`. `reuse` keeps
+/// The pixel-shader element for a fill or ring over `clip` (output pixels, from the
+/// window's frame) clipped by `shape` (output pixels) in `color` (straight RGBA, 0..1),
+/// at `scale`. `area` is the same rectangle in logical pixels: Smithay draws it one
+/// logical pixel larger on every side (its own rounding may fall a pixel short of the
+/// frame's edges) and the shader cuts it to `clip`. `reuse` keeps
 /// an earlier element (its id); the caller passes it only when something changed, since
 /// new uniforms count as damage.
 #[allow(clippy::too_many_arguments)]
@@ -369,6 +376,7 @@ pub fn shape_element(
     program: &GlesPixelProgram,
     reuse: Option<PixelShaderElement>,
     area: Rect,
+    clip: Rectangle<i32, Physical>,
     shape: &Shape,
     scale: f64,
     paint: Paint,
@@ -387,10 +395,15 @@ pub fn shape_element(
             [edges.left, edges.top, edges.right, edges.bottom].map(|e| if e { 1.0 } else { 0.0 }),
         ),
     };
-    let logical = Rectangle::<i32, Logical>::new((area.x, area.y).into(), (area.w, area.h).into());
+    let logical = Rectangle::<i32, Logical>::new(
+        (area.x - 1, area.y - 1).into(),
+        (area.w + 2, area.h + 2).into(),
+    );
     // Where Smithay draws the element (its geometry at this scale).
     let drawn: Rectangle<i32, Physical> = logical.to_physical_precise_round(scale);
     let [shape_u, radii_u] = shape_uniforms(shape, drawn.loc.x as f32, drawn.loc.y as f32);
+    let (cx, cy) = (clip.loc.x - drawn.loc.x, clip.loc.y - drawn.loc.y);
+    let clip = [cx, cy, cx + clip.size.w, cy + clip.size.h].map(|v| v as f32);
     let uniforms = vec![
         shape_u,
         radii_u,
@@ -398,6 +411,7 @@ pub fn shape_element(
         Uniform::new("color", premultiplied),
         Uniform::new("ring", ring),
         Uniform::new("edges", edges),
+        Uniform::new("clip", clip),
     ];
     match reuse {
         Some(mut element) => {

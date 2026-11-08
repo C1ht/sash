@@ -687,61 +687,57 @@ proptest! {
     }
 }
 
-/// The gaps in physical pixels (owner, M18a) at scales 1, 1.5 and 2, after every
-/// operation: tiles never overlap; neighbours are exactly 8 x scale apart (each edge is
-/// rounded on its own, so the 4 px halves land on whole pixels); the outer gap to the
-/// usable area's edge is 13 x scale, which at 1.5 is 19.5 and so 19 or 20 whole pixels
-/// depending on where the edge falls (never anything else).
+/// The gaps in physical pixels (owner, M18a; each gap rounded once per scale after
+/// M18a) at scales 1, 1.25, 1.5, 1.75 and 2, after every operation: tiles never
+/// overlap; neighbours are exactly the inner gap rounded once apart (12 at 1.5); every
+/// tile on the usable area's edge is exactly the outer gap rounded once from it (20 at
+/// 1.5, on all four sides).
 fn check_physical(layout: &MonitorLayout) {
-    use super::gaps::to_physical;
+    use super::gaps::{physical_edge, physical_gap};
     let Gaps { outer, inner } = layout.gaps();
     let area = layout.area();
     let room = 2 * outer.max(inner) + 1;
-    let tiles: Vec<(Rect, Rect)> = layout
+    let tiles: Vec<(WindowId, Rect)> = layout
         .stacking()
         .into_iter()
         .filter(|(_, _, l)| *l == Layer::Tiled)
-        .filter_map(|(w, shown, _)| Some((layout.cell(w)?, shown)))
+        .filter_map(|(w, _, _)| Some((w, layout.cell(w)?)))
         .collect();
-    for scale in [1.0f64, 1.5, 2.0] {
-        let p = |r: Rect| to_physical(r, scale);
-        let edge = |v: i32| super::gaps::physical_edge(v, scale);
-        let (lo, hi) = (
-            (f64::from(outer) * scale).floor() as i32,
-            (f64::from(outer) * scale).ceil() as i32,
-        );
-        for (i, &(ca, va)) in tiles.iter().enumerate() {
-            let a = p(va);
-            if ca.w > room && ca.h > room {
-                for (cell_edge, area_edge, shown_edge) in
-                    [(ca.x, area.x, a.loc.x), (ca.y, area.y, a.loc.y)]
-                {
-                    if cell_edge <= area_edge {
-                        let m = shown_edge - edge(area_edge);
-                        assert!((lo..=hi).contains(&m), "x{scale}: outer {m} not {lo}..{hi}");
+    for scale in SCALES {
+        let p = |w: WindowId| layout.frame(w, scale).expect("frame").physical;
+        let edge = |v: i32| physical_edge(v, scale);
+        let (outer_px, inner_px) = (physical_gap(outer, scale), physical_gap(inner, scale));
+        for (i, &(wa, ca)) in tiles.iter().enumerate() {
+            let a = p(wa);
+            let big = |r: Rect| r.w > 2 * room && r.h > 2 * room;
+            if big(ca) {
+                for (on, m) in [
+                    (ca.x <= area.x, a.loc.x - edge(area.x)),
+                    (ca.y <= area.y, a.loc.y - edge(area.y)),
+                    (
+                        ca.right() >= area.right(),
+                        edge(area.right()) - (a.loc.x + a.size.w),
+                    ),
+                    (
+                        ca.bottom() >= area.bottom(),
+                        edge(area.bottom()) - (a.loc.y + a.size.h),
+                    ),
+                ] {
+                    if on {
+                        assert_eq!(m, outer_px, "x{scale}: outer gap of {ca:?}");
                     }
                 }
-                if ca.right() >= area.right() {
-                    let m = edge(area.right()) - (a.loc.x + a.size.w);
-                    assert!((lo..=hi).contains(&m), "x{scale}: outer {m}");
-                }
-                if ca.bottom() >= area.bottom() {
-                    let m = edge(area.bottom()) - (a.loc.y + a.size.h);
-                    assert!((lo..=hi).contains(&m), "x{scale}: outer {m}");
-                }
             }
-            for &(cb, vb) in &tiles[i + 1..] {
-                let b = p(vb);
+            for &(wb, cb) in &tiles[i + 1..] {
+                let b = p(wb);
                 let apart = a.loc.x + a.size.w <= b.loc.x
                     || b.loc.x + b.size.w <= a.loc.x
                     || a.loc.y + a.size.h <= b.loc.y
                     || b.loc.y + b.size.h <= a.loc.y;
-                assert!(apart, "x{scale}: {va:?} and {vb:?} overlap");
-                let big = |r: Rect| r.w > room && r.h > room;
+                assert!(apart, "x{scale}: {ca:?} and {cb:?} overlap");
                 if !big(ca) || !big(cb) {
                     continue;
                 }
-                let want = f64::from(inner) * scale;
                 for (first, second, gap) in [
                     (ca, cb, b.loc.x - (a.loc.x + a.size.w)),
                     (cb, ca, a.loc.x - (b.loc.x + b.size.w)),
@@ -750,7 +746,7 @@ fn check_physical(layout: &MonitorLayout) {
                         && first.y < second.bottom()
                         && second.y < first.bottom()
                     {
-                        assert_eq!(f64::from(gap), want, "x{scale}: {first:?} | {second:?}");
+                        assert_eq!(gap, inner_px, "x{scale}: {first:?} | {second:?}");
                     }
                 }
                 for (first, second, gap) in [
@@ -761,13 +757,15 @@ fn check_physical(layout: &MonitorLayout) {
                         && first.x < second.right()
                         && second.x < first.right()
                     {
-                        assert_eq!(f64::from(gap), want, "x{scale}: {first:?} / {second:?}");
+                        assert_eq!(gap, inner_px, "x{scale}: {first:?} / {second:?}");
                     }
                 }
             }
         }
     }
 }
+
+const SCALES: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
 
 fn physical_run(area: Rect, ops: &[Op]) {
     let mut layout = MonitorLayout::new(area);
@@ -787,7 +785,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
 
     #[test]
-    fn physical_gaps_at_scales_1_1_5_and_2(
+    fn physical_gaps_at_five_scales(
         area in area(),
         ops in prop::collection::vec(op(), 1..60),
     ) {

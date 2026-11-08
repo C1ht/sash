@@ -13,7 +13,7 @@ use super::{
     BspTree, Direction, Edges, FloatingLayout, InsertHint, Layout, Mode, Rect, Side, SizeLimits,
     SplitHandle, WindowId,
     decor::Decoration,
-    gaps::Gaps,
+    gaps::{Frame, Gapped, Gaps},
     geometry::pick_in_direction,
     snap::{SnapStep, ZoneId, Zones, snap_step},
 };
@@ -177,9 +177,29 @@ impl MonitorLayout {
         if !state.server_side || self.fullscreen == Some(window) || self.radius == 0 {
             return None;
         }
-        let rect = self.shown_rect(window)?;
-        let shape = super::shape::Shape::new(rect, [true; 4], self.radius, scale);
+        let frame = self.frame(window, f64::from(scale))?;
+        let shape = super::shape::Shape::from_physical(frame.physical, self.radius, scale);
         (!shape.is_square()).then_some(shape)
+    }
+
+    /// A window's rectangle in logical and physical pixels at `scale`: gapped windows
+    /// through `gaps::visible_physical` (each gap rounded once per scale), others with
+    /// each edge rounded on its own.
+    pub fn frame(&self, window: WindowId, scale: f64) -> Option<Frame> {
+        if self.gapped(window) {
+            let cell = self.cell(window)?;
+            return Some(Frame::gapped(cell, self.area, self.gaps, scale));
+        }
+        Some(Frame::plain(self.shown_rect(window)?, scale))
+    }
+
+    /// What a window snapped to `zone` shows, at any scale (the snap preview).
+    pub fn zone_gapped(&self, zone: ZoneId) -> Option<Gapped> {
+        Some(Gapped {
+            cell: self.zone_rect(zone)?,
+            usable: self.area,
+            gaps: self.gaps,
+        })
     }
 
     /// Sets the gaps.
@@ -269,6 +289,7 @@ impl MonitorLayout {
 
     /// What a window snapped to `zone` shows: the zone through `gaps::visible` (the top
     /// zone too: 13 px on every side). The snap preview draws this.
+    #[cfg(test)]
     pub fn zone_visible_rect(&self, zone: ZoneId) -> Option<Rect> {
         self.zone_rect(zone).map(|r| self.inset(r))
     }

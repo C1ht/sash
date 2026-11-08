@@ -11,6 +11,7 @@
 
 #[cfg(test)]
 use super::Edges;
+#[cfg(test)]
 use super::Rect;
 
 /// The window corner radius (owner, M18a: 13, was 10): a constant; debug builds may
@@ -32,6 +33,7 @@ impl Shape {
     /// The shape of a logical rectangle at `scale` (each edge rounded to a whole
     /// physical pixel), `radius` logical pixels on the corners that are rounded (never
     /// more than half the shorter side).
+    #[cfg(test)]
     pub fn new(rect: Rect, corners: [bool; 4], radius: i32, scale: f32) -> Self {
         // Each edge on a whole physical pixel, rounded on its own (owner, M18a), so
         // neighbours keep the exact gap and the outline is crisp at 1.5.
@@ -45,6 +47,24 @@ impl Shape {
             w,
             h,
             radii: corners.map(|on| if on { r } else { 0.0 }),
+        }
+    }
+
+    /// The shape of a physical rectangle (a window's frame), `radius` logical pixels
+    /// on every corner (never more than half the shorter side).
+    pub fn from_physical(
+        rect: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+        radius: i32,
+        scale: f32,
+    ) -> Self {
+        let (w, h) = (rect.size.w as f32, rect.size.h as f32);
+        let r = (radius as f32 * scale).min(w / 2.0).min(h / 2.0).max(0.0);
+        Self {
+            x: rect.loc.x as f32,
+            y: rect.loc.y as f32,
+            w,
+            h,
+            radii: [r; 4],
         }
     }
 

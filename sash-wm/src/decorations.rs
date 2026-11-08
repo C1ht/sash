@@ -252,6 +252,7 @@ type Fill = crate::render::Solid;
 #[derive(Clone, Debug, PartialEq)]
 struct ShaderKey {
     rect: Rect,
+    clip: [i32; 4],
     paint: crate::rounded::Paint,
     color: [u32; 4],
     shape: [u32; 8],
@@ -261,6 +262,7 @@ struct ShaderKey {
 impl ShaderKey {
     fn new(
         rect: Rect,
+        clip: smithay::utils::Rectangle<i32, smithay::utils::Physical>,
         paint: crate::rounded::Paint,
         color: [f32; 4],
         shape: &crate::layout::shape::Shape,
@@ -269,6 +271,7 @@ impl ShaderKey {
         let [a, b, c, d] = shape.radii;
         Self {
             rect,
+            clip: [clip.loc.x, clip.loc.y, clip.size.w, clip.size.h],
             paint,
             color: color.map(f32::to_bits),
             shape: [shape.x, shape.y, shape.w, shape.h, a, b, c, d].map(f32::to_bits),
@@ -348,6 +351,10 @@ pub fn decoration_elements(
         layout.is_maximized(id),
         shaped.is_some(),
     );
+    // Everything is placed by the window's frame, so it lines up with its edges.
+    let Some(frame) = layout.frame(id, scale.x) else {
+        return Vec::new();
+    };
     let decorations = &state.decorations;
     let mut fills = decorations.fills.borrow_mut();
     let mut shader_cache = decorations.shaders.borrow_mut();
@@ -366,7 +373,8 @@ pub fn decoration_elements(
             _ => None,
         };
         if let (Some((rect, paint, color)), Some((program, shape))) = (shader_piece, &shaped) {
-            let key = ShaderKey::new(rect, paint, color, shape, scale.x);
+            let clip = frame.map(rect);
+            let key = ShaderKey::new(rect, clip, paint, color, shape, scale.x);
             let cached = shader_cache.remove(&(id, index));
             let element = match cached {
                 Some((element, was)) if was == key => element,
@@ -374,6 +382,7 @@ pub fn decoration_elements(
                     program,
                     cached.map(|(e, _)| e),
                     rect,
+                    clip,
                     shape,
                     scale.x,
                     paint,
@@ -391,12 +400,10 @@ pub fn decoration_elements(
                     .entry((id, index))
                     .or_insert_with(|| crate::render::Solid::new(rect, color));
                 solid.update(rect, color);
-                out.push(OutputElement::Solid(solid.element(scale, 1.0)));
+                out.push(OutputElement::Solid(solid.element_in(&frame, 1.0)));
             }
             Piece::Glyph(glyph, rect, alpha) => {
-                let location = Point::<i32, Logical>::from((rect.x, rect.y))
-                    .to_f64()
-                    .to_physical(scale);
+                let location = frame.point(rect.x, rect.y).to_f64();
                 if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     location,

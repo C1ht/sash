@@ -751,14 +751,15 @@ fn reference_pixel(
     let shape = layout.shape(id, scale as f32).expect("a rounded window");
     let outer = layout.shown_rect(id).expect("shown");
     let decoration = layout.decoration(id);
+    // Placed by the window's frame, as the renderer does.
+    let frame = layout.frame(id, scale).expect("frame");
     let phys = |r: crate::layout::Rect| {
-        let x0 = (r.x as f64 * scale).round();
-        let y0 = (r.y as f64 * scale).round();
+        let p = frame.map(r);
         (
-            x0,
-            y0,
-            x0 + (r.w as f64 * scale).round(),
-            y0 + (r.h as f64 * scale).round(),
+            f64::from(p.loc.x),
+            f64::from(p.loc.y),
+            f64::from(p.loc.x + p.size.w),
+            f64::from(p.loc.y + p.size.h),
         )
     };
     let inside =
@@ -771,7 +772,16 @@ fn reference_pixel(
             c[i] = over[i] * a + c[i] * (1.0 - a);
         }
     };
-    if inside(phys(decoration.inner(outer)), px as f64, py as f64) {
+    // The client's buffer starts where the frame puts it and keeps its own size.
+    let client = decoration.inner(outer);
+    let at = frame.point(client.x, client.y);
+    let client_px = (
+        f64::from(at.x),
+        f64::from(at.y),
+        f64::from(at.x) + (f64::from(client.w) * scale).round(),
+        f64::from(at.y) + (f64::from(client.h) * scale).round(),
+    );
+    if inside(client_px, px as f64, py as f64) {
         blend(&mut c, content, cov);
     }
     if let Some(bar) = decoration.bar_rect(outer)

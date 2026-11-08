@@ -21,11 +21,11 @@ use smithay::{
         utils::CommitCounter,
     },
     input::pointer::CursorImageStatus,
-    utils::{Scale, Transform},
+    utils::{Physical, Rectangle, Scale, Transform},
 };
 
 use crate::{
-    layout::{Layer, Rect, layers::Level},
+    layout::{Layer, Rect, gaps::Gapped, layers::Level},
     popups::popups_of,
     rounded::MaskedSurface,
     state::Sash,
@@ -169,10 +169,23 @@ impl Solid {
     }
 
     pub fn element(&self, scale: Scale<f64>, alpha: f32) -> SolidColorRenderElement {
+        self.element_at(crate::layout::gaps::to_physical(self.rect, scale.x), alpha)
+    }
+
+    /// Drawn inside a window: placed by the window's frame.
+    pub fn element_in(
+        &self,
+        frame: &crate::layout::gaps::Frame,
+        alpha: f32,
+    ) -> SolidColorRenderElement {
+        self.element_at(frame.map(self.rect), alpha)
+    }
+
+    fn element_at(&self, rect: Rectangle<i32, Physical>, alpha: f32) -> SolidColorRenderElement {
         let c = self.color;
         SolidColorRenderElement::new(
             self.id.clone(),
-            crate::layout::gaps::to_physical(self.rect, scale.x),
+            rect,
             self.commit,
             [c[0] * alpha, c[1] * alpha, c[2] * alpha, c[3] * alpha],
             Kind::Unspecified,
@@ -182,7 +195,7 @@ impl Solid {
 
 /// Compositor-drawn rectangles, kept from frame to frame.
 pub struct Overlay {
-    preview: Option<Rect>,
+    preview: Option<Gapped>,
     /// Fill (inside the border), then the top, bottom, left and right border strips.
     pieces: [Solid; 5],
     backdrop: Option<Solid>,
@@ -198,13 +211,13 @@ impl Overlay {
         }
     }
 
-    /// Shows the snap preview over `rect`, or hides it.
-    pub fn set_preview(&mut self, rect: Option<Rect>) {
-        if self.preview == rect {
+    /// Shows the snap preview over what `zone` shows, or hides it.
+    pub fn set_preview(&mut self, zone: Option<Gapped>) {
+        if self.preview == zone {
             return;
         }
-        self.preview = rect;
-        let Some(r) = rect else {
+        self.preview = zone;
+        let Some(r) = zone.map(|z| z.logical()) else {
             return;
         };
         let b = PREVIEW_BORDER.min(r.w / 2).min(r.h / 2).max(0);
@@ -223,7 +236,7 @@ impl Overlay {
 
     #[cfg(test)]
     pub fn preview(&self) -> Option<Rect> {
-        self.preview
+        self.preview.map(|z| z.logical())
     }
 
     /// Shows the opaque backdrop over `rect`, or hides it.
@@ -239,14 +252,15 @@ impl Overlay {
         &self,
         scale: Scale<f64>,
     ) -> impl Iterator<Item = SolidColorRenderElement> + '_ {
-        self.preview.into_iter().flat_map(move |_| {
+        self.preview.into_iter().flat_map(move |zone| {
+            let frame = zone.frame(scale.x);
             self.pieces.iter().enumerate().map(move |(i, piece)| {
                 let alpha = if i == 0 {
                     PREVIEW_FILL_ALPHA
                 } else {
                     PREVIEW_BORDER_ALPHA
                 };
-                piece.element(scale, alpha)
+                piece.element_in(&frame, alpha)
             })
         })
     }
@@ -376,6 +390,7 @@ pub fn output_elements(
         }
         // Windows with server-side decorations are drawn through their rounded shape
         // (M15b step 2), the toplevel and its subsurfaces alike.
+        let frame = state.windows.layout.frame(visible.id, scale.x);
         let mask = state
             .windows
             .layout
@@ -386,7 +401,10 @@ pub fn output_elements(
                 Some(toplevel) => render_elements_from_surface_tree(
                     renderer,
                     toplevel.wl_surface(),
-                    visible.position.to_physical_precise_round(scale),
+                    frame.map_or_else(
+                        || visible.position.to_physical_precise_round(scale),
+                        |f| f.point(visible.position.x, visible.position.y),
+                    ),
                     scale,
                     1.0,
                     Kind::Unspecified,
@@ -404,8 +422,10 @@ pub fn output_elements(
         ));
         match visible.layer {
             Layer::Tiled => {
-                let r = visible.rect;
-                let clip = crate::layout::gaps::to_physical(r, scale.x);
+                let clip = frame.map_or_else(
+                    || crate::layout::gaps::to_physical(visible.rect, scale.x),
+                    |f| f.map(visible.rect),
+                );
                 elements.extend(
                     surfaces
                         .into_iter()

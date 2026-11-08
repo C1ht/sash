@@ -64,7 +64,7 @@ the dock. No shadows on icons.
 Icons (STAND-INS, a designer must replace them): ink plate gradient
 #1A1D21 to #0D0D0F, inner edge white 10%, top highlight 14%, glyph stroke
 8 at 89 px, two tones white 96%/45%, no accent colour. The browser icon
-is the logo (white ring on #0D0D0F). Chrome glyphs: Lucide (ISC) 1.75 px.
+is the logo (white ring on #0D0D0F). Chrome glyphs: Tabler (MIT) at 1.75 px.
 
 Wallpaper: native 5120 px wide or more, cool graphite/teal family; a
 separate light default. Cover-fit, never stretched.
