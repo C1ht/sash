@@ -27,10 +27,10 @@ pub const HOVER_RADIUS: i32 = 5;
 pub const SLOTS: i32 = 3;
 /// Between the slots and the title's area.
 pub const TITLE_MARGIN: i32 = 8;
-/// A resize zone reaches this far inside the border.
-pub const ZONE: i32 = 6;
-/// A corner zone is CORNER x CORNER from the outer corner.
-pub const CORNER: i32 = 16;
+/// A resize zone reaches this far inside the border (docs/design.md: 8).
+pub const ZONE: i32 = 8;
+/// A corner zone is CORNER x CORNER from the outer corner (docs/design.md: 21).
+pub const CORNER: i32 = 21;
 
 /// Which end of the bar holds the buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -359,39 +359,40 @@ mod tests {
             hit(100, 115),
             Some(Part::Resize(edges(true, true, false, false)))
         );
-        // Left zone below the corner square: border plus 6 px.
+        // Left zone below the corner square: the border plus ZONE (8) px.
+        let reach = BORDER + ZONE;
         assert_eq!(
             hit(100, 200),
             Some(Part::Resize(edges(true, false, false, false)))
         );
         assert_eq!(
-            hit(106, 200),
+            hit(100 + reach - 1, 200),
             Some(Part::Resize(edges(true, false, false, false)))
         );
-        assert_eq!(hit(107, 200), None, "client area");
+        assert_eq!(hit(100 + reach, 200), None, "client area");
         // Top zone right of the buttons, then the bar below it.
         assert_eq!(
             hit(300, 100),
             Some(Part::Resize(edges(false, true, false, false)))
         );
         assert_eq!(
-            hit(300, 106),
+            hit(300, 100 + reach - 1),
             Some(Part::Resize(edges(false, true, false, false)))
         );
-        assert_eq!(hit(300, 107), Some(Part::Bar));
+        assert_eq!(hit(300, 100 + reach), Some(Part::Bar));
         assert_eq!(hit(300, 134), Some(Part::Bar));
         assert_eq!(hit(300, 135), None, "client area under the bar");
-        // The other three corners and edges.
+        // The other three corners (CORNER x CORNER, 21) and edges.
         assert_eq!(
             hit(499, 100),
             Some(Part::Resize(edges(false, true, true, false)))
         );
         assert_eq!(
-            hit(484, 115),
+            hit(499 - (CORNER - 1), 100 + CORNER - 1),
             Some(Part::Resize(edges(false, true, true, false)))
         );
         assert_eq!(
-            hit(483, 106),
+            hit(499 - CORNER, 106),
             Some(Part::Resize(edges(false, true, false, false)))
         );
         assert_eq!(
@@ -399,10 +400,10 @@ mod tests {
             Some(Part::Resize(edges(false, false, true, false)))
         );
         assert_eq!(
-            hit(493, 200),
+            hit(500 - reach, 200),
             Some(Part::Resize(edges(false, false, true, false)))
         );
-        assert_eq!(hit(492, 200), None);
+        assert_eq!(hit(500 - reach - 1, 200), None);
         assert_eq!(
             hit(100, 399),
             Some(Part::Resize(edges(true, false, false, true)))
@@ -412,14 +413,14 @@ mod tests {
             Some(Part::Resize(edges(false, false, true, true)))
         );
         assert_eq!(
-            hit(484, 384),
+            hit(499 - (CORNER - 1), 399 - (CORNER - 1)),
             Some(Part::Resize(edges(false, false, true, true)))
         );
         assert_eq!(
-            hit(300, 393),
+            hit(300, 400 - reach),
             Some(Part::Resize(edges(false, false, false, true)))
         );
-        assert_eq!(hit(300, 392), None);
+        assert_eq!(hit(300, 400 - reach - 1), None);
         // Outside the window.
         assert_eq!(hit(99, 200), None);
         assert_eq!(hit(500, 200), None);

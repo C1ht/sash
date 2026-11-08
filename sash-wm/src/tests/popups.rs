@@ -213,7 +213,7 @@ fn popups_follow_their_parent() {
             for _ in 0..3 {
                 h.chord(&[ALT, CTRL, SHIFT, super::harness::keys::H]); // narrower
             }
-            assert_eq!(h.rect_of(2), Some(Rect::new(0, 0, 680, 600)));
+            assert_eq!(h.rect_of(2), Some(Rect::new(0, 0, 800 - 3 * 34, 600)));
         });
         c2.roundtrip();
         assert!(!c2.popup_done(&tooltip), "a keyboard resize keeps popups");
@@ -225,12 +225,14 @@ fn popups_follow_their_parent() {
         c2.roundtrip();
         c2.request_move(&w2);
         server.on_server(|h| {
-            h.pointer_to(400.0, 350.0); // +100, +50
+            // +80, +50: the right edge stays more than EDGE_SNAP (13) px from the
+            // output's, so nothing snaps.
+            h.pointer_to(380.0, 350.0);
             h.button(BTN_LEFT, ButtonState::Released);
-            assert_eq!(h.rect_of(2), Some(Rect::new(100, 50, 680, 600)));
+            assert_eq!(h.rect_of(2), Some(Rect::new(80, 50, 698, 600)));
         });
         assert_eq!(
-            pointer_focus_at(&server, &mut c2, 115.0, 75.0),
+            pointer_focus_at(&server, &mut c2, 95.0, 75.0),
             Some(tooltip.surface.id())
         );
         // Maximize (the top snap zone's state): the popup follows to (0, 0).
@@ -518,7 +520,7 @@ fn a_fixed_size_parent_at_the_output_edge() {
             }
             let r = h.rect_of(1).expect("rect");
             // Outer width: the client's 200 plus its border.
-            assert_eq!(r.right(), 800 + 202 - 64, "64 px stay visible");
+            assert_eq!(r.right(), 800 + 202 - 55, "55 px stay visible");
         });
         // A submenu to the right of the window flips to its left side.
         let spec = PopupSpec {

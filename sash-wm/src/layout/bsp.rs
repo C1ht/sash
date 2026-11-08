@@ -13,6 +13,11 @@ use super::{InsertHint, Layout, Mode, Rect, WindowId};
 /// The smallest a tile may be made by resizing, per axis.
 pub const MIN_TILE: i32 = 64;
 
+/// The spec's minimum tile (docs/design.md, "Interaction constants"; owner, M18c):
+/// defined here, enforced from M19 (where a new tiled window goes), not before.
+#[allow(dead_code, reason = "enforced from M19 (owner, M18c)")]
+pub const MIN_TILE_SIZE: (i32, i32) = (233, 144);
+
 /// A split's share for its first child, as an exact fraction `num / den` with
 /// `0 <= num <= den`. Kept reduced, so equal ratios compare equal. The first child gets
 /// floor(length * num / den) pixels; nothing drifts however often it is applied.

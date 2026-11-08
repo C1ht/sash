@@ -7,7 +7,8 @@ use super::{Direction, Rect, WindowId};
 
 /// At least this many pixels of a floating window (or all of it, if smaller) stay on
 /// the output on each axis. The top edge has a stricter rule: see `clamp_visible`.
-pub const MIN_VISIBLE: i32 = 64;
+/// docs/design.md, "Interaction constants" (owner, M18c: 55, was 64).
+pub const MIN_VISIBLE: i32 = 55;
 
 /// A client's min/max size; 0 on an axis means unconstrained.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -286,16 +287,16 @@ mod tests {
         // Inside: unchanged.
         let r = Rect::new(100, 100, 200, 200);
         assert_eq!(clamp_visible(r, AREA), r);
-        // Far right / bottom: pulled back so 64 px stay.
+        // Far right / bottom: pulled back so 55 px stay.
         assert_eq!(
             clamp_visible(Rect::new(5000, 5000, 200, 200), AREA),
-            Rect::new(736, 536, 200, 200)
+            Rect::new(745, 545, 200, 200)
         );
-        // Far left: 64 px of the right part stay. Above the top: the top edge stops
+        // Far left: 55 px of the right part stay. Above the top: the top edge stops
         // at the top of the area.
         assert_eq!(
             clamp_visible(Rect::new(-5000, -5000, 200, 200), AREA),
-            Rect::new(-136, 0, 200, 200)
+            Rect::new(-145, 0, 200, 200)
         );
         assert_eq!(
             clamp_visible(Rect::new(100, -1, 200, 200), AREA),

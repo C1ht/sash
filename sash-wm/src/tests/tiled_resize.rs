@@ -60,16 +60,16 @@ fn keyboard_resize_moves_the_split_on_the_right_or_bottom_edge() {
             h.chord(&[ALT, H]); // focus 1
             resize_key(h, L);
             assert_eq!(h.mode_of(1), Some(Mode::Tiled), "stays tiled");
-            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 440, 600)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 434, 600)));
             h.chord(&[ALT, L]); // focus 3 (most recent of 2 and 3)
             h.chord(&[ALT, K]); // focus 2
             resize_key(h, J);
             resize_key(h, J);
             resize_key(h, K);
         });
-        assert_eq!(size(&mut c1, &w1), tile(440, 600));
-        assert_eq!(size(&mut c2, &w2), tile(360, 340));
-        assert_eq!(size(&mut c3, &w3), tile(360, 260));
+        assert_eq!(size(&mut c1, &w1), tile(434, 600));
+        assert_eq!(size(&mut c2, &w2), tile(366, 334));
+        assert_eq!(size(&mut c3, &w3), tile(366, 266));
         for client in [&c1, &c2, &c3] {
             for key in [H, J, K, L] {
                 assert!(
@@ -227,20 +227,20 @@ fn ratios_survive_toggling_and_output_resizes() {
         let [(mut c1, w1), (mut c2, w2), (_c3, _w3)] = open_three(&socket, &server);
         server.on_server(|h| {
             h.chord(&[ALT, H]); // focus 1
-            for _ in 0..3 {
-                resize_key(h, L); // 520 of 800: 13/20
+            for _ in 0..4 {
+                resize_key(h, L); // 4 x 34: 536 of 800, 67/100
             }
             h.chord(&[ALT, F]);
             h.chord(&[ALT, F]);
-            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 520, 600)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 536, 600)));
             h.chord(&[ALT, SHIFT, F]);
             h.chord(&[ALT, SHIFT, crate::tests::harness::keys::T]);
-            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 520, 600)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 536, 600)));
             h.server.state.set_layout_area((1000, 700).into());
-            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 650, 700)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 670, 700)));
         });
-        assert_eq!(size(&mut c1, &w1), tile(650, 700));
-        assert_eq!(size(&mut c2, &w2), tile(350, 350));
+        assert_eq!(size(&mut c1, &w1), tile(670, 700));
+        assert_eq!(size(&mut c2, &w2), tile(330, 350));
     });
 }
 

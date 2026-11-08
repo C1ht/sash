@@ -122,12 +122,12 @@ fn float_all_and_tile_all() {
             // Move the focused window (3) and make it narrower.
             h.chord(&[ALT, CTRL, L]);
             h.chord(&[ALT, CTRL, SHIFT, H]);
-            assert_eq!(h.rect_of(3), Some(Rect::new(440, 300, 360, 300)));
+            assert_eq!(h.rect_of(3), Some(Rect::new(434, 300, 366, 300)));
         });
         c1.roundtrip();
         c3.roundtrip();
         assert_eq!(c1.config(&w1), cfg((400, 600), false));
-        assert_eq!(c3.config(&w3), cfg((360, 300), false));
+        assert_eq!(c3.config(&w3), cfg((366, 300), false));
 
         server.on_server(|h| {
             h.chord(&[ALT, SHIFT, T]);
@@ -147,7 +147,7 @@ fn float_all_and_tile_all() {
         // Floating it again restores where it was moved to.
         server.on_server(|h| {
             h.chord(&[ALT, F]);
-            assert_eq!(h.rect_of(3), Some(Rect::new(440, 300, 360, 300)));
+            assert_eq!(h.rect_of(3), Some(Rect::new(434, 300, 366, 300)));
         });
     });
 }
@@ -319,13 +319,13 @@ fn client_resize_request_resizes_a_floating_window() {
         server.on_server(|h| {
             h.chord(&[ALT, F]); // floats at (0, 0, 800, 600)
             // In the client's area, clear of the decorations' resize zones.
-            h.pointer_to(780.0, 580.0);
+            h.pointer_to(770.0, 570.0);
             h.button(BTN_LEFT, ButtonState::Pressed);
         });
         c.roundtrip();
         c.request_resize(&w, ResizeEdge::BottomRight);
         server.on_server(|h| {
-            h.pointer_to(680.0, 530.0);
+            h.pointer_to(670.0, 520.0);
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 700, 550)));
         });
         c.roundtrip();
@@ -354,7 +354,7 @@ fn client_resize_request_resizes_a_floating_window() {
             h.chord(&[ALT, F]); // 1 | 2
             assert_eq!(h.rect_of(1), Some(Rect::new(0, 0, 400, 600)));
             // In the client's area (the tile's resize zones would start a resize).
-            h.pointer_to(380.0, 580.0);
+            h.pointer_to(370.0, 570.0);
             h.button(BTN_LEFT, ButtonState::Pressed);
         });
         c.roundtrip();
@@ -410,9 +410,9 @@ fn the_top_edge_never_goes_above_the_output() {
             h.button(BTN_RIGHT, ButtonState::Released);
             h.key(SHIFT, KeyState::Released);
             h.key(ALT, KeyState::Released);
-            // Keyboard move up (mod+Ctrl+K, 40 px): stays at 0.
+            // Keyboard move up (mod+Ctrl+K, 34 px): stays at 0.
             h.chord(&[ALT, CTRL, J]);
-            assert_eq!(h.rect_of(1), Some(Rect::new(70, 40, 400, 330)));
+            assert_eq!(h.rect_of(1), Some(Rect::new(70, 34, 400, 330)));
             h.chord(&[ALT, CTRL, K]);
             h.chord(&[ALT, CTRL, K]);
             assert_eq!(h.rect_of(1), Some(Rect::new(70, 0, 400, 330)));
@@ -437,9 +437,9 @@ fn the_top_edge_never_goes_above_the_output() {
             assert_eq!(h.rect_of(1), Some(AREA));
             h.chord(&[ALT, DOWN]);
             assert_eq!(h.rect_of(1), Some(Rect::new(210, 40, 400, 330)));
-            // An output resize moves it up just enough for 64 px, never above the top.
-            h.server.state.set_layout_area((800, 100).into());
-            assert_eq!(h.rect_of(1), Some(Rect::new(210, 36, 400, 330)));
+            // An output resize moves it up just enough for 55 px, never above the top.
+            h.server.state.set_layout_area((800, 90).into());
+            assert_eq!(h.rect_of(1), Some(Rect::new(210, 35, 400, 330)));
             h.server.state.set_layout_area((800, 20).into());
             assert_eq!(h.rect_of(1), Some(Rect::new(210, 0, 400, 330)));
             h.server.state.set_layout_area((800, 600).into());
@@ -671,12 +671,12 @@ fn window_larger_than_the_output_and_tiny_output() {
         c.ack_and_commit(&big);
         server.on_server(|h| {
             assert_eq!(h.rect_of(1), Some(Rect::new(-601, 0, 2002, 1502)));
-            // Moving it far away keeps 64 px on the output.
+            // Moving it far away keeps 55 px on the output.
             h.chord(&[ALT, CTRL, L]);
             for _ in 0..50 {
                 h.chord(&[ALT, CTRL, L]);
             }
-            assert_eq!(h.rect_of(1).map(|r| r.x), Some(736));
+            assert_eq!(h.rect_of(1).map(|r| r.x), Some(745));
             // Shrinking the output to 3x2: still kept on it.
             h.server.state.set_layout_area((3, 2).into());
             let r = h.rect_of(1).expect("placed");

@@ -7,8 +7,8 @@ use super::{
     geometry::{clamp_visible, initial_size},
 };
 
-/// Offset between cascaded new windows, on both axes.
-pub const CASCADE_STEP: i32 = 32;
+/// Offset between cascaded new windows, on both axes (docs/design.md: 34).
+pub const CASCADE_STEP: i32 = 34;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FloatingLayout {
@@ -165,18 +165,18 @@ mod tests {
         layout.insert(id(1), &hint((400, 300)));
         assert_eq!(layout.rect_of(id(1)), Some(Rect::new(200, 150, 400, 300)));
         layout.insert(id(2), &hint((400, 300)));
-        assert_eq!(layout.rect_of(id(2)), Some(Rect::new(232, 182, 400, 300)));
+        assert_eq!(layout.rect_of(id(2)), Some(Rect::new(234, 184, 400, 300)));
         layout.insert(id(3), &hint((400, 300)));
-        assert_eq!(layout.rect_of(id(3)), Some(Rect::new(264, 214, 400, 300)));
-        // 200 + 32 * n + 400 <= 800 and 150 + 32 * n + 300 <= 600 hold up to n = 4.
+        assert_eq!(layout.rect_of(id(3)), Some(Rect::new(268, 218, 400, 300)));
+        // 200 + 34 * n + 400 <= 800 and 150 + 34 * n + 300 <= 600 hold up to n = 4.
         layout.insert(id(4), &hint((400, 300)));
         layout.insert(id(5), &hint((400, 300)));
-        assert_eq!(layout.rect_of(id(5)), Some(Rect::new(328, 278, 400, 300)));
+        assert_eq!(layout.rect_of(id(5)), Some(Rect::new(336, 286, 400, 300)));
         // n = 5 would leave the output at the bottom: back to the center.
         layout.insert(id(6), &hint((400, 300)));
         assert_eq!(layout.rect_of(id(6)), Some(Rect::new(200, 150, 400, 300)));
         layout.insert(id(7), &hint((400, 300)));
-        assert_eq!(layout.rect_of(id(7)), Some(Rect::new(232, 182, 400, 300)));
+        assert_eq!(layout.rect_of(id(7)), Some(Rect::new(234, 184, 400, 300)));
     }
 
     #[test]
@@ -230,27 +230,27 @@ mod tests {
         };
         layout.insert(id(1), &dialog);
         assert_eq!(layout.rect_of(id(1)), Some(Rect::new(500, 250, 200, 100)));
-        // A parent mostly off the output: the dialog still keeps 64 px visible.
+        // A parent mostly off the output: the dialog still keeps 55 px visible.
         let off = InsertHint {
             size: (200, 100),
             center_over: Some(Rect::new(1000, 0, 400, 600)),
             ..Default::default()
         };
         layout.insert(id(2), &off);
-        assert_eq!(layout.rect_of(id(2)), Some(Rect::new(736, 250, 200, 100)));
+        assert_eq!(layout.rect_of(id(2)), Some(Rect::new(745, 250, 200, 100)));
     }
 
     #[test]
-    fn moves_keep_64_pixels_visible_and_the_top_edge_on_the_output() {
+    fn moves_keep_55_pixels_visible_and_the_top_edge_on_the_output() {
         let mut layout = FloatingLayout::new(AREA);
         layout.insert_at(id(1), Rect::new(100, 100, 300, 200));
         assert_eq!(
             layout.set_rect(id(1), Rect::new(10_000, -10_000, 300, 200)),
-            Some(Rect::new(736, 0, 300, 200))
+            Some(Rect::new(745, 0, 300, 200))
         );
         assert_eq!(
             layout.set_rect(id(1), Rect::new(-10_000, 10_000, 300, 200)),
-            Some(Rect::new(-236, 536, 300, 200))
+            Some(Rect::new(-245, 545, 300, 200))
         );
         assert_eq!(layout.set_rect(id(99), Rect::new(0, 0, 1, 1)), None);
     }
@@ -263,7 +263,7 @@ mod tests {
         let rect = layout.rect_of(id(1)).expect("still there");
         assert_eq!(
             rect,
-            Rect::new(736, 536, 150, 150),
+            Rect::new(745, 545, 150, 150),
             "moved just enough, size kept"
         );
         assert!(is_visible_enough(rect, AREA));

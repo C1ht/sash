@@ -21,14 +21,14 @@
 | mod+F | mod | Toggle floating for the focused window | all |
 | mod+Shift+F | mod+Shift | Float all windows on the monitor | all |
 | mod+Shift+T | mod+Shift | Tile all windows on the monitor | all |
-| mod+Ctrl+H | mod+Ctrl | Move the window 40 px left (floats a tiled window) | all |
-| mod+Ctrl+J | mod+Ctrl | Move the window 40 px down (floats a tiled window) | all |
-| mod+Ctrl+K | mod+Ctrl | Move the window 40 px up (floats a tiled window) | all |
-| mod+Ctrl+L | mod+Ctrl | Move the window 40 px right (floats a tiled window) | all |
-| mod+Ctrl+Shift+H | mod+Ctrl+Shift | Make the window 40 px narrower (tiled: moves the split at its right edge) | all |
-| mod+Ctrl+Shift+J | mod+Ctrl+Shift | Make the window 40 px taller (tiled: moves the split at its bottom edge) | all |
-| mod+Ctrl+Shift+K | mod+Ctrl+Shift | Make the window 40 px shorter (tiled: moves the split at its bottom edge) | all |
-| mod+Ctrl+Shift+L | mod+Ctrl+Shift | Make the window 40 px wider (tiled: moves the split at its right edge) | all |
+| mod+Ctrl+H | mod+Ctrl | Move the window 34 px left (floats a tiled window) | all |
+| mod+Ctrl+J | mod+Ctrl | Move the window 34 px down (floats a tiled window) | all |
+| mod+Ctrl+K | mod+Ctrl | Move the window 34 px up (floats a tiled window) | all |
+| mod+Ctrl+L | mod+Ctrl | Move the window 34 px right (floats a tiled window) | all |
+| mod+Ctrl+Shift+H | mod+Ctrl+Shift | Make the window 34 px narrower (tiled: moves the split at its right edge) | all |
+| mod+Ctrl+Shift+J | mod+Ctrl+Shift | Make the window 34 px taller (tiled: moves the split at its bottom edge) | all |
+| mod+Ctrl+Shift+K | mod+Ctrl+Shift | Make the window 34 px shorter (tiled: moves the split at its bottom edge) | all |
+| mod+Ctrl+Shift+L | mod+Ctrl+Shift | Make the window 34 px wider (tiled: moves the split at its right edge) | all |
 | mod+Left | mod | Snap: left half, then bottom-left (see the snap table) | all |
 | mod+Right | mod | Snap: right half, then bottom-right | all |
 | mod+Up | mod | Snap: maximize, or the top quarter of a half | all |

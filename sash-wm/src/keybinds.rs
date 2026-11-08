@@ -284,49 +284,49 @@ pub const TABLE: &[Binding] = &[
         ModCtrl,
         Keysym::h,
         Action::Move(Left),
-        "Move the window 40 px left (floats a tiled window)",
+        "Move the window 34 px left (floats a tiled window)",
     ),
     key(
         ModCtrl,
         Keysym::j,
         Action::Move(Down),
-        "Move the window 40 px down (floats a tiled window)",
+        "Move the window 34 px down (floats a tiled window)",
     ),
     key(
         ModCtrl,
         Keysym::k,
         Action::Move(Up),
-        "Move the window 40 px up (floats a tiled window)",
+        "Move the window 34 px up (floats a tiled window)",
     ),
     key(
         ModCtrl,
         Keysym::l,
         Action::Move(Right),
-        "Move the window 40 px right (floats a tiled window)",
+        "Move the window 34 px right (floats a tiled window)",
     ),
     key(
         ModCtrlShift,
         Keysym::h,
         Action::Resize(Left),
-        "Make the window 40 px narrower (tiled: moves the split at its right edge)",
+        "Make the window 34 px narrower (tiled: moves the split at its right edge)",
     ),
     key(
         ModCtrlShift,
         Keysym::j,
         Action::Resize(Down),
-        "Make the window 40 px taller (tiled: moves the split at its bottom edge)",
+        "Make the window 34 px taller (tiled: moves the split at its bottom edge)",
     ),
     key(
         ModCtrlShift,
         Keysym::k,
         Action::Resize(Up),
-        "Make the window 40 px shorter (tiled: moves the split at its bottom edge)",
+        "Make the window 34 px shorter (tiled: moves the split at its bottom edge)",
     ),
     key(
         ModCtrlShift,
         Keysym::l,
         Action::Resize(Right),
-        "Make the window 40 px wider (tiled: moves the split at its right edge)",
+        "Make the window 34 px wider (tiled: moves the split at its right edge)",
     ),
     key(
         Mod,
@@ -712,6 +712,20 @@ mod tests {
             for key in keys {
                 assert!(labels.iter().any(|l| l == key), "{mouse}: no row {key}");
             }
+        }
+    }
+
+    /// The move and resize rows name the keyboard step (docs/design.md: 34 px).
+    #[test]
+    fn move_and_resize_rows_name_the_step() {
+        let step = format!(" {} px ", crate::layout::STEP);
+        let rows: Vec<_> = TABLE
+            .iter()
+            .filter(|b| b.description.contains(" px "))
+            .collect();
+        assert_eq!(rows.len(), 8);
+        for row in rows {
+            assert!(row.description.contains(&step), "{}", row.description);
         }
     }
 

@@ -560,7 +560,7 @@ fn popups_over_the_bar_and_client_requests() {
 
 /// The snap bands are measured from the true output edge, whatever borders windows have
 /// there (owner, after M11b): during a bar drag the pointer at 0..7 px from the left or
-/// top edge previews that zone, at 8 px it does not; corners within 64 px of two edges.
+/// top edge previews that zone, at 8 px it does not; corners within 55 px of two edges.
 /// Then a window snapped to the left half has no border on its output edges, and a
 /// press at x = 0 goes to its client.
 #[test]
@@ -588,7 +588,8 @@ fn snap_bands_trigger_at_the_true_output_edge() {
             assert_eq!(preview(h, 400.0, 8.0), None, "y = 8");
             let top_left = Some(Rect::new(0, 0, 400, 300));
             assert_eq!(preview(h, 0.0, 0.0), top_left, "the corner pixel");
-            assert_eq!(preview(h, 63.0, 63.0), top_left, "63 px from both edges");
+            assert_eq!(preview(h, 54.0, 54.0), top_left, "54 px from both edges");
+            assert_eq!(preview(h, 55.0, 300.0), None, "55 px: no corner, no edge");
             assert_eq!(preview(h, 799.0, 300.0), Some(Rect::new(400, 0, 400, 600)));
             // Release at the left edge: snapped to the left half.
             preview(h, 0.0, 300.0);

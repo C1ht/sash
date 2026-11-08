@@ -9,12 +9,13 @@
 
 use super::{Direction, Edges, Rect};
 
-/// Corner trigger: the pointer within this many pixels of two output edges.
-pub const CORNER_TRIGGER: i32 = 64;
-/// Edge trigger: the pointer within this many pixels of one output edge.
+/// Corner trigger: the pointer within this many pixels of two output edges
+/// (docs/design.md, "Interaction constants": 55).
+pub const CORNER_TRIGGER: i32 = 55;
+/// Edge trigger: the pointer within this many pixels of one output edge (8).
 pub const EDGE_TRIGGER: i32 = 8;
-/// Edge snapping threshold during mouse moves and resizes.
-pub const EDGE_SNAP: i32 = 12;
+/// Edge snapping threshold during mouse moves and resizes (13).
+pub const EDGE_SNAP: i32 = 13;
 
 /// Identifies a zone in the table. The settings protocol will edit the table; the
 /// keybind table refers to the default zones by these ids.
@@ -402,20 +403,21 @@ mod tests {
         assert_eq!(at(792, 300), Some(ZoneId::RIGHT));
         assert_eq!(at(791, 300), None);
         assert_eq!(at(400, 599), None, "no bottom zone");
-        // Corners: within 64 px of two edges, even inside an edge band.
+        // Corners: within 55 px of two edges, even inside an edge band.
         assert_eq!(at(0, 0), Some(ZoneId::TOP_LEFT));
-        assert_eq!(at(63, 63), Some(ZoneId::TOP_LEFT));
+        assert_eq!(at(54, 54), Some(ZoneId::TOP_LEFT));
         assert_eq!(
-            at(64, 3),
+            at(55, 3),
             Some(ZoneId::FULL),
-            "64 px from the left: top edge, not corner"
+            "55 px from the left: top edge, not corner"
         );
-        assert_eq!(at(5, 63), Some(ZoneId::TOP_LEFT));
-        assert_eq!(at(5, 64), Some(ZoneId::LEFT));
+        assert_eq!(at(5, 54), Some(ZoneId::TOP_LEFT));
+        assert_eq!(at(5, 55), Some(ZoneId::LEFT));
         assert_eq!(at(799, 0), Some(ZoneId::TOP_RIGHT));
         assert_eq!(at(0, 599), Some(ZoneId::BOTTOM_LEFT));
         assert_eq!(at(799, 599), Some(ZoneId::BOTTOM_RIGHT));
-        assert_eq!(at(740, 540), Some(ZoneId::BOTTOM_RIGHT));
+        assert_eq!(at(746, 546), Some(ZoneId::BOTTOM_RIGHT));
+        assert_eq!(at(744, 546), None, "55 px from the right: no corner");
         assert_eq!(at(400, 300), None);
         assert_eq!(at(-1, 300), None, "outside the output");
     }
@@ -507,13 +509,13 @@ mod tests {
     #[test]
     fn edge_snapping() {
         let none: &[Rect] = &[];
-        // Move: within 12 px of the left output edge snaps; 13 px does not.
-        let r = Rect::new(12, 100, 200, 100);
+        // Move: within 13 px of the left output edge snaps; 14 px does not.
+        let r = Rect::new(13, 100, 200, 100);
         assert_eq!(
             snap_to_edges(r, Edges::ALL, AREA, none),
             Rect::new(0, 100, 200, 100)
         );
-        let r = Rect::new(13, 100, 200, 100);
+        let r = Rect::new(14, 100, 200, 100);
         assert_eq!(snap_to_edges(r, Edges::ALL, AREA, none), r);
         // Outside the output: the right edge at 810 snaps back to 800.
         let r = Rect::new(610, 100, 200, 100);

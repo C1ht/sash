@@ -234,6 +234,28 @@ change this file without the owner's approval.
   changed; no tag; STOP and ask. Minimize, shadows and M19 are not
   started.
 
+## Spec alignment (M18c, owner)
+
+- Interaction constants (docs/design.md, "Interaction constants"): resize
+  zone 8 px inside the outline, corner zone 21 x 21, snap edge trigger 8,
+  snap corner trigger 55, edge snap distance 13, visibility rule 55,
+  keyboard move/resize step 34, cascade 34. They supersede the older
+  values in the sections below. Minimum tile 233 x 144 is defined as a
+  constant and enforced from M19, not before. Cursor size stays open (21,
+  24 or 34, decided in the hardware session). The tiled-resize floor of
+  64 px per axis (M6) is not in the spec and is unchanged (listed for the
+  owner).
+- sash-ui metrics (docs/design.md): buttons 34 high, padding 13 (21 where
+  the spec says), icons 15 (title bar), 21 (search, footer) and 24 (tray);
+  radius min(shorter side x 0.236, 21) with the spec's hand-set exceptions
+  (34 for the dock and the launcher panel).
+- The SVG work budget is deterministic (nodes, path segments, layers,
+  filter primitives of the converted tree); the wall clock is only a
+  generous guard (owner, M18c).
+- Confirmed by the owner (M18c): a hovered button's glyph is the text
+  token; the outline is the token drawn over the bar tone, opaque.
+  Automatic appearance means dark until a settings source exists.
+
 ## BSP tiling (M3)
 
 - The BSP tree is plain data in its own module, with no Smithay types,
@@ -325,10 +347,11 @@ change this file without the owner's approval.
 - New floating window: the client chooses its size (configure 0x0),
   clamped to min/max and the output. The first is centered on the
   output; the next ones cascade by 32 px and wrap back to the center
-  when they would leave the output.
+  when they would leave the output. Superseded (owner, M18c): 34 px.
 - Floating windows draw above tiled ones, are not clipped to tiles, and
   keep at least min(64, size) px visible on the output on each axis
-  when moved. An output resize clamps them back.
+  when moved. An output resize clamps them back. Superseded (owner,
+  M18c): 55 px.
 - Top edge (owner, after M9 stage B): a floating window's top edge never
   goes above the top of the output's usable area (the whole output
   until layer-shell exclusive zones exist), in any operation: mouse
@@ -388,7 +411,8 @@ change this file without the owner's approval.
   bottom-edge zone.
 - Triggers during a window drag (constants): pointer within 64 px of
   two output edges = corner; otherwise within 8 px of the top, left or
-  right edge = that edge's zone. Corners win over edges.
+  right edge = that edge's zone. Corners win over edges. Superseded
+  (owner, M18c): the corner trigger is 55 px; the edge trigger stays 8.
 - While the pointer is in a zone, a preview rectangle is drawn: fill
   #0A84FF at 30% alpha plus a 2 px border at 80% alpha. Plain rectangle,
   no blur, rounding or animation. Superseded (owner, M18b): the accent at
@@ -405,7 +429,8 @@ change this file without the owner's approval.
   from its zone.
 - Edge snapping: during a mouse move or resize of a floating window,
   its edges snap to the output edges and to edges of other visible
-  windows within 12 px (constant), nearest first. Shift held during the
+  windows within 12 px (constant; superseded, owner M18c: 13 px), nearest
+  first. Shift held during the
   drag disables it. Not applied to keyboard moves.
 - Client fullscreen and maximize requests are handled (set/unset
   fullscreen, set/unset maximized) with the right configure states.
@@ -450,7 +475,7 @@ change this file without the owner's approval.
 
 - Resizing a tiled window changes the ratio of the split on the side
   being resized. Keys: the floating resize keys (mod+Ctrl+Shift+H/J/K/L,
-  40 px per step) also resize tiled windows by moving the nearest split
+  40 px per step; superseded, owner M18c: 34 px) also resize tiled windows by moving the nearest split
   in that direction. Mouse: mod+right-drag on a tiled window uses the 3x3
   grid: an edge cell moves that edge's split, a corner moves both, the
   center moves the bottom-right.
@@ -1036,7 +1061,8 @@ change this file without the owner's approval.
   brightness together.
 - Constants: bar height 32 px, border 1 px, button hit area 32x32,
   glyph about 12 px, resize zones 6 px wide inside the border and 16x16
-  px at the corners, clamped to the output.
+  px at the corners, clamped to the output. Superseded (owner, M18c):
+  zones 8 px, corners 21 x 21.
 - Where a button's 32x32 area overlaps a resize zone or corner, the
   button wins (owner, M11b): the zones apply only outside the buttons.
 - A button acts on release, only if the pointer is still over it; any

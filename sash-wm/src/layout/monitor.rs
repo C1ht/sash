@@ -18,8 +18,8 @@ use super::{
     snap::{SnapStep, ZoneId, Zones, snap_step},
 };
 
-/// Keyboard move and resize step, in pixels.
-pub const STEP: i32 = 40;
+/// Keyboard move and resize step, in pixels (docs/design.md: 34).
+pub const STEP: i32 = 34;
 
 #[derive(Clone, Debug, PartialEq)]
 struct WindowState {
@@ -1685,15 +1685,16 @@ mod tests {
         assert_eq!(rect(&layout, 3), Rect::new(500, 500, 500, 501));
     }
 
-    /// 1 | (2 / 3) with the vertical split at 520 (13/20) and 2's bottom at 340 (17/30).
+    /// 1 | (2 / 3) with the vertical split at 520 (13/20) and 2's bottom at 340 (17/30)
+    /// (deltas of 120 and 40 px, independent of the keyboard step).
     fn resized_layout() -> MonitorLayout {
         let mut layout = layout_with(3);
         assert_eq!(
-            layout.resize_by(id(1), 3 * STEP, 0),
+            layout.resize_by(id(1), 120, 0),
             Some(Rect::new(0, 0, 520, 600))
         );
         assert_eq!(
-            layout.resize_by(id(2), 0, STEP),
+            layout.resize_by(id(2), 0, 40),
             Some(Rect::new(520, 0, 280, 340))
         );
         assert_eq!(
@@ -1890,12 +1891,12 @@ mod tests {
         );
         assert_eq!(
             layout.move_by(id(2), STEP, 0),
-            Some(Rect::new(440, 0, 400, 600))
+            Some(Rect::new(434, 0, 400, 600))
         );
         assert_eq!(layout.mode(id(2)), Some(Mode::Floating));
         assert_eq!(
             layout.resize_by(id(2), STEP, -STEP),
-            Some(Rect::new(440, 0, 422, 560)),
+            Some(Rect::new(434, 0, 422, 566)),
             "max client width 420, plus the border"
         );
         for _ in 0..20 {
@@ -1903,7 +1904,7 @@ mod tests {
         }
         assert_eq!(
             rect(&layout, 2),
-            Rect::new(440, 0, 102, 102),
+            Rect::new(434, 0, 102, 102),
             "min client size 100x100"
         );
         for _ in 0..40 {
@@ -1911,8 +1912,8 @@ mod tests {
         }
         assert_eq!(
             rect(&layout, 2),
-            Rect::new(736, 536, 102, 102),
-            "64 px stay visible"
+            Rect::new(745, 545, 102, 102),
+            "55 px stay visible"
         );
         layout.check_invariants();
     }
@@ -2156,10 +2157,10 @@ mod tests {
         layout.snap(id(1), ZoneId::LEFT);
         layout.move_by(id(1), STEP, 0);
         assert_eq!(snapped(&layout, 1), None);
-        assert_eq!(rect(&layout, 1), Rect::new(40, 0, 400, 600));
+        assert_eq!(rect(&layout, 1), Rect::new(STEP, 0, 400, 600));
         layout.snap(id(1), ZoneId::RIGHT);
         layout.resize_by(id(1), -STEP, 0);
-        assert_eq!(rect(&layout, 1), Rect::new(400, 0, 360, 600));
+        assert_eq!(rect(&layout, 1), Rect::new(400, 0, 400 - STEP, 600));
         layout.check_invariants();
     }
 
@@ -2604,17 +2605,17 @@ mod tests {
     }
 
     #[test]
-    fn the_64_px_rule_counts_pixels_inside_the_usable_area() {
+    fn the_visibility_rule_counts_pixels_inside_the_usable_area() {
         let mut layout = layout_with(1);
         layout.toggle(id(1));
         layout.set_floating_rect(id(1), Rect::new(100, 560, 300, 200));
-        // A 100 px bottom panel: at least 64 px must stay above it.
+        // A 100 px bottom panel: at least MIN_VISIBLE (55) px must stay above it.
         let above_panel = Rect::new(0, 0, 800, 500);
         layout.set_geometry(AREA, above_panel);
-        assert_eq!(rect(&layout, 1), Rect::new(100, 436, 300, 200));
+        assert_eq!(rect(&layout, 1), Rect::new(100, 445, 300, 200));
         // A drag towards the panel stops at the same place.
         layout.set_floating_rect(id(1), Rect::new(100, 590, 300, 200));
-        assert_eq!(rect(&layout, 1), Rect::new(100, 436, 300, 200));
+        assert_eq!(rect(&layout, 1), Rect::new(100, 445, 300, 200));
         layout.check_invariants();
     }
 
