@@ -37,6 +37,12 @@ Shadows (only on things that float): window unfocused 0 1 2 black 20% +
 0 8 21 black 30%; focused 0 1 2 25% + 0 21 55 45%; glass panels 0 1 2 20%
 + 0 21 55 25%. Light theme: 10/14, 12/22, 10/14.
 
+Interaction constants (logical px): resize zone 8 inside the outline,
+corner zone 21 x 21; snap edge trigger 8, snap corner trigger 55; edge
+snap distance 13; visibility rule 55 (a moved window keeps at least 55 px
+on the output per axis); keyboard move/resize step 34; cascade 34; minimum
+tile 233 x 144. Cursor size open: 21, 24 or 34 (hardware session).
+
 Glass B (chosen): dark tint #15191C at 88%, blur 80, saturation 100%,
 edge white 10%, top highlight white 16%, fine monochrome grain, soft
 (tune by eye, about 4%). Light tint #F3F5F7 at 90%, same blur (NOT YET
@@ -70,5 +76,5 @@ Wallpaper: native 5120 px wide or more, cool graphite/teal family; a
 separate light default. Cover-fit, never stretched.
 
 Open: dock-on-side details beyond the mirror; the browser draws its own
-tab strip under our 34 px bar (keep both for now); cursor size (21 or 34,
+tab strip under our 34 px bar (keep both for now); cursor size (21, 24 or 34,
 decided in the hardware session); light glass B; real icon set.
