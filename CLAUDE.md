@@ -1817,7 +1817,8 @@ change this file without the owner's approval.
   variables; nothing is read from system configuration. Key repeat
   600 ms / 25 Hz, libinput's default pointer speed, natural scrolling
   off, tap-to-click on. An "input" group (keyboard layout, key repeat
-  delay and rate, pointer speed, natural scrolling, tap-to-click) joins
+  delay and rate, pointer speed, natural scrolling, tap-to-click, cursor
+  size: medium 24 (default), large 36, extra large 48) joins
   the closed settings list when the settings protocol is built; no
   input setting exists before then.
 
