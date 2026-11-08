@@ -248,8 +248,6 @@ impl Sash {
         match action.flatten() {
             Some(Intercepted::Action(action)) => {
                 record!(self, "keybind", "action" => format!("{action:?}"));
-                // Not typing: the first window to map after a keybind may take focus.
-                self.focus.note_keybind();
                 // A keybind that changes focus cancels a drag and drop first.
                 if action.changes_focus() {
                     self.cancel_drag("focus keybind");

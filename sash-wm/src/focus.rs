@@ -31,6 +31,10 @@ use crate::{layout::WindowId, state::Sash, windows::SurfaceHit};
 /// window that maps within this long after keyboard input maps unfocused.
 pub const TYPING_GUARD: Duration = Duration::from_millis(377);
 
+/// How long a spawn exempts the first window to map from the typing guard (owner,
+/// after M19a).
+pub const SPAWN_EXEMPTION: Duration = Duration::from_secs(13);
+
 pub struct Focus {
     /// The "focus follows cursor" setting (closed settings list; default on). A value
     /// in the state until the settings protocol exists. Debug builds only:
@@ -43,9 +47,13 @@ pub struct Focus {
     /// The last keystroke delivered to a client (press or release; modifier keys
     /// alone and compositor keybinds are not typing).
     last_key: Option<Instant>,
-    /// A keybind ran and no window has mapped since (nor was a key typed since): the
-    /// next window to map is exempt from the guard.
-    after_keybind: bool,
+    /// When a keybind spawned a client, while no window has mapped and no key was
+    /// typed since: the next window to map within SPAWN_EXEMPTION is exempt from the
+    /// guard. Only spawning keybinds set it (owner, after M19a).
+    spawned_at: Option<Instant>,
+    /// Tests: fake time added to the clock.
+    #[cfg(test)]
+    skew: Duration,
     /// The surface the pointer was last given and its origin, to find out whether a
     /// layout change moved what is under a still pointer.
     target: Option<SurfaceHit>,
@@ -68,7 +76,9 @@ impl Focus {
             cycle_hold: false,
             typing_guard: TYPING_GUARD,
             last_key: None,
-            after_keybind: false,
+            spawned_at: None,
+            #[cfg(test)]
+            skew: Duration::ZERO,
             target: None,
             last_time: 0,
             refresh_armed: false,
@@ -86,25 +96,46 @@ impl Focus {
     /// (Alt and Super are delivered around every chord).
     pub fn note_delivered(&mut self, sym: smithay::input::keyboard::Keysym) {
         if !sym.is_modifier_key() {
-            self.last_key = Some(Instant::now());
-            self.after_keybind = false;
+            self.last_key = Some(self.now());
+            self.spawned_at = None;
         }
     }
 
-    /// A compositor keybind ran (it launches or controls something; never typing).
-    pub fn note_keybind(&mut self) {
-        self.after_keybind = true;
+    /// A keybind spawned a client: the first window to map in the next
+    /// SPAWN_EXEMPTION is exempt from the guard. Other keybinds (focus, move, resize,
+    /// ...) are not typing and exempt nothing.
+    pub fn note_spawn(&mut self) {
+        self.spawned_at = Some(self.now());
     }
 
     /// A window maps: whether the guard keeps it unfocused. Keystrokes delivered to
     /// clients within the guard's window count, except for the first window to map
-    /// after a keybind (with nothing typed since).
+    /// within SPAWN_EXEMPTION of a spawning keybind (with nothing typed since); that
+    /// first map consumes the exemption, expired or not.
     pub fn guard_on_map(&mut self) -> bool {
-        if std::mem::take(&mut self.after_keybind) {
+        let now = self.now();
+        if self
+            .spawned_at
+            .take()
+            .is_some_and(|at| now.duration_since(at) < SPAWN_EXEMPTION)
+        {
             return false;
         }
         self.last_key
-            .is_some_and(|at| at.elapsed() < self.typing_guard)
+            .is_some_and(|at| now.duration_since(at) < self.typing_guard)
+    }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        return Instant::now() + self.skew;
+        #[cfg(not(test))]
+        Instant::now()
+    }
+
+    /// Tests: moves the clock forward.
+    #[cfg(test)]
+    pub fn advance(&mut self, by: Duration) {
+        self.skew += by;
     }
 
     /// A mod+Tab cycle was committed.
@@ -282,5 +313,51 @@ impl Sash {
         if matches!(self.cursor.image(), CursorImageStatus::Surface(_)) {
             self.request_redraw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use smithay::input::keyboard::Keysym;
+
+    use super::*;
+
+    /// A long guard, so only the exemption decides.
+    fn typed() -> Focus {
+        let mut focus = Focus::new();
+        focus.typing_guard = Duration::from_secs(60);
+        focus.note_delivered(Keysym::a);
+        focus
+    }
+
+    #[test]
+    fn the_spawn_exemption_holds_13_s_for_the_first_map_only() {
+        let mut focus = typed();
+        assert!(focus.guard_on_map(), "typing: guarded");
+        focus.note_spawn();
+        focus.advance(Duration::from_secs(12));
+        assert!(!focus.guard_on_map(), "within 13 s: exempt");
+        assert!(focus.guard_on_map(), "the second window: guarded");
+        let mut focus = typed();
+        focus.note_spawn();
+        focus.advance(SPAWN_EXEMPTION);
+        assert!(focus.guard_on_map(), "at 13 s: expired");
+        assert!(focus.spawned_at.is_none(), "consumed although expired");
+    }
+
+    #[test]
+    fn typing_cancels_the_exemption_and_modifiers_are_not_typing() {
+        let mut focus = typed();
+        focus.note_spawn();
+        focus.note_delivered(Keysym::Alt_L);
+        focus.note_delivered(Keysym::Super_L);
+        assert!(!focus.guard_on_map(), "modifier keys keep the exemption");
+        let mut focus = typed();
+        focus.note_spawn();
+        focus.note_delivered(Keysym::b);
+        assert!(focus.guard_on_map(), "a typed key cancels it");
+        let mut focus = Focus::new();
+        focus.note_delivered(Keysym::Alt_L);
+        assert!(!focus.guard_on_map(), "a modifier alone is not typing");
     }
 }

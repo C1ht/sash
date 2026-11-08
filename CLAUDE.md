@@ -263,7 +263,7 @@ change this file without the owner's approval.
 - Blockers: move, resize and drag-and-drop grabs, a held button, a grabbed popup chain, a layer surface holding the keyboard, mod+Tab until release and the first real motion after it.
 - The xdg activated state follows keyboard focus (set on the focused window, cleared on the rest).
 - Pointer refresh: after every layout change, wl_pointer goes to the surface under a still pointer; it never moves keyboard focus.
-- Typing guard (interim until E5): a window mapping within 377 ms of a keystroke delivered to a client maps unfocused. Keybinds and modifier keys alone are not typing; the first window to map after a keybind is exempt.
+- Typing guard (interim until E5): a window mapping within 377 ms of a keystroke delivered to a client maps unfocused. Keybinds and modifier keys alone are not typing. Only a keybind that spawns a client exempts the first window to map within 13 s; a keystroke typed before that map cancels it.
 - Details, measurements and targets: docs/plan.md (M19a).
 
 ## BSP tiling (M3)

@@ -1303,23 +1303,29 @@ impl Sash {
     }
 
     #[cfg(not(test))]
-    fn spawn_terminal(&self) {
+    fn spawn_terminal(&mut self) {
         let spawned = Command::new("foot")
             .env("WAYLAND_DISPLAY", &self.keybinds.display_name)
             .spawn();
         match spawned {
             // Reap the child when it exits so it does not linger as a zombie.
-            Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+            Ok(mut child) => {
+                // Its first window may take focus although keys were typed just
+                // before (the typing guard's exemption).
+                self.focus.note_spawn();
+                drop(std::thread::spawn(move || child.wait()));
+            }
             Err(err) => tracing::warn!(%err, "could not start foot"),
         }
     }
 
     /// Tests start no foot: the display it would connect to is recorded.
     #[cfg(test)]
-    fn spawn_terminal(&self) {
+    fn spawn_terminal(&mut self) {
         self.terminals_spawned
             .borrow_mut()
             .push(self.keybinds.display_name.clone());
+        self.focus.note_spawn();
     }
 }
 

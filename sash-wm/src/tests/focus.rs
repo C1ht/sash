@@ -480,70 +480,118 @@ fn the_typing_guard_maps_unfocused_right_after_keyboard_input() {
     });
 }
 
-/// The chord that launches a client: mod+Return (start foot; debug builds only, the
-/// test build records it instead of starting foot). Release builds have no launching
-/// keybind yet (the recovery terminal comes with E6), so there a focus chord stands in:
-/// every keybind is handled the same way by the guard.
-fn launch_chord(h: &mut Harness) {
-    #[cfg(debug_assertions)]
-    {
-        use super::harness::keys::ENTER;
-        let before = h.server.state.terminals_spawned.borrow().len();
-        h.chord(&[ALT, ENTER]);
-        assert_eq!(
-            h.server.state.terminals_spawned.borrow().len(),
-            before + 1,
-            "spawned"
-        );
-    }
-    #[cfg(not(debug_assertions))]
-    h.chord(&[ALT, H]);
+/// Types one letter into the focused client (a keystroke delivered: typing).
+fn type_a(h: &mut Harness) {
+    h.key(KEY_A, KeyState::Pressed);
+    h.key(KEY_A, KeyState::Released);
 }
 
-/// Keybinds are not typing (owner, after M19a): a chord that spawns a client, even
-/// right after text was typed, lets the client that maps within 377 ms take focus; only
-/// keystrokes delivered to clients count, and modifier keys alone do not.
-#[test]
-fn a_chord_that_spawns_a_client_lets_it_take_focus_within_the_guard() {
+fn guarded() -> Harness {
     let mut harness = following();
     harness.server.state.focus.typing_guard = crate::focus::TYPING_GUARD;
+    harness
+}
+
+/// A focus chord is not typing and exempts nothing (owner, after M19a): right after
+/// typing and a focus chord, a background window maps unfocused; so does one mapping
+/// 1 s after a focus chord while the user keeps typing.
+#[test]
+fn a_focus_chord_exempts_no_window_from_the_guard() {
+    let mut harness = guarded();
     let socket = harness.socket_path();
     harness.run_with_remote(move |server| {
         let mut c1 = TestClient::connect(&socket);
         let _w1 = c1.map_window();
-        // The chord alone (Alt is delivered to the client, but a modifier is not typing).
-        server.on_server(launch_chord);
+        server.on_server(|h| {
+            type_a(h);
+            h.chord(&[ALT, L]);
+        });
         let mut c2 = TestClient::connect(&socket);
         let w2 = c2.map_window();
         c2.roundtrip();
-        assert_eq!(focus(&server), Some(2), "the spawned window takes focus");
-        assert!(c2.activated(&w2));
-        // Text typed into the window, then at once the chord: the first window to map
-        // after the chord takes focus.
-        server.on_server(|h| {
-            h.key(KEY_A, KeyState::Pressed);
-            h.key(KEY_A, KeyState::Released);
-            launch_chord(h);
-        });
+        assert_eq!(focus(&server), Some(1), "no exemption from a focus chord");
+        assert!(!c2.activated(&w2));
+        server.on_server(|h| h.chord(&[ALT, H]));
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(100));
+            server.on_server(type_a);
+        }
         let mut c3 = TestClient::connect(&socket);
         let w3 = c3.map_window();
         c3.roundtrip();
         assert_eq!(
             focus(&server),
-            Some(3),
-            "typing before the chord does not count"
+            Some(1),
+            "1 s later, still typing: unfocused"
         );
-        assert!(c3.activated(&w3));
-        // Only the first: a second window right after typing maps unfocused.
+        assert!(!c3.activated(&w3));
+    });
+}
+
+/// A spawning chord (mod+Return, debug builds only: release builds have no spawning
+/// keybind yet) right after typing: the spawned client takes focus; a second window
+/// right after it is not exempt.
+#[cfg(debug_assertions)]
+#[test]
+fn a_spawning_chord_exempts_only_the_first_window_to_map() {
+    use super::harness::keys::ENTER;
+    let mut harness = guarded();
+    // A long guard, so the timing of the run cannot decide the second window.
+    harness.server.state.focus.typing_guard = Duration::from_secs(60);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
         server.on_server(|h| {
-            h.key(KEY_A, KeyState::Pressed);
-            h.key(KEY_A, KeyState::Released);
+            type_a(h);
+            h.chord(&[ALT, ENTER]);
+            assert_eq!(h.server.state.terminals_spawned.borrow().len(), 1);
         });
-        let mut c4 = TestClient::connect(&socket);
-        let w4 = c4.map_window();
-        c4.roundtrip();
-        assert_eq!(focus(&server), Some(3), "plain typing still guards");
-        assert!(!c4.activated(&w4));
+        let mut c2 = TestClient::connect(&socket);
+        let w2 = c2.map_window();
+        c2.roundtrip();
+        assert_eq!(focus(&server), Some(2), "the spawned client takes focus");
+        assert!(c2.activated(&w2));
+        let mut c3 = TestClient::connect(&socket);
+        let w3 = c3.map_window();
+        c3.roundtrip();
+        assert_eq!(focus(&server), Some(2), "the second window is not exempt");
+        assert!(!c3.activated(&w3));
+    });
+}
+
+/// The exemption expires 13 s after the spawn (fake time): a window mapping later is
+/// guarded; one mapping before is not.
+#[cfg(debug_assertions)]
+#[test]
+fn the_spawn_exemption_expires_after_13_s() {
+    use super::harness::keys::ENTER;
+    let mut harness = guarded();
+    harness.server.state.focus.typing_guard = Duration::from_secs(60);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let _w1 = c1.map_window();
+        server.on_server(|h| {
+            type_a(h);
+            h.chord(&[ALT, ENTER]);
+            h.server.state.focus.advance(Duration::from_secs(14));
+        });
+        let mut c2 = TestClient::connect(&socket);
+        let w2 = c2.map_window();
+        c2.roundtrip();
+        assert_eq!(focus(&server), Some(1), "after 13 s: guarded");
+        assert!(!c2.activated(&w2));
+        server.on_server(|h| {
+            type_a(h);
+            h.chord(&[ALT, ENTER]);
+            h.server.state.focus.advance(Duration::from_secs(12));
+        });
+        let mut c3 = TestClient::connect(&socket);
+        let w3 = c3.map_window();
+        c3.roundtrip();
+        assert_eq!(focus(&server), Some(3), "within 13 s: exempt");
+        assert!(c3.activated(&w3));
     });
 }
 

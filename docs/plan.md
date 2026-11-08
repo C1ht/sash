@@ -651,9 +651,18 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
   - A window that maps within 377 ms (`focus::TYPING_GUARD`) of a keystroke delivered to a client maps unfocused and not activated. It keeps its place: the placement is unchanged.
   - **What counts (owner, after M19a):**
     - Only keystrokes delivered to clients count: compositor keybinds never do, and modifier keys alone do not either (Alt and Super are delivered around every chord).
-    - The first window to map after a keybind is exempt, even right after typing.
-    - A keystroke typed after the keybind, before anything maps, cancels the exemption (Claude's call, for the owner). Otherwise a focus-move chord would leave an exemption that a background window could use much later.
-    - Found by the new test `a_chord_that_spawns_a_client_lets_it_take_focus_within_the_guard`: the first version counted every key event, so a window started by mod+Return mapped unfocused.
+    - Found by the test that a chord spawning a client lets it take focus: the first version counted every key event, so a window started by mod+Return mapped unfocused.
+  - **The spawn exemption (owner, second follow-up):**
+    - Only a keybind that spawns a client creates it; focus, move, resize and other chords create none. Today that is mod+Return, in debug builds only; release builds have no spawning keybind until the recovery terminal (E6).
+    - It lets the first window to map within 13 s (`focus::SPAWN_EXEMPTION`) take focus despite the guard. That map consumes it, expired or not.
+    - A keystroke delivered to a client before anything maps cancels it.
+    - In practice it only matters for a window mapping within 377 ms of the typing that came before the chord: any typing after the chord cancels it. The 13 s bound keeps a spawn that never maps from exempting an unrelated window later.
+  - **Process ancestry (SO_PEERCRED pid descending from the spawned pid): investigated, not built.** It would be simple to write but is not robust; it fails in the cases that matter:
+    1. Single-instance apps map their window from a process that already ran: Firefox hands a new window to the running instance through its remote protocol, footclient asks a running `foot --server`, and D-Bus-activated apps are started by the bus.
+    2. Launches that detach: the planned dock launch (docs/m16-investigation.md, C: setsid, the launcher reaps the child at once) and `systemd-run --user` re-parent the app away from what was spawned, so the ancestry chain is broken. A parent that exits before the map has the same effect.
+    3. A pid is not proof of anything: the trust rules use the socket, never a process id (CLAUDE.md, "Trust and spawning"), and pids are reused.
+    - Its failure is the safe direction (no exemption, so the window maps unfocused), but the exemption would then miss exactly the apps people start most.
+    - The right mechanism is the xdg-activation token in E5, which single-instance apps forward. So: the timeout only.
   - The owner may delete this step.
 - **M19a done, waiting for the owner (no tag).** `sash-wm/src/focus.rs`:
   - **The rule:** one real motion that enters a window other than the focused one focuses it, from a window or a gap.
