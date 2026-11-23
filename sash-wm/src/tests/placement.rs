@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Placement at the pointer and the minimum tile (owner, M19b), end to end: real
-//! clients on the headless harness with the real gaps (outer 13, inner 8). After every
-//! case the layout's invariants hold (every tile at least 233 x 144 visible) and the
-//! gaps are exact in physical pixels at scales 1, 1.25, 1.5, 1.75 and 2.
+//! Placement at the pointer and the minimum tile (owner, M19b) and dropping a dragged
+//! tile (owner, M19c), end to end: real clients on the headless harness with the real
+//! gaps (outer 13, inner 8). After every case the layout's invariants hold (every tile
+//! at least 233 x 144 visible) and the gaps are exact in physical pixels at scales 1,
+//! 1.25, 1.5, 1.75 and 2.
 //!
 //! Four columns on a 3200 x 1200 output, left to right windows 1, 4, 2, 3, each cell
 //! 800 wide.
@@ -347,5 +348,234 @@ fn a_shrinking_area_floats_the_newest_tiles_and_they_return() {
         assert_eq!(mode(&server, 4), Some(Mode::Tiled), "untouched: back");
         // Never closed.
         server.on_server(|h| assert_eq!(h.mapped_windows(), 4));
+    });
+}
+
+// Dropping a dragged tile (owner, M19c; docs/plan.md, "M19c rules").
+
+/// The drag preview, as drawn (the visible rectangle).
+fn preview(server: &Remote) -> Option<Rect> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    server.on_server(move |h| {
+        let _ = tx.send(h.server.state.overlay.preview());
+    });
+    rx.recv().unwrap()
+}
+
+/// What a tile in `cell` shows (the one gap function).
+fn visible(server: &Remote, cell: Rect) -> Rect {
+    let (tx, rx) = std::sync::mpsc::channel();
+    server.on_server(move |h| {
+        let _ = tx.send(h.server.state.windows.layout.inset(cell));
+    });
+    rx.recv().unwrap()
+}
+
+/// mod+left press at (x, y): starts dragging the window there.
+fn grab(server: &Remote, x: f64, y: f64) {
+    server.on_server(move |h| {
+        h.pointer_to(x, y);
+        h.key(ALT, KeyState::Pressed);
+        h.button(BTN_LEFT, ButtonState::Pressed);
+    });
+}
+
+fn release(server: &Remote) {
+    server.on_server(|h| {
+        h.button(BTN_LEFT, ButtonState::Released);
+        h.key(ALT, KeyState::Released);
+    });
+    check(server);
+}
+
+fn pointer_to(server: &Remote, x: f64, y: f64) {
+    server.on_server(move |h| h.pointer_to(x, y));
+}
+
+fn outline(server: &Remote) -> Vec<crate::layout::OutlineNode> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    server.on_server(move |h| {
+        let _ = tx.send(h.server.state.windows.layout.tree().outline());
+    });
+    rx.recv().unwrap()
+}
+
+/// A dragged tile is tiled again where it is released, by the M19b zones; the preview
+/// shows exactly the rectangle it gets.
+#[test]
+fn a_dragged_tile_drops_into_the_zone_under_the_pointer() {
+    let mut harness = gapped(3200, 1200);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let _columns = four_columns(&server, &socket);
+        // Window 1 (column 1) floats on the press; 4 takes its space.
+        grab(&server, 400.0, 600.0);
+        assert_eq!(mode(&server, 1), Some(Mode::Floating));
+        assert_eq!(cell(&server, 4), Some(Rect::new(0, 0, 1600, 1200)));
+        check(&server);
+        // The top half of column 3 (window 2).
+        pointer_to(&server, 2000.0, 100.0);
+        let top = Rect::new(1600, 0, 800, 600);
+        assert_eq!(preview(&server), Some(visible(&server, top)));
+        release(&server);
+        assert_eq!(cell(&server, 1), Some(top));
+        assert_eq!(cell(&server, 2), Some(Rect::new(1600, 600, 800, 600)));
+        assert_eq!(cell(&server, 4), Some(Rect::new(0, 0, 1600, 1200)));
+        assert_eq!(preview(&server), None, "gone after the release");
+        // Window 3 into the left part of 4 (in its visible rectangle, past the outer
+        // gap): the left half.
+        grab(&server, 2800.0, 600.0);
+        pointer_to(&server, 20.0, 600.0);
+        let left = Rect::new(0, 0, 800, 1200);
+        assert_eq!(preview(&server), Some(visible(&server, left)));
+        release(&server);
+        assert_eq!(cell(&server, 3), Some(left));
+        assert_eq!(cell(&server, 4), Some(Rect::new(800, 0, 800, 1200)));
+    });
+}
+
+/// Released inside its own visible rectangle (from the press), a tile returns to its
+/// leaf: the tree is exactly as before the drag.
+#[test]
+fn a_release_inside_its_own_rectangle_restores_its_leaf() {
+    let mut harness = gapped(3200, 1200);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let _columns = four_columns(&server, &socket);
+        let before = outline(&server);
+        grab(&server, 2000.0, 600.0); // window 2
+        assert_eq!(cell(&server, 3), Some(Rect::new(1600, 0, 1600, 1200)));
+        // Inside 2's old rectangle, and in the bottom zone of 3's (now wider) cell: by
+        // the zones 2 would go below 3; its own rectangle wins.
+        pointer_to(&server, 2350.0, 1100.0);
+        let own = Rect::new(1600, 0, 800, 1200);
+        assert_eq!(preview(&server), Some(visible(&server, own)));
+        release(&server);
+        assert_eq!(outline(&server), before);
+        for (n, x) in [(1, 0), (4, 800), (2, 1600), (3, 2400)] {
+            assert_eq!(cell(&server, n), Some(Rect::new(x, 0, 800, 1200)));
+        }
+    });
+}
+
+/// A snap zone wins; Shift at release floats; mod+F during the drag switches between
+/// tiling and floating at release; the floating default mode keeps the old drag.
+#[test]
+fn snap_zones_shift_and_mod_f_float_instead() {
+    // The left screen edge: the left-half zone, floating and snapped.
+    let mut harness = gapped(3200, 1200);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let _columns = four_columns(&server, &socket);
+        grab(&server, 2000.0, 600.0);
+        pointer_to(&server, 2.0, 600.0);
+        assert!(preview(&server).is_some(), "the zone's preview");
+        release(&server);
+        assert_eq!(mode(&server, 2), Some(Mode::Floating));
+        server.on_server(|h| {
+            assert!(
+                h.server
+                    .state
+                    .windows
+                    .layout
+                    .snapped_zone(WindowId(2))
+                    .is_some()
+            );
+        });
+    });
+    // Shift: no preview while held, floating where released.
+    let mut harness = gapped(3200, 1200);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let _columns = four_columns(&server, &socket);
+        grab(&server, 400.0, 600.0);
+        pointer_to(&server, 2000.0, 100.0);
+        assert!(preview(&server).is_some());
+        server.on_server(|h| h.key(SHIFT, KeyState::Pressed));
+        pointer_to(&server, 2001.0, 100.0);
+        assert_eq!(preview(&server), None, "Shift held: it will float");
+        server.on_server(|h| {
+            h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
+            h.key(ALT, KeyState::Released);
+        });
+        check(&server);
+        assert_eq!(mode(&server, 1), Some(Mode::Floating));
+        assert_eq!(
+            cell(&server, 2),
+            Some(Rect::new(1600, 0, 800, 1200)),
+            "untouched"
+        );
+    });
+    // mod+F: float at release, again: tile at release. Never tiled mid-drag.
+    let mut harness = gapped(3200, 1200);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let _columns = four_columns(&server, &socket);
+        let f = super::harness::keys::F;
+        grab(&server, 400.0, 600.0);
+        pointer_to(&server, 2000.0, 100.0);
+        server.on_server(move |h| {
+            h.key(f, KeyState::Pressed);
+            h.key(f, KeyState::Released);
+        });
+        assert_eq!(preview(&server), None, "float at release");
+        assert_eq!(mode(&server, 1), Some(Mode::Floating), "not tiled mid-drag");
+        release(&server);
+        assert_eq!(mode(&server, 1), Some(Mode::Floating));
+        grab(&server, 2800.0, 600.0); // window 3, a tile
+        pointer_to(&server, 2000.0, 1100.0);
+        server.on_server(move |h| {
+            for _ in 0..2 {
+                h.key(f, KeyState::Pressed);
+                h.key(f, KeyState::Released);
+            }
+        });
+        assert!(preview(&server).is_some(), "tile at release again");
+        assert_eq!(mode(&server, 3), Some(Mode::Floating), "still dragged");
+        release(&server);
+        assert_eq!(mode(&server, 3), Some(Mode::Tiled));
+        assert_eq!(cell(&server, 3), Some(Rect::new(1600, 600, 1600, 600)));
+    });
+    // The floating default mode: a dragged tile stays floating, no preview.
+    let mut harness = gapped(3200, 1200);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let _columns = four_columns(&server, &socket);
+        server.on_server(|h| {
+            h.server
+                .state
+                .windows
+                .layout
+                .set_default_mode(Mode::Floating)
+        });
+        grab(&server, 400.0, 600.0);
+        pointer_to(&server, 2000.0, 100.0);
+        assert_eq!(preview(&server), None);
+        release(&server);
+        assert_eq!(mode(&server, 1), Some(Mode::Floating));
+    });
+}
+
+/// No room at the pointer (here the window's own minimum, raised after it mapped):
+/// no preview, and it stays floating where it was dropped; nothing else moves.
+#[test]
+fn a_tile_that_does_not_fit_stays_floating_where_dropped() {
+    let mut harness = gapped(800, 600);
+    let socket = harness.socket_path();
+    harness.run_with_remote(move |server| {
+        let mut c1 = TestClient::connect(&socket);
+        let w1 = c1.map_window();
+        let _two = open_at(&server, &socket, 790.0, 300.0); // 1 | 2
+        w1.toplevel.set_min_size(500, 400);
+        c1.ack_and_commit(&w1);
+        c1.roundtrip();
+        assert_eq!(mode(&server, 1), Some(Mode::Tiled), "stays tiled, clipped");
+        grab(&server, 200.0, 300.0);
+        pointer_to(&server, 600.0, 100.0);
+        assert_eq!(preview(&server), None, "neither axis holds 502 x 402");
+        release(&server);
+        assert_eq!(mode(&server, 1), Some(Mode::Floating));
+        assert_eq!(cell(&server, 2), Some(Rect::new(0, 0, 800, 600)));
     });
 }

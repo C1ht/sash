@@ -272,6 +272,13 @@ fn replay_with(bundle: &Path, force_follows_pointer: Option<bool>) -> Result<Rep
         .iter()
         .filter(|e| kind(e) == "layout")
         .any(|e| e.get("after").and_then(|a| a.get("placement")).is_some());
+    // Dropping a dragged tile (owner, M19c): bundles from before it left the tile
+    // floating where it was released.
+    let no_drop_rule = !events
+        .iter()
+        .filter(|e| kind(e) == "layout")
+        .filter_map(|e| e.get("after").and_then(|a| a.get("placement")))
+        .any(|p| p.as_str() == Some("m19c"));
     let before_decorations = !events
         .iter()
         .any(|e| kind(e) == "commit" && e.get("server_side").is_some());
@@ -291,6 +298,7 @@ fn replay_with(bundle: &Path, force_follows_pointer: Option<bool>) -> Result<Rep
             h.server.state.windows.layout.set_gaps(gaps);
             h.server.state.focus.follows_pointer = follows_pointer;
             h.server.state.windows.layout.set_rule_a(rule_a);
+            h.server.state.windows.layout.set_no_drop_rule(no_drop_rule);
             h.server.state.set_layout_area((width, height).into());
             let config = Config {
                 dir,

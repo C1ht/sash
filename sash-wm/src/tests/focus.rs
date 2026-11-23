@@ -209,7 +209,10 @@ fn pointer_grabs_hold_focus() {
             h.pointer_to(500.0, 300.0);
             h.pointer_to(750.0, 500.0);
             assert_eq!(h.server.state.windows.layout.focused(), Some(WindowId(1)));
+            // Shift at release: it stays floating (M19c), then tile-all restores it.
+            h.key(SHIFT, KeyState::Pressed);
             h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
             h.key(ALT, KeyState::Released);
             // Tile it again for the next cases.
             h.server.state.windows.layout.tile_all();

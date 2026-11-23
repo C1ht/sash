@@ -92,7 +92,7 @@ pub fn layout_json(state: &Sash) -> Json {
         ("outer_gap", layout.gaps().outer.into()),
         ("focus_follows_pointer", state.focus.follows_pointer.into()),
         // How new windows are placed (owner, M19b): bundles without it used rule A.
-        ("placement", "m19b".into()),
+        ("placement", "m19c".into()),
         ("focus", layout.focused().into()),
         ("windows", windows(state)),
         ("tree", tree(state)),

@@ -303,7 +303,10 @@ fn client_move_request_floats_and_moves_a_tiled_window() {
                 Some(Rect::new(50, 30, 800, 600)),
                 "followed the pointer"
             );
+            // Shift at release: it stays floating (M19c; without it, it is tiled again).
+            h.key(SHIFT, KeyState::Pressed);
             h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
             assert!(!h.pointer_grabbed(), "release ends the move");
             h.pointer_to(400.0, 400.0);
             assert_eq!(h.rect_of(1), Some(Rect::new(50, 30, 800, 600)));
@@ -480,7 +483,10 @@ fn mod_drag_moves_and_resizes_without_reaching_clients() {
             assert_eq!(h.mode_of(1), Some(Mode::Floating), "floats on press");
             assert_eq!(h.rect_of(2), Some(AREA));
             h.pointer_to(130.0, 140.0);
+            // Shift at release: it stays floating (M19c).
+            h.key(SHIFT, KeyState::Pressed);
             h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
             assert_eq!(h.rect_of(1), Some(Rect::new(30, 40, 400, 600)));
             // Right-drag in the window's center cell resizes from the bottom-right corner.
             h.pointer_to(230.0, 340.0);
@@ -620,7 +626,10 @@ fn moving_keeps_the_size_the_client_settled_on() {
         c.roundtrip();
         server.on_server(|h| {
             assert_eq!(h.rect_of(1), Some(Rect::new(40, 100, 792, 592)));
+            // Shift at release: it stays floating (M19c).
+            h.key(SHIFT, KeyState::Pressed);
             h.button(BTN_LEFT, ButtonState::Released);
+            h.key(SHIFT, KeyState::Released);
             h.key(ALT, KeyState::Released);
         });
         c.roundtrip();

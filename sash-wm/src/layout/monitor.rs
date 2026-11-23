@@ -148,6 +148,10 @@ pub struct MonitorLayout {
     /// window second) with no minimum tile, as the session did.
     #[cfg(test)]
     rule_a: bool,
+    /// Tests only: replays of bundles recorded before M19c have no drop rule (a
+    /// dragged tile stays floating where it is released).
+    #[cfg(test)]
+    no_drop_rule: bool,
 }
 
 impl MonitorLayout {
@@ -170,6 +174,8 @@ impl MonitorLayout {
             size_floats: 0,
             #[cfg(test)]
             rule_a: false,
+            #[cfg(test)]
+            no_drop_rule: false,
         }
     }
 
@@ -178,6 +184,12 @@ impl MonitorLayout {
     #[cfg(all(test, feature = "debug-record"))]
     pub fn set_rule_a(&mut self, on: bool) {
         self.rule_a = on;
+    }
+
+    /// Tests only: no drop rule (replays of bundles recorded before M19c).
+    #[cfg(all(test, feature = "debug-record"))]
+    pub fn set_no_drop_rule(&mut self, on: bool) {
+        self.no_drop_rule = on;
     }
 
     #[cfg(any(test, feature = "debug-record"))]
@@ -1223,6 +1235,91 @@ impl MonitorLayout {
         }
         self.floating.remove(window);
         self.set_own_mode(window, Mode::Tiled);
+    }
+
+    /// Where a dragged tile released at `pointer` goes (owner, M19c; docs/plan.md,
+    /// "M19c rules"), worked out on a copy of the layout: inside `origin` (its visible
+    /// rectangle at the press) it returns to its own leaf; elsewhere it is placed by
+    /// the M19b rules (`place_tiled`). `pointer` is None over a layer surface above the
+    /// windows (the focused tile is used). None: the window stays floating (it does not
+    /// fit, it is forced, or it is not floating).
+    fn plan_drop(
+        &self,
+        window: WindowId,
+        pointer: Option<(i32, i32)>,
+        origin: Rect,
+    ) -> Option<MonitorLayout> {
+        #[cfg(test)]
+        if self.no_drop_rule {
+            return None;
+        }
+        let state = self.windows.get(&window)?;
+        if state.forced || state.mode() != Mode::Floating {
+            return None;
+        }
+        // The drag was a tiling operation: the window's last floating rectangle (for a
+        // later mod+F) stays what it was before the drag.
+        let last_floating = state.last_floating;
+        let mut plan = self.clone();
+        let home = pointer.is_some_and(|(x, y)| {
+            (origin.x..origin.x + origin.w).contains(&x)
+                && (origin.y..origin.y + origin.h).contains(&y)
+        });
+        let keep_last = |plan: &mut MonitorLayout| {
+            if let Some(state) = plan.windows.get_mut(&window) {
+                state.last_floating = last_floating;
+            }
+        };
+        if home {
+            if !plan.try_tile(window) {
+                return None;
+            }
+            keep_last(&mut plan);
+            return Some(plan);
+        }
+        // Out of its leaf (a placeholder takes no space, so no tile moves), then in
+        // again at the pointer.
+        plan.tile(window);
+        plan.tree.remove_returning_sibling(window);
+        plan.place_tiled(window, pointer);
+        if plan.mode(window) != Some(Mode::Tiled) || !plan.tiles_fit() {
+            return None;
+        }
+        plan.touch(window);
+        keep_last(&mut plan);
+        Some(plan)
+    }
+
+    /// What a dragged tile released at `pointer` would show: the drop preview.
+    pub fn drop_preview(
+        &self,
+        window: WindowId,
+        pointer: Option<(i32, i32)>,
+        origin: Rect,
+    ) -> Option<Gapped> {
+        let plan = self.plan_drop(window, pointer, origin)?;
+        Some(Gapped {
+            cell: plan.tree.rect_of(window)?,
+            usable: self.area,
+            gaps: self.gaps,
+        })
+    }
+
+    /// Releases a dragged tile at `pointer` (see `plan_drop`). Returns whether it was
+    /// tiled; if not, nothing changed.
+    pub fn drop_tile(
+        &mut self,
+        window: WindowId,
+        pointer: Option<(i32, i32)>,
+        origin: Rect,
+    ) -> bool {
+        match self.plan_drop(window, pointer, origin) {
+            Some(plan) => {
+                *self = plan;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Floats a tiled window where its tile is (a drag or keyboard move on a tiled
@@ -2670,6 +2767,49 @@ mod tests {
                 rects.as_nanos() as f64 / rounds as f64
             );
         }
+    }
+
+    /// The drop preview (owner, M19c), computed on every motion of a dragged tile:
+    /// p50/p99 per call at 5120 x 1440 with 10 windows and the real gaps.
+    /// `cargo test --release -- --ignored bench_drop_preview --nocapture`.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_drop_preview() {
+        use std::{hint::black_box, time::Instant};
+        let mut layout = MonitorLayout::new(Rect::new(0, 0, 5120, 1440));
+        layout.set_gaps(Gaps::DEFAULT);
+        for i in 1..=10 {
+            // Each window splits the largest tile at its centre: a balanced grid.
+            let pointer = layout
+                .tiled_rects()
+                .into_iter()
+                .max_by_key(|(_, r)| r.w * r.h)
+                .map(|(_, r)| (r.x + r.w / 2, r.y + r.h / 2));
+            let new = NewWindow {
+                pointer,
+                ..NewWindow::default()
+            };
+            layout.open(id(i), new);
+        }
+        assert_eq!(layout.tiled_rects().len(), 10);
+        let dragged = id(5);
+        assert!(layout.float_in_place(dragged));
+        let origin = layout.rect_of(dragged).expect("floating");
+        let mut samples = Vec::with_capacity(100_000);
+        for i in 0..100_000i32 {
+            let at = ((i * 37) % 5120, (i * 13) % 1440);
+            let start = Instant::now();
+            black_box(layout.drop_preview(dragged, Some(at), origin));
+            samples.push(start.elapsed().as_nanos() as u64);
+        }
+        samples.sort_unstable();
+        let pick = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize];
+        println!(
+            "drop preview, 10 windows at 5120x1440: p50 {:.2} us, p99 {:.2} us, max {:.2} us",
+            pick(0.5) as f64 / 1000.0,
+            pick(0.99) as f64 / 1000.0,
+            pick(1.0) as f64 / 1000.0
+        );
     }
 
     const QUARTERS: [ZoneId; 4] = [

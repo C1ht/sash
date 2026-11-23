@@ -132,6 +132,9 @@ enum Op {
     ResizeWithPanels(Rect, Vec<PanelOp>),
     /// The gaps (M18a; the debug overrides in a real session): outer, inner.
     SetGaps(i32, i32),
+    /// A move drag of a tile released at this point (owner, M19c); `home`: at a point
+    /// inside its own visible rectangle instead (the coordinates pick it).
+    DropDrag(usize, i32, i32, bool),
 }
 
 /// Every tile's visible rectangle (owner, M19b: the minimum is measured on it).
@@ -292,6 +295,8 @@ fn op() -> impl Strategy<Value = Op> {
         1 => index.prop_map(Op::Cycle),
         3 => (index, (0..3u8, 0..3u8), -2000..2000i32, -2000..2000i32)
             .prop_map(|(i, cell, dx, dy)| Op::TiledDrag(i, cell, dx, dy)),
+        3 => (index, -200..4000i32, -200..3000i32, any::<bool>())
+            .prop_map(|(i, x, y, home)| Op::DropDrag(i, x, y, home)),
     ]
 }
 
@@ -529,6 +534,41 @@ fn apply(layout: &mut MonitorLayout, world: &mut World, op: &Op) {
                         fullscreen || fixed || unplaced || layout.snapped_zone(w) == Some(zone),
                         "a quarter chord did nothing for no reason"
                     );
+                }
+            }
+        }
+        Op::DropDrag(i, x, y, home) => {
+            if let Some(w) = pick(layout, i)
+                && layout.mode(w) == Some(Mode::Tiled)
+                && layout.default_mode() == Mode::Tiled
+            {
+                let tree_before = layout.tree().outline();
+                assert!(layout.float_in_place(w));
+                let origin = layout.rect_of(w).expect("floated in place");
+                let at = if home && origin.w > 0 && origin.h > 0 {
+                    (
+                        origin.x + x.rem_euclid(origin.w),
+                        origin.y + y.rem_euclid(origin.h),
+                    )
+                } else {
+                    (x, y)
+                };
+                let preview = layout.drop_preview(w, Some(at), origin);
+                let dropped = layout.drop_tile(w, Some(at), origin);
+                // The preview comes from the same code as the release.
+                assert_eq!(dropped, preview.is_some());
+                if dropped {
+                    assert_eq!(layout.mode(w), Some(Mode::Tiled));
+                    let cell = layout.tree().rect_of(w).expect("tiled");
+                    assert_eq!(preview.map(|p| p.logical()), Some(layout.inset(cell)));
+                    assert!(layout.holds_minimum(w, true));
+                    let inside = (origin.x..origin.x + origin.w).contains(&at.0)
+                        && (origin.y..origin.y + origin.h).contains(&at.1);
+                    if inside {
+                        assert_eq!(layout.tree().outline(), tree_before, "back in its leaf");
+                    }
+                } else {
+                    assert_eq!(layout.mode(w), Some(Mode::Floating), "stays floating");
                 }
             }
         }

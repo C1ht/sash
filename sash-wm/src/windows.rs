@@ -139,6 +139,18 @@ pub struct Drag {
     /// The last motion handled, with Shift's state: a motion that changes neither
     /// (the pointer pinned at a screen edge) changes nothing and draws no frame.
     last: Option<(Point<f64, Logical>, bool)>,
+    /// A move that started on a tile in the tiled default mode: tiled again at the
+    /// pointer on release (owner, M19c).
+    retile: Option<Retile>,
+}
+
+/// A dragged tile (owner, M19c; docs/plan.md, "M19c rules").
+#[derive(Clone, Copy, Debug)]
+struct Retile {
+    /// Its visible rectangle at the press: a release inside returns it to its leaf.
+    origin: Rect,
+    /// mod+F during the drag: float at release instead.
+    float: bool,
 }
 
 pub struct Windows {
@@ -948,11 +960,20 @@ impl Sash {
         pressed_at: Point<f64, Logical>,
     ) -> bool {
         let mut tiled = None;
+        let mut retile = None;
         // A window floated for size that the user moves or resizes stays floating.
         self.windows.layout.touch(id);
         match kind {
             DragKind::Move => {
-                self.windows.layout.float_in_place(id);
+                let layout = &mut self.windows.layout;
+                let in_tiling = layout.default_mode() == Mode::Tiled;
+                if layout.float_in_place(id) && in_tiling {
+                    // It floats from its visible rectangle: that is its rectangle now.
+                    retile = layout.rect_of(id).map(|origin| Retile {
+                        origin,
+                        float: false,
+                    });
+                }
             }
             DragKind::Resize(edges) => {
                 if self.windows.layout.mode(id) == Some(Mode::Tiled) {
@@ -975,6 +996,7 @@ impl Sash {
             pressed_at,
             zone: None,
             last: None,
+            retile,
         });
         record!(self, "grab_start", "grab" => format!("{kind:?}"), "window" => id);
         record_context!(self, format!("{kind:?} drag start"));
@@ -1062,8 +1084,7 @@ impl Sash {
             }
         };
         layout.set_floating_rect(id, rect);
-        // The rectangle the window will take: the zone inset by the gap.
-        let preview = drag.zone.and_then(|z| layout.zone_gapped(z));
+        let preview = self.drag_preview();
         self.overlay.set_preview(preview);
         self.windows.note_input(Instant::now());
         self.schedule_arrange();
@@ -1101,20 +1122,72 @@ impl Sash {
         }
     }
 
-    /// A drag ended: a move released in a zone snaps the window there.
+    /// Where the drag's pointer is, for the drop rule: None over a layer surface above
+    /// the windows (the focused tile is used, as for a new window).
+    fn drop_point(&self, drag: &Drag) -> Option<(i32, i32)> {
+        let at = drag.last.map_or(drag.pressed_at, |(at, _)| at);
+        self.layer_above(at)
+            .is_none()
+            .then(|| (at.x.floor() as i32, at.y.floor() as i32))
+    }
+
+    /// The preview while dragging: the snap zone's rectangle, else, for a dragged tile
+    /// that would be tiled on release (owner, M19c), the visible rectangle it would
+    /// get. Nothing with Shift held or "float at release".
+    fn drag_preview(&self) -> Option<crate::layout::gaps::Gapped> {
+        let drag = self.windows.drag.as_ref()?;
+        let layout = &self.windows.layout;
+        if let Some(zone) = drag.zone {
+            return layout.zone_gapped(zone);
+        }
+        let retile = drag.retile.filter(|r| !r.float)?;
+        let free = drag.last.is_some_and(|(_, free)| free);
+        if free || !matches!(drag.kind, DragKind::Move) {
+            return None;
+        }
+        layout.drop_preview(drag.window, self.drop_point(drag), retile.origin)
+    }
+
+    /// mod+F during a drag of a tile: switches between tiling and floating at release
+    /// (the window is never tiled mid-drag). Returns false if no such drag runs.
+    fn toggle_drop(&mut self) -> bool {
+        let Some(retile) = self.windows.drag.as_mut().and_then(|d| d.retile.as_mut()) else {
+            return false;
+        };
+        retile.float = !retile.float;
+        let preview = self.drag_preview();
+        self.overlay.set_preview(preview);
+        self.request_redraw();
+        true
+    }
+
+    /// A drag ended: a move released in a zone snaps the window there; a dragged tile
+    /// is tiled again at the pointer unless Shift is held or mod+F chose floating.
     pub fn end_drag(&mut self) {
         let Some(drag) = self.windows.drag.take() else {
             return;
         };
-        if let (DragKind::Move, Some(zone)) = (drag.kind, drag.zone) {
-            self.windows.layout.snap(drag.window, zone);
-        }
+        let retiled = match (drag.kind, drag.zone, drag.retile) {
+            (DragKind::Move, Some(zone), _) => {
+                self.windows.layout.snap(drag.window, zone);
+                false
+            }
+            (DragKind::Move, None, Some(retile)) if !retile.float && !self.shift_held() => {
+                let at = self.drop_point(&drag);
+                self.windows
+                    .layout
+                    .drop_tile(drag.window, at, retile.origin)
+            }
+            _ => false,
+        };
+        tracing::debug!(window = ?drag.window, retiled, "drag end");
         record!(
             self,
             "grab_end",
             "grab" => format!("{:?}", drag.kind),
             "window" => drag.window,
             "snap_zone" => drag.zone.map(|z| format!("{z:?}")),
+            "retiled" => retiled,
         );
         #[cfg(feature = "debug-record")]
         if let Some(recorder) = self.recorder.as_mut() {
@@ -1201,6 +1274,7 @@ impl Sash {
                 }
             }
             Action::Quit => self.loop_signal.stop(),
+            Action::ToggleFloating if self.toggle_drop() => {}
             Action::ToggleFloating => {
                 if let Some(id) = focused
                     && self.windows.layout.toggle(id)
