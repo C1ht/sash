@@ -725,6 +725,10 @@ The report is docs/m19-investigation.md: tables A to E and eight questions for t
      - They return when there is room again: after an area change or a close, newest-floated first, each only if every tile then fits. The first that does not fit stops the return.
      - Only windows untouched while floating return. Touching means a move or resize (mouse, keyboard or client request), a snap, maximize, fullscreen, a click on it, or mod+F. Pointer and keyboard focus do not count, nor does a client changing its own size.
 - **M19b done, waiting for the owner (no tag).**
+  - **Confirmed by the owner after M19b (as built, no code change):**
+    - Bundles without the `"placement"` field replay with rule A and no minimum tile, in test builds only; the NVIDIA fixture is kept.
+    - Client minimums stay out of the shrink rule (they count at insertion and stop dividers; a minimum raised after mapping stays clipped).
+    - A window that floated at insertion because nothing fitted does not return by itself; mod+F tiles it when it fits. Only shrink-floated windows return.
   - **Code:**
     - `layout/placement.rs`: `drop_side`, pure integer arithmetic, and `other_axis`.
     - `BspTree::insert_split`: either axis, the new window first or second. `set_split_first` is now unconstrained within the split, and `split_first` reads a divider.

@@ -272,6 +272,7 @@ change this file without the owner's approval.
 - Fall-backs: pointer never moved, over a layer surface above the windows, or outside the usable area: the focused tile (else the most recently focused tiled window); in a gap: the cell containing it. Floating windows are never targets; dialogs, parented and fixed-size windows keep the float rules.
 - Minimum tile 233 x 144 on the visible rectangle. A split that does not fit tries the other axis, else the new window floats. Dividers stop at the minimum or the client's minimum; the M6 64 px floor is removed. A client that raises its minimum after mapping stays tiled and clipped (known limit).
 - A shrinking usable area floats the newest tiles until the rest fit (never closed); they return newest-floated first when there is room, only if untouched while floating.
+- Confirmed (owner, after M19b): client minimums are not part of the shrink check; a window that floated at insertion does not return by itself (mod+F tiles it); recordings without the placement field replay with rule A, in test builds only.
 - Details: docs/plan.md (M19b rules).
 
 ## BSP tiling (M3)
