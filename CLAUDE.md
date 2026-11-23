@@ -275,6 +275,13 @@ change this file without the owner's approval.
 - Confirmed (owner, after M19b): client minimums are not part of the shrink check; a window that floated at insertion does not return by itself (mod+F tiles it); recordings without the placement field replay with rule A, in test builds only.
 - Details: docs/plan.md (M19b rules).
 
+## M19c, dropping a dragged tile (owner)
+
+- In the tiled default mode, a move that starts on a tile (mod+drag or a client move) floats it on press as before; on release it is tiled again at the pointer by the M19b rules (cell, `drop_side`, 50:50, the minimum with the other axis). A release inside its own visible rectangle at the press restores its leaf exactly. No room: it stays floating where dropped.
+- Snap zones win. Shift at release floats instead; mod+F during the drag switches between tile and float at release (never tiles mid-drag).
+- While a release would tile, the snap preview shows the visible rectangle it would get (same code as the release); none with Shift, float at release, or no room.
+- Floating windows, resizes and the floating default mode are unchanged. Details: docs/plan.md (M19c rules).
+
 ## BSP tiling (M3)
 
 - The BSP tree is plain data in its own module, with no Smithay types,
